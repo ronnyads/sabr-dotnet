@@ -5,6 +5,8 @@ root_domain  = "example.com.br"
 nat_gateway_mode = "single"
 
 db_instance_class_dev = "db.t4g.micro"
+db_backup_retention_dev = 1
+db_backup_retention_prod = 1
 
 ecs_desired_count_dev = 1
 ecs_min_capacity_dev  = 1
