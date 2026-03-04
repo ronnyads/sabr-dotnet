@@ -1,12 +1,12 @@
-﻿module "network" {
+module "network" {
   source = "./modules/network"
 
-  project_name          = var.project_name
-  vpc_cidr              = var.vpc_cidr
-  public_subnet_cidrs   = var.public_subnet_cidrs
-  private_subnet_cidrs  = var.private_subnet_cidrs
-  nat_gateway_mode      = var.nat_gateway_mode
-  tags                  = local.tags
+  project_name         = var.project_name
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_cidrs  = var.public_subnet_cidrs
+  private_subnet_cidrs = var.private_subnet_cidrs
+  nat_gateway_mode     = var.nat_gateway_mode
+  tags                 = local.tags
 }
 
 module "security" {
@@ -55,37 +55,37 @@ module "dns_acm" {
 module "ecs" {
   source = "./modules/ecs"
 
-  project_name            = var.project_name
-  root_domain             = var.root_domain
-  vpc_id                  = module.network.vpc_id
-  public_subnet_ids       = module.network.public_subnet_ids
-  private_subnet_ids      = module.network.private_subnet_ids
-  alb_security_group_ids  = module.security.alb_security_group_ids
-  ecs_security_group_ids  = module.security.ecs_security_group_ids
-  ecr_repository_urls     = module.ecr.repository_urls
-  app_secret_arns         = module.rds.app_secret_arns
-  alb_certificate_arn     = module.dns_acm.alb_certificate_arn
-  desired_count_dev       = var.ecs_desired_count_dev
-  desired_count_prod      = var.ecs_desired_count_prod
-  min_capacity_dev        = var.ecs_min_capacity_dev
-  max_capacity_dev        = var.ecs_max_capacity_dev
-  min_capacity_prod       = var.ecs_min_capacity_prod
-  max_capacity_prod       = var.ecs_max_capacity_prod
-  cpu_dev                 = var.ecs_cpu_dev
-  memory_dev              = var.ecs_memory_dev
-  cpu_prod                = var.ecs_cpu_prod
-  memory_prod             = var.ecs_memory_prod
-  log_retention_days      = var.cloudwatch_log_retention_days
-  tags                    = local.tags
+  project_name           = var.project_name
+  root_domain            = var.root_domain
+  vpc_id                 = module.network.vpc_id
+  public_subnet_ids      = module.network.public_subnet_ids
+  private_subnet_ids     = module.network.private_subnet_ids
+  alb_security_group_ids = module.security.alb_security_group_ids
+  ecs_security_group_ids = module.security.ecs_security_group_ids
+  ecr_repository_urls    = module.ecr.repository_urls
+  app_secret_arns        = module.rds.app_secret_arns
+  alb_certificate_arn    = module.dns_acm.alb_certificate_arn
+  desired_count_dev      = var.ecs_desired_count_dev
+  desired_count_prod     = var.ecs_desired_count_prod
+  min_capacity_dev       = var.ecs_min_capacity_dev
+  max_capacity_dev       = var.ecs_max_capacity_dev
+  min_capacity_prod      = var.ecs_min_capacity_prod
+  max_capacity_prod      = var.ecs_max_capacity_prod
+  cpu_dev                = var.ecs_cpu_dev
+  memory_dev             = var.ecs_memory_dev
+  cpu_prod               = var.ecs_cpu_prod
+  memory_prod            = var.ecs_memory_prod
+  log_retention_days     = var.cloudwatch_log_retention_days
+  tags                   = local.tags
 }
 
 module "s3_cloudfront" {
   source = "./modules/s3_cloudfront"
 
-  project_name              = var.project_name
-  root_domain               = var.root_domain
+  project_name               = var.project_name
+  root_domain                = var.root_domain
   cloudfront_certificate_arn = module.dns_acm.cloudfront_certificate_arn
-  tags                      = local.tags
+  tags                       = local.tags
 }
 
 resource "aws_route53_record" "api" {

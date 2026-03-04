@@ -1,21 +1,21 @@
-﻿locals {
+locals {
   envs = {
     dev = {
-      desired_count  = var.desired_count_dev
-      min_capacity   = var.min_capacity_dev
-      max_capacity   = var.max_capacity_dev
-      cpu            = var.cpu_dev
-      memory         = var.memory_dev
+      desired_count   = var.desired_count_dev
+      min_capacity    = var.min_capacity_dev
+      max_capacity    = var.max_capacity_dev
+      cpu             = var.cpu_dev
+      memory          = var.memory_dev
       app_environment = "Staging"
       allowed_origins = "https://app-dev.${var.root_domain},https://admin-dev.${var.root_domain}"
       api_subdomain   = "api-dev"
     }
     prod = {
-      desired_count  = var.desired_count_prod
-      min_capacity   = var.min_capacity_prod
-      max_capacity   = var.max_capacity_prod
-      cpu            = var.cpu_prod
-      memory         = var.memory_prod
+      desired_count   = var.desired_count_prod
+      min_capacity    = var.min_capacity_prod
+      max_capacity    = var.max_capacity_prod
+      cpu             = var.cpu_prod
+      memory          = var.memory_prod
       app_environment = "Production"
       allowed_origins = "https://app.${var.root_domain},https://admin.${var.root_domain}"
       api_subdomain   = "api"
@@ -80,15 +80,15 @@ resource "aws_iam_role_policy" "task_execution_secrets" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "ReadAppSecrets"
-        Effect = "Allow"
-        Action = ["secretsmanager:GetSecretValue"]
+        Sid      = "ReadAppSecrets"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
         Resource = values(var.app_secret_arns)
       },
       {
-        Sid    = "KmsDecryptForSecrets"
-        Effect = "Allow"
-        Action = ["kms:Decrypt"]
+        Sid      = "KmsDecryptForSecrets"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = "*"
       }
     ]

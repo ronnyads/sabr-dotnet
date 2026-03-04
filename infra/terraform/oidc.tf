@@ -1,4 +1,4 @@
-﻿locals {
+locals {
   create_oidc = var.enable_oidc_roles && (
     var.github_backend_repository != "" ||
     var.github_frontend_repository != "" ||
@@ -64,9 +64,9 @@ resource "aws_iam_role_policy" "github_backend_deploy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "EcrAuth"
-        Effect = "Allow"
-        Action = ["ecr:GetAuthorizationToken"]
+        Sid      = "EcrAuth"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
         Resource = "*"
       },
       {
@@ -151,21 +151,21 @@ resource "aws_iam_role_policy" "github_frontend_deploy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "S3List"
-        Effect = "Allow"
-        Action = ["s3:ListBucket"]
+        Sid      = "S3List"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
         Resource = values(module.s3_cloudfront.bucket_arns)
       },
       {
-        Sid    = "S3Objects"
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Sid      = "S3Objects"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         Resource = [for arn in values(module.s3_cloudfront.bucket_arns) : "${arn}/*"]
       },
       {
-        Sid    = "CloudFrontInvalidation"
-        Effect = "Allow"
-        Action = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+        Sid      = "CloudFrontInvalidation"
+        Effect   = "Allow"
+        Action   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
         Resource = values(module.s3_cloudfront.distribution_arns)
       }
     ]

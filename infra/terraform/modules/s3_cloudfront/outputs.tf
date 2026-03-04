@@ -1,4 +1,4 @@
-﻿output "bucket_names" {
+output "bucket_names" {
   value = { for key, bucket in aws_s3_bucket.site : key => bucket.id }
 }
 

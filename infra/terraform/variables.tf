@@ -1,4 +1,4 @@
-﻿variable "project_name" {
+variable "project_name" {
   description = "Project slug used in AWS resource names."
   type        = string
   default     = "sabr"

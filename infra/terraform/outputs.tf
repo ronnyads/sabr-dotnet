@@ -1,4 +1,4 @@
-﻿output "route53_zone_id" {
+output "route53_zone_id" {
   value = module.dns_acm.hosted_zone_id
 }
 
@@ -47,9 +47,9 @@ output "api_urls" {
 
 output "frontend_urls" {
   value = {
-    app_dev   = "https://app-dev.${var.root_domain}"
-    admin_dev = "https://admin-dev.${var.root_domain}"
-    app_prod  = "https://app.${var.root_domain}"
+    app_dev    = "https://app-dev.${var.root_domain}"
+    admin_dev  = "https://admin-dev.${var.root_domain}"
+    app_prod   = "https://app.${var.root_domain}"
     admin_prod = "https://admin.${var.root_domain}"
   }
 }

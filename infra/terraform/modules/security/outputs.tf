@@ -1,4 +1,4 @@
-﻿output "alb_security_group_ids" {
+output "alb_security_group_ids" {
   value = { for env, sg in aws_security_group.alb : env => sg.id }
 }
 

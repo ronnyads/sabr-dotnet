@@ -1,4 +1,4 @@
-﻿data "aws_route53_zone" "selected" {
+data "aws_route53_zone" "selected" {
   count        = var.route53_zone_id == "" ? 1 : 0
   name         = "${var.root_domain}."
   private_zone = false

@@ -1,4 +1,4 @@
-﻿output "hosted_zone_id" {
+output "hosted_zone_id" {
   value = local.hosted_zone_id
 }
 

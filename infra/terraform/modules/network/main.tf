@@ -1,4 +1,4 @@
-﻿data "aws_availability_zones" "available" {
+data "aws_availability_zones" "available" {
   state = "available"
 }
 
@@ -114,10 +114,8 @@ resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
 
   route {
-    cidr_block = "0.0.0.0/0"
-    nat_gateway_id = var.nat_gateway_mode == "single"
-      ? aws_nat_gateway.this[0].id
-      : aws_nat_gateway.this[tonumber(each.key)].id
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = var.nat_gateway_mode == "single" ? aws_nat_gateway.this[0].id : aws_nat_gateway.this[tonumber(each.key)].id
   }
 
   tags = merge(var.tags, {

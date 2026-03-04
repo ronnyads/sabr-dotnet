@@ -1,4 +1,4 @@
-﻿locals {
+locals {
   alarm_actions = length(aws_sns_topic.ops_alerts) > 0 ? [aws_sns_topic.ops_alerts[0].arn] : []
 }
 

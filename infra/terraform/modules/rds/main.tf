@@ -1,4 +1,4 @@
-﻿locals {
+locals {
   envs = {
     dev = {
       instance_class   = var.db_instance_class_dev
@@ -45,24 +45,24 @@ resource "random_password" "ml" {
 resource "aws_db_instance" "this" {
   for_each = local.envs
 
-  identifier              = "${var.project_name}-${each.key}-postgres"
-  engine                  = "postgres"
-  engine_version          = "16.3"
-  instance_class          = each.value.instance_class
-  allocated_storage       = 20
-  max_allocated_storage   = 100
-  db_name                 = "${var.db_name_prefix}${each.key}"
-  username                = var.db_username
-  password                = random_password.db[each.key].result
-  db_subnet_group_name    = aws_db_subnet_group.this.name
-  vpc_security_group_ids  = [var.rds_security_group_ids[each.key]]
-  publicly_accessible     = false
-  storage_encrypted       = true
-  backup_retention_period = each.value.backup_retention
-  skip_final_snapshot     = each.key == "dev"
-  deletion_protection     = each.key == "prod"
-  apply_immediately       = each.key == "dev"
-  multi_az                = false
+  identifier                   = "${var.project_name}-${each.key}-postgres"
+  engine                       = "postgres"
+  engine_version               = "16.3"
+  instance_class               = each.value.instance_class
+  allocated_storage            = 20
+  max_allocated_storage        = 100
+  db_name                      = "${var.db_name_prefix}${each.key}"
+  username                     = var.db_username
+  password                     = random_password.db[each.key].result
+  db_subnet_group_name         = aws_db_subnet_group.this.name
+  vpc_security_group_ids       = [var.rds_security_group_ids[each.key]]
+  publicly_accessible          = false
+  storage_encrypted            = true
+  backup_retention_period      = each.value.backup_retention
+  skip_final_snapshot          = each.key == "dev"
+  deletion_protection          = each.key == "prod"
+  apply_immediately            = each.key == "dev"
+  multi_az                     = false
   performance_insights_enabled = each.key == "prod"
 
   tags = merge(var.tags, {

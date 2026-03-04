@@ -1,4 +1,4 @@
-﻿locals {
+locals {
   sites = {
     app_dev = {
       bucket_suffix = "app-dev"

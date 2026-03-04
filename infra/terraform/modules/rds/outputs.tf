@@ -1,4 +1,4 @@
-﻿output "db_identifiers" {
+output "db_identifiers" {
   value = { for env, db in aws_db_instance.this : env => db.id }
 }
 

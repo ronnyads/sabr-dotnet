@@ -1,4 +1,4 @@
-﻿locals {
+locals {
   default_tags = {
     Project     = var.project_name
     ManagedBy   = "terraform"

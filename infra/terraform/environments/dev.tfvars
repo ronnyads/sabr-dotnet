@@ -1,4 +1,4 @@
-﻿project_name = "sabr"
+project_name = "sabr"
 aws_region   = "sa-east-1"
 root_domain  = "example.com.br"
 

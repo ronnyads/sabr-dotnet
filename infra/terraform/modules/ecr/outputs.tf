@@ -1,4 +1,4 @@
-﻿output "repository_urls" {
+output "repository_urls" {
   value = { for env, repo in aws_ecr_repository.api : env => repo.repository_url }
 }
 
