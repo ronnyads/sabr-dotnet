@@ -1,0 +1,45 @@
+﻿name: terraform-check
+
+on:
+  pull_request:
+    paths:
+      - 'infra/terraform/**'
+  push:
+    branches: [develop, main]
+    paths:
+      - 'infra/terraform/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials (optional)
+        if: ${{ secrets.AWS_ROLE_ARN_INFRA != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_INFRA }}
+          aws-region: ${{ vars.AWS_REGION || 'sa-east-1' }}
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        run: terraform validate

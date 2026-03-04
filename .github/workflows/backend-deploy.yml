@@ -1,0 +1,126 @@
+﻿name: backend-deploy
+
+on:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'sa-east-1' }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER_NAME }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore SabrHub.sln
+
+      - name: Build
+        run: dotnet build SabrHub.sln --configuration Release --no-restore
+
+      - name: Test (skip integration suite)
+        run: dotnet test SabrHub.sln --configuration Release --no-build --filter "FullyQualifiedName!~Integration"
+
+      - name: Resolve environment variables
+        id: deployvars
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "env_name=prod" >> "$GITHUB_OUTPUT"
+            echo "role_arn=${{ secrets.AWS_ROLE_ARN_PROD }}" >> "$GITHUB_OUTPUT"
+            echo "ecr_repo=${{ vars.ECR_REPOSITORY_PROD }}" >> "$GITHUB_OUTPUT"
+            echo "ecs_service=${{ vars.ECS_SERVICE_PROD }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "env_name=dev" >> "$GITHUB_OUTPUT"
+            echo "role_arn=${{ secrets.AWS_ROLE_ARN_DEV }}" >> "$GITHUB_OUTPUT"
+            echo "ecr_repo=${{ vars.ECR_REPOSITORY_DEV }}" >> "$GITHUB_OUTPUT"
+            echo "ecs_service=${{ vars.ECS_SERVICE_DEV }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.deployvars.outputs.role_arn }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: image
+        shell: bash
+        run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          REPO="${{ steps.deployvars.outputs.ecr_repo }}"
+          IMAGE_SHA="${REGISTRY}/${REPO}:${GITHUB_SHA}"
+          IMAGE_LATEST="${REGISTRY}/${REPO}:latest"
+
+          docker build -f Dockerfile -t "$IMAGE_SHA" -t "$IMAGE_LATEST" .
+          docker push "$IMAGE_SHA"
+          docker push "$IMAGE_LATEST"
+
+          echo "image_uri=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy ECS service
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ECS_SERVICE="${{ steps.deployvars.outputs.ecs_service }}"
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_DEF_ARN" \
+            --query 'taskDefinition' > task-def.json
+
+          CONTAINER_NAME="${{ vars.ECS_CONTAINER_NAME }}"
+          if [[ -z "$CONTAINER_NAME" ]]; then
+            CONTAINER_NAME="sabr-api"
+          fi
+
+          jq --arg IMAGE "${{ steps.image.outputs.image_uri }}" --arg NAME "$CONTAINER_NAME" '
+            del(
+              .taskDefinitionArn,
+              .revision,
+              .status,
+              .requiresAttributes,
+              .compatibilities,
+              .registeredAt,
+              .registeredBy
+            )
+            | .containerDefinitions |= map(if .name == $NAME then .image = $IMAGE else . end)
+          ' task-def.json > new-task-def.json
+
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK_DEF_ARN"
+
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"

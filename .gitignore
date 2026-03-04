@@ -1,0 +1,28 @@
+﻿# Build
+**/bin/
+**/obj/
+
+# IDE
+.vs/
+.vscode/
+
+# Runtime artifacts
+logs/
+*.log
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/crash.log
+infra/terraform/override.tf
+infra/terraform/override.tf.json
+infra/terraform/*_override.tf
+infra/terraform/*_override.tf.json
+infra/terraform/backend.tf
+
+# Temporary
+.tempbuild/
+.tmp-build/
+.tmp-reviews/

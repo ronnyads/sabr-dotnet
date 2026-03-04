@@ -1,0 +1,32 @@
+﻿project_name = "sabr"
+aws_region   = "sa-east-1"
+root_domain  = "example.com.br"
+
+# Optional: if blank, terraform will look up zone by root_domain.
+route53_zone_id = ""
+
+nat_gateway_mode = "single"
+
+db_instance_class_dev  = "db.t4g.micro"
+db_instance_class_prod = "db.t4g.micro"
+
+ecs_desired_count_dev = 1
+ecs_desired_count_prod = 1
+
+ecs_min_capacity_dev = 1
+ecs_max_capacity_dev = 2
+ecs_min_capacity_prod = 1
+ecs_max_capacity_prod = 4
+
+github_backend_repository  = "your-org/sabr-dotnet"
+github_frontend_repository = "your-org/sabr-frontend"
+github_infra_repository    = "your-org/sabr-dotnet"
+
+enable_oidc_roles = true
+
+# Optional for alarm notifications
+alarm_email = ""
+
+tags = {
+  Owner = "platform-team"
+}
