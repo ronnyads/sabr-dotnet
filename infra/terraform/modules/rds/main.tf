@@ -88,8 +88,12 @@ resource "aws_secretsmanager_secret_version" "app" {
 
   secret_id = aws_secretsmanager_secret.app[each.key].id
   secret_string = jsonencode({
-    ConnectionStrings__Default = "Host=${aws_db_instance.this[each.key].address};Port=5432;Database=${aws_db_instance.this[each.key].db_name};Username=${var.db_username};Password=${random_password.db[each.key].result};SSL Mode=Require;Trust Server Certificate=true"
-    Jwt__Secret                = random_password.jwt[each.key].result
-    Ml__ApiKey                 = random_password.ml[each.key].result
+    ConnectionStrings__Default  = "Host=${aws_db_instance.this[each.key].address};Port=5432;Database=${aws_db_instance.this[each.key].db_name};Username=${var.db_username};Password=${random_password.db[each.key].result};SSL Mode=Require;Trust Server Certificate=true"
+    Jwt__Secret                 = random_password.jwt[each.key].result
+    Ml__ApiKey                  = random_password.ml[each.key].result
+    MercadoLivre__ClientId      = "pending-${each.key}-client-id"
+    MercadoLivre__ClientSecret  = "pending-${each.key}-client-secret"
+    MercadoLivre__RedirectUri   = "https://${each.key == "dev" ? "api-dev" : "api"}.${var.root_domain}/integrations/mercadolivre/callback"
+    MercadoLivre__WebhookSecret = "pending-${each.key}-webhook-secret"
   })
 }
