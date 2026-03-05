@@ -6,6 +6,16 @@ data "aws_route53_zone" "selected" {
 
 locals {
   hosted_zone_id = var.route53_zone_id != "" ? var.route53_zone_id : data.aws_route53_zone.selected[0].zone_id
+  validation_records = {
+    for dvo in concat(
+      tolist(aws_acm_certificate.alb.domain_validation_options),
+      tolist(aws_acm_certificate.cloudfront.domain_validation_options)
+    ) : dvo.resource_record_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }...
+  }
 }
 
 resource "aws_acm_certificate" "alb" {
@@ -22,25 +32,23 @@ resource "aws_acm_certificate" "alb" {
   }
 }
 
-resource "aws_route53_record" "alb_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.alb.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
+resource "aws_route53_record" "validation" {
+  for_each = local.validation_records
 
   zone_id = local.hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
+  name    = each.value[0].name
+  type    = each.value[0].type
+  allow_overwrite = true
   ttl     = 60
-  records = [each.value.record]
+  records = [each.value[0].record]
 }
 
 resource "aws_acm_certificate_validation" "alb" {
   certificate_arn         = aws_acm_certificate.alb.arn
-  validation_record_fqdns = [for record in aws_route53_record.alb_validation : record.fqdn]
+  validation_record_fqdns = distinct([
+    for dvo in aws_acm_certificate.alb.domain_validation_options :
+    aws_route53_record.validation[dvo.resource_record_name].fqdn
+  ])
 }
 
 resource "aws_acm_certificate" "cloudfront" {
@@ -58,24 +66,11 @@ resource "aws_acm_certificate" "cloudfront" {
   }
 }
 
-resource "aws_route53_record" "cloudfront_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.cloudfront.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
-
-  zone_id = local.hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  ttl     = 60
-  records = [each.value.record]
-}
-
 resource "aws_acm_certificate_validation" "cloudfront" {
   provider                = aws.us_east_1
   certificate_arn         = aws_acm_certificate.cloudfront.arn
-  validation_record_fqdns = [for record in aws_route53_record.cloudfront_validation : record.fqdn]
+  validation_record_fqdns = distinct([
+    for dvo in aws_acm_certificate.cloudfront.domain_validation_options :
+    aws_route53_record.validation[dvo.resource_record_name].fqdn
+  ])
 }

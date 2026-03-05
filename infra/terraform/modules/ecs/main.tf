@@ -213,7 +213,11 @@ resource "aws_ecs_task_definition" "api" {
         { name = "ASPNETCORE_URLS", value = "http://+:${var.container_port}" },
         { name = "ASPNETCORE_ENVIRONMENT", value = each.value.app_environment },
         { name = "Cors__AllowedDomain", value = var.root_domain },
-        { name = "AllowedOrigins", value = each.value.allowed_origins }
+        { name = "AllowedOrigins", value = each.value.allowed_origins },
+        { name = "MercadoLivre__ClientId", value = "pending-${each.key}-client-id" },
+        { name = "MercadoLivre__ClientSecret", value = "pending-${each.key}-client-secret" },
+        { name = "MercadoLivre__RedirectUri", value = "https://${each.value.api_subdomain}.${var.root_domain}/integrations/mercadolivre/callback" },
+        { name = "MercadoLivre__WebhookSecret", value = "pending-${each.key}-webhook-secret" }
       ]
       secrets = [
         { name = "ConnectionStrings__Default", valueFrom = "${var.app_secret_arns[each.key]}:ConnectionStrings__Default::" },

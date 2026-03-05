@@ -11,7 +11,8 @@ output "service_names" {
 }
 
 output "service_arns" {
-  value = { for env, svc in aws_ecs_service.api : env => svc.arn }
+  # aws_ecs_service does not expose arn in all provider versions; id is stable.
+  value = { for env, svc in aws_ecs_service.api : env => svc.id }
 }
 
 output "task_definition_families" {

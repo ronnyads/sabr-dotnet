@@ -28,6 +28,7 @@ module "rds" {
   source = "./modules/rds"
 
   project_name             = var.project_name
+  root_domain              = var.root_domain
   private_subnet_ids       = module.network.private_subnet_ids
   rds_security_group_ids   = module.security.rds_security_group_ids
   db_username              = var.db_username
