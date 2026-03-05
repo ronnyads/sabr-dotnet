@@ -9,6 +9,11 @@ locals {
     "ref:refs/heads/develop",
     "ref:refs/heads/main"
   ]
+
+  deploy_environments = [
+    "development",
+    "production"
+  ]
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -41,7 +46,10 @@ data "aws_iam_policy_document" "backend_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for ref in local.deploy_refs : "repo:${var.github_backend_repository}:${ref}"]
+      values = concat(
+        [for ref in local.deploy_refs : "repo:${var.github_backend_repository}:${ref}"],
+        [for env in local.deploy_environments : "repo:${var.github_backend_repository}:environment:${env}"]
+      )
     }
   }
 }
@@ -128,7 +136,10 @@ data "aws_iam_policy_document" "frontend_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for ref in local.deploy_refs : "repo:${var.github_frontend_repository}:${ref}"]
+      values = concat(
+        [for ref in local.deploy_refs : "repo:${var.github_frontend_repository}:${ref}"],
+        [for env in local.deploy_environments : "repo:${var.github_frontend_repository}:environment:${env}"]
+      )
     }
   }
 }
@@ -192,7 +203,10 @@ data "aws_iam_policy_document" "infra_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for ref in local.deploy_refs : "repo:${var.github_infra_repository}:${ref}"]
+      values = concat(
+        [for ref in local.deploy_refs : "repo:${var.github_infra_repository}:${ref}"],
+        [for env in local.deploy_environments : "repo:${var.github_infra_repository}:environment:${env}"]
+      )
     }
   }
 }
