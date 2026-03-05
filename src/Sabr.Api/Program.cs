@@ -519,12 +519,12 @@ if (!seedStagingFake)
             var logger = scope.ServiceProvider
                 .GetRequiredService<ILoggerFactory>()
                 .CreateLogger("StartupMigrationGuard");
-            logger.LogCritical(
-                "Pending database migrations detected. Apply migrations before starting API. Pending: {PendingMigrations}",
+            logger.LogWarning(
+                "Pending database migrations detected. Applying on startup. Pending: {PendingMigrations}",
                 pendingMigrations);
 
-            throw new InvalidOperationException(
-                "Pending database migrations detected. Run `dotnet ef database update --project src/Sabr.Infrastructure/Sabr.Infrastructure.csproj --startup-project src/Sabr.Api/Sabr.Api.csproj` and restart the API.");
+            await dbContext.Database.MigrateAsync();
+            logger.LogInformation("Database migrations applied successfully during startup.");
         }
     }
 }

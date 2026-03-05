@@ -59,13 +59,21 @@ enable_oidc_roles = true
   terraform init -reconfigure
   terraform validate
 
+  $commonVars = @(
+    '-var', "root_domain=$RootDomain",
+    '-var', "route53_zone_id=$Route53ZoneId",
+    '-var', "github_backend_repository=$GitHubBackendRepo",
+    '-var', "github_frontend_repository=$GitHubFrontendRepo",
+    '-var', "github_infra_repository=$GitHubBackendRepo"
+  )
+
   $approve = if ($AutoApprove) { '-auto-approve' } else { '' }
 
-  terraform plan -var-file=environments/dev.tfvars
-  if ($AutoApprove) { terraform apply -auto-approve -var-file=environments/dev.tfvars } else { terraform apply -var-file=environments/dev.tfvars }
+  terraform plan -var-file=environments/dev.tfvars @commonVars
+  if ($AutoApprove) { terraform apply -auto-approve -var-file=environments/dev.tfvars @commonVars } else { terraform apply -var-file=environments/dev.tfvars @commonVars }
 
-  terraform plan -var-file=environments/prod.tfvars
-  if ($AutoApprove) { terraform apply -auto-approve -var-file=environments/prod.tfvars } else { terraform apply -var-file=environments/prod.tfvars }
+  terraform plan -var-file=environments/prod.tfvars @commonVars
+  if ($AutoApprove) { terraform apply -auto-approve -var-file=environments/prod.tfvars @commonVars } else { terraform apply -var-file=environments/prod.tfvars @commonVars }
 
   terraform output
 }

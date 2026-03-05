@@ -34,6 +34,10 @@ variable "db_backup_retention_prod" {
   type = number
 }
 
+variable "root_domain" {
+  type = string
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

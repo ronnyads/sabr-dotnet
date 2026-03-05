@@ -42,7 +42,8 @@ function Configure-RepoGovernance {
 
   $tmpFile = [System.IO.Path]::GetTempFileName()
   try {
-    Set-Content -Path $tmpFile -Value $protectionPayload -Encoding UTF8
+    # Write UTF-8 without BOM; gh api may reject payloads with BOM.
+    [System.IO.File]::WriteAllText($tmpFile, $protectionPayload, [System.Text.UTF8Encoding]::new($false))
     gh api -X PUT "repos/$repoFull/branches/main/protection" --input $tmpFile | Out-Null
   }
   finally {
