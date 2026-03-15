@@ -1,17 +1,21 @@
-﻿name: backend-deploy
+# Pipeline: .NET API → Fly.io
+# Substitui o backend-deploy.yml (AWS ECS)
+#
+# Secret necessário (GitHub → Settings → Secrets):
+#   FLY_API_TOKEN → token gerado via: flyctl auth token
+
+name: backend-deploy
 
 on:
   push:
     branches: [develop, main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Dockerfile'
+      - 'fly.toml'
+      - '.github/workflows/backend-deploy.yml'
   workflow_dispatch:
-
-permissions:
-  id-token: write
-  contents: read
-
-env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'sa-east-1' }}
-  ECS_CLUSTER: ${{ vars.ECS_CLUSTER_NAME }}
 
 jobs:
   deploy:
@@ -19,108 +23,43 @@ jobs:
     environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
 
     steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      # ── 2. Setup .NET ─────────────────────────────────────────────────────────
+      - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
+      # ── 3. Restore e Build ────────────────────────────────────────────────────
       - name: Restore
         run: dotnet restore SabrHub.sln
 
       - name: Build
         run: dotnet build SabrHub.sln --configuration Release --no-restore
 
-      - name: Test (skip integration suite)
+      # ── 4. Testes unitários (exclui integration que precisam de banco) ─────────
+      - name: Test
         run: dotnet test SabrHub.sln --configuration Release --no-build --filter "FullyQualifiedName!~Integration"
 
-      - name: Resolve environment variables
-        id: deployvars
-        shell: bash
+      # ── 5. Deploy para Fly.io ─────────────────────────────────────────────────
+      - name: Deploy to Fly.io
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Fly deploy
         run: |
+          # dev → sabr-api-dev | main → sabr-api
           if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-            echo "env_name=prod" >> "$GITHUB_OUTPUT"
-            echo "role_arn=${{ secrets.AWS_ROLE_ARN_PROD }}" >> "$GITHUB_OUTPUT"
-            echo "ecr_repo=${{ vars.ECR_REPOSITORY_PROD }}" >> "$GITHUB_OUTPUT"
-            echo "ecs_service=${{ vars.ECS_SERVICE_PROD }}" >> "$GITHUB_OUTPUT"
+            APP="sabr-api"
           else
-            echo "env_name=dev" >> "$GITHUB_OUTPUT"
-            echo "role_arn=${{ secrets.AWS_ROLE_ARN_DEV }}" >> "$GITHUB_OUTPUT"
-            echo "ecr_repo=${{ vars.ECR_REPOSITORY_DEV }}" >> "$GITHUB_OUTPUT"
-            echo "ecs_service=${{ vars.ECS_SERVICE_DEV }}" >> "$GITHUB_OUTPUT"
+            APP="sabr-api-dev"
           fi
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ steps.deployvars.outputs.role_arn }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push image
-        id: image
-        shell: bash
-        run: |
-          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
-          REPO="${{ steps.deployvars.outputs.ecr_repo }}"
-          IMAGE_SHA="${REGISTRY}/${REPO}:${GITHUB_SHA}"
-          IMAGE_LATEST="${REGISTRY}/${REPO}:latest"
-
-          docker build -f Dockerfile -t "$IMAGE_SHA" -t "$IMAGE_LATEST" .
-          docker push "$IMAGE_SHA"
-          docker push "$IMAGE_LATEST"
-
-          echo "image_uri=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy ECS service
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ECS_SERVICE="${{ steps.deployvars.outputs.ecs_service }}"
-          TASK_DEF_ARN=$(aws ecs describe-services \
-            --cluster "$ECS_CLUSTER" \
-            --services "$ECS_SERVICE" \
-            --query 'services[0].taskDefinition' \
-            --output text)
-
-          aws ecs describe-task-definition \
-            --task-definition "$TASK_DEF_ARN" \
-            --query 'taskDefinition' > task-def.json
-
-          CONTAINER_NAME="${{ vars.ECS_CONTAINER_NAME }}"
-          if [[ -z "$CONTAINER_NAME" ]]; then
-            CONTAINER_NAME="sabr-api"
-          fi
-
-          jq --arg IMAGE "${{ steps.image.outputs.image_uri }}" --arg NAME "$CONTAINER_NAME" '
-            del(
-              .taskDefinitionArn,
-              .revision,
-              .status,
-              .requiresAttributes,
-              .compatibilities,
-              .registeredAt,
-              .registeredBy
-            )
-            | .containerDefinitions |= map(if .name == $NAME then .image = $IMAGE else . end)
-          ' task-def.json > new-task-def.json
-
-          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://new-task-def.json \
-            --query 'taskDefinition.taskDefinitionArn' \
-            --output text)
-
-          aws ecs update-service \
-            --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --task-definition "$NEW_TASK_DEF_ARN"
-
-          aws ecs wait services-stable \
-            --cluster "$ECS_CLUSTER" \
-            --services "$ECS_SERVICE"
+          flyctl deploy \
+            --app "$APP" \
+            --remote-only \
+            --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
