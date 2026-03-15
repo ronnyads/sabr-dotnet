@@ -160,26 +160,32 @@ resource "aws_iam_role_policy" "github_frontend_deploy" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "S3List"
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket"]
-        Resource = values(module.s3_cloudfront.bucket_arns)
-      },
-      {
-        Sid      = "S3Objects"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = [for arn in values(module.s3_cloudfront.bucket_arns) : "${arn}/*"]
-      },
-      {
-        Sid      = "CloudFrontInvalidation"
-        Effect   = "Allow"
-        Action   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
-        Resource = values(module.s3_cloudfront.distribution_arns)
-      }
-    ]
+    Statement = concat(
+      [
+        {
+          Sid      = "S3List"
+          Effect   = "Allow"
+          Action   = ["s3:ListBucket"]
+          Resource = values(module.s3_cloudfront.bucket_arns)
+        },
+        {
+          Sid      = "S3Objects"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+          Resource = [for arn in values(module.s3_cloudfront.bucket_arns) : "${arn}/*"]
+        }
+      ],
+      # Apenas inclui permissão de CloudFront quando as distributions existem.
+      # (skip_cloudfront=true → distribution_arns vazio → statement sem Resource → erro IAM)
+      length(module.s3_cloudfront.distribution_arns) > 0 ? [
+        {
+          Sid      = "CloudFrontInvalidation"
+          Effect   = "Allow"
+          Action   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+          Resource = values(module.s3_cloudfront.distribution_arns)
+        }
+      ] : []
+    )
   })
 }
 

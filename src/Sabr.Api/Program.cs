@@ -1,6 +1,8 @@
 using System.Net;
 using System.Security.Claims;
 using System.Text;
+using Serilog;
+using Serilog.Events;
 using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -29,12 +31,28 @@ using Sabr.Api.Tenant;
 using Sabr.Domain.Protheus;
 using Sabr.Infrastructure.Integrations.Mabang;
 using Sabr.Infrastructure.Integrations.MercadoLivre;
+using Sabr.Infrastructure.Integrations.TinyErp;
+using Sabr.Infrastructure.Integrations.Shopify;
 using Sabr.Infrastructure.Persistence;
 using Sabr.Infrastructure.Persistence.Seeding;
 using Sabr.Infrastructure.Storage;
 using Sabr.Infrastructure.Services;
+using Microsoft.Extensions.Caching.StackExchangeRedis;
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateBootstrapLogger();
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((ctx, services, lc) => lc
+    .ReadFrom.Configuration(ctx.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("MachineName", Environment.MachineName)
+    .WriteTo.Console(outputTemplate:
+        "[{Timestamp:HH:mm:ss} {Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}"));
 var trustedForwardedProxies = builder.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>() ?? [];
 var trustedForwardedNetworks = builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [];
 
@@ -148,9 +166,23 @@ var connectionString = hasValidConfiguredConnectionString
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 builder.Services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
+
+// -- Cache (Redis em producao, Memory em dev) ----------------------------
+var redisConnStr = builder.Configuration.GetConnectionString("Redis");
+if (!string.IsNullOrWhiteSpace(redisConnStr) && !redisConnStr.Contains("SET_VIA"))
+{
+    builder.Services.AddStackExchangeRedisCache(opts => { opts.Configuration = redisConnStr; opts.InstanceName = "sabr:"; });
+}
+else
+{
+    builder.Services.AddDistributedMemoryCache();
+}
+builder.Services.AddScoped<ICacheService, DistributedCacheService>();
+
 builder.Services.AddHealthChecks()
     .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" })
-    .AddCheck<DatabaseReadinessHealthCheck>("database", tags: new[] { "ready" });
+    .AddCheck<DatabaseReadinessHealthCheck>("database", tags: new[] { "ready" })
+    .AddCheck<MercadoLivreHealthCheck>("mercadolivre", failureStatus: HealthStatus.Degraded, tags: new[] { "ready", "external" });
 
 builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection("Storage"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<StorageOptions>>().Value);
@@ -303,13 +335,23 @@ builder.Services.AddScoped<MercadoLivreSyncService>();
 builder.Services.AddScoped<MercadoLivreWebhookService>();
 builder.Services.AddScoped<MercadoLivrePublishValidationService>();
 builder.Services.AddScoped<MercadoLivrePublishService>();
+// ListingDraftService registrado como concreto + todas as interfaces segregadas (ISP).
+// Controllers/consumers que precisam de apenas uma responsabilidade injetam a interface minimal.
 builder.Services.AddScoped<ListingDraftService>();
+builder.Services.AddScoped<IListingDraftCrudService>(sp => sp.GetRequiredService<ListingDraftService>());
+builder.Services.AddScoped<IListingFeeService>(sp => sp.GetRequiredService<ListingDraftService>());
+builder.Services.AddScoped<IListingCategoryService>(sp => sp.GetRequiredService<ListingDraftService>());
+builder.Services.AddScoped<IListingPublishService>(sp => sp.GetRequiredService<ListingDraftService>());
+builder.Services.AddScoped<IListingQueryService>(sp => sp.GetRequiredService<ListingDraftService>());
 builder.Services.AddScoped<MarketplaceCategoryResolver>();
+
 builder.Services.AddScoped<MarketplaceAuditLogService>();
 builder.Services.AddScoped<MarketplaceMabangDispatchService>();
 builder.Services.AddScoped<StockAvailabilityService>();
 builder.Services.AddScoped<MarketplaceOrderPaymentService>();
 builder.Services.AddScoped<MarketplaceShipmentLabelService>();
+builder.Services.AddScoped<OrderCancellationService>();
+builder.Services.AddScoped<OrderFulfillmentService>();
 builder.Services.AddScoped<ClientStoreService>();
 builder.Services.AddScoped<WalletService>();
 builder.Services.AddScoped<CatalogAuthorizationService>();
@@ -330,7 +372,9 @@ builder.Services.AddScoped<DevInitialSeeder>();
 builder.Services.AddSingleton<LoginAttemptService>();
 builder.Services.AddSingleton<MercadoLivreOAuthStateService>();
 builder.Services.AddScoped<IProtheusOutboxProcessor, MockProtheusOutboxProcessor>();
-if (builder.Configuration.GetValue("BackgroundWorkers:Enabled", true))
+// Workers are disabled in the API by default — they run in Sabr.Worker.
+// Set BackgroundWorkers:Enabled=true in appsettings to run both in a single process (dev only).
+if (builder.Configuration.GetValue("BackgroundWorkers:Enabled", false))
 {
     builder.Services.AddHostedService<ProtheusOutboxWorker>();
     builder.Services.AddHostedService<MarketplaceSyncWorker>();
@@ -379,6 +423,21 @@ builder.Services.AddHttpClient<IMabangApiClient, MabangApiClient>((sp, client) =
     client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.Mabang.TimeoutSeconds));
 });
 
+// ── Tiny ERP ─────────────────────────────────────────────────────────────────
+builder.Services.Configure<TinyErpOptions>(builder.Configuration.GetSection("TinyErp"));
+builder.Services.AddHttpClient<ITinyErpApiClient, TinyErpApiClient>();
+builder.Services.AddScoped<TinyOAuthService>();
+builder.Services.AddScoped<TinyIntegrationService>();
+
+// ── Shopify ───────────────────────────────────────────────────────────────────
+builder.Services.Configure<ShopifyOptions>(builder.Configuration.GetSection(ShopifyOptions.SectionName));
+builder.Services.AddHttpClient<IShopifyApiClient, ShopifyApiClient>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddSingleton<ShopifyOAuthStateService>();
+builder.Services.AddScoped<ShopifyOAuthService>();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -421,6 +480,16 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseForwardedHeaders();
+app.UseSerilogRequestLogging(opts =>
+{
+    opts.MessageTemplate =
+        "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+    opts.EnrichDiagnosticContext = (diag, ctx) =>
+    {
+        diag.Set("RemoteIp", ctx.Connection.RemoteIpAddress);
+        diag.Set("TenantId", ctx.Items["sabr_tenant"] ?? "(none)");
+    };
+});
 app.UseHttpLogging();
 
 app.UseCors("Spa");

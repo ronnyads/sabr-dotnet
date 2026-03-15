@@ -11,11 +11,16 @@ namespace Sabr.Application.Services;
 public sealed class AdminCategoryService
 {
     private static readonly Regex CategorySlugRegex = new("^[a-z0-9][a-z0-9_/-]{0,119}$", RegexOptions.Compiled);
-    private readonly IAppDbContext _dbContext;
+    private static readonly TimeSpan TreeCacheTtl   = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ItemCacheTtl   = TimeSpan.FromMinutes(5);
 
-    public AdminCategoryService(IAppDbContext dbContext)
+    private readonly IAppDbContext _dbContext;
+    private readonly ICacheService _cache;
+
+    public AdminCategoryService(IAppDbContext dbContext, ICacheService cache)
     {
         _dbContext = dbContext;
+        _cache     = cache;
     }
 
     public async Task<ServiceResult<PagedResult<AdminCategoryResult>>> ListAsync(
@@ -83,6 +88,21 @@ public sealed class AdminCategoryService
     }
 
     public async Task<ServiceResult<IReadOnlyCollection<AdminCategoryTreeNodeResult>>> TreeAsync(CancellationToken cancellationToken = default)
+    {
+        return await _cache.GetOrSetAsync(
+            CacheKeys.CategoryTree,
+            async ct =>
+            {
+                var inner = await BuildTreeAsync(ct);
+                return inner.Data!;
+            },
+            TreeCacheTtl,
+            cancellationToken) is { } cached
+            ? ServiceResult<IReadOnlyCollection<AdminCategoryTreeNodeResult>>.Success(cached)
+            : await BuildTreeAsync(cancellationToken);
+    }
+
+    private async Task<ServiceResult<IReadOnlyCollection<AdminCategoryTreeNodeResult>>> BuildTreeAsync(CancellationToken cancellationToken)
     {
         var categories = await _dbContext.Categories
             .AsNoTracking()
@@ -205,6 +225,7 @@ public sealed class AdminCategoryService
         });
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await _cache.RemoveAsync(CacheKeys.CategoryTree, cancellationToken);
         return await GetByIdAsync(category.Id, cancellationToken);
     }
 
@@ -246,6 +267,9 @@ public sealed class AdminCategoryService
         });
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await Task.WhenAll(
+            _cache.RemoveAsync(CacheKeys.CategoryTree, cancellationToken),
+            _cache.RemoveAsync(CacheKeys.CategoryById(categoryId), cancellationToken));
         return await GetByIdAsync(category.Id, cancellationToken);
     }
 
@@ -290,6 +314,9 @@ public sealed class AdminCategoryService
         });
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await Task.WhenAll(
+            _cache.RemoveAsync(CacheKeys.CategoryTree, cancellationToken),
+            _cache.RemoveAsync(CacheKeys.CategoryById(categoryId), cancellationToken));
         return ServiceResult<bool>.Success(true);
     }
 

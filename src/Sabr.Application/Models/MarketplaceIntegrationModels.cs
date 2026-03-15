@@ -2,6 +2,85 @@ using Sabr.Domain.Enums;
 
 namespace Sabr.Application.Models;
 
+// ── Order Cancel / Refund ────────────────────────────────────────────────────
+
+public sealed class OrderCancelRequest
+{
+    public string? Reason { get; set; }
+}
+
+public sealed class OrderRefundRequest
+{
+    public string? Reason { get; set; }
+}
+
+public sealed class OrderActionResult
+{
+    public Guid OrderId { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+// ── Admin Order List ─────────────────────────────────────────────────────────
+
+public class AdminOrderListItemResult
+{
+    public Guid Id { get; set; }
+    public string TenantId { get; set; } = string.Empty;
+    public Guid ClientId { get; set; }
+    public string? ClientName { get; set; }
+    public MarketplaceProvider Provider { get; set; }
+    public string SellerId { get; set; } = string.Empty;
+    public string MlOrderId { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public DateTimeOffset? PaidAt { get; set; }
+    public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
+    public string? ShipmentId { get; set; }
+    public string? ShippingMode { get; set; }
+    public string? LogisticType { get; set; }
+    public DateTimeOffset? ShipByDeadlineAt { get; set; }
+    public bool HasUnmappedItems { get; set; }
+    public int TotalItems { get; set; }
+    public bool HasLabel { get; set; }
+    public string? RiskFlagsJson { get; set; }
+    public DateTimeOffset ImportedAt { get; set; }
+}
+
+public sealed class AdminOrderDetailResult : AdminOrderListItemResult
+{
+    public List<AdminOrderItemResult> Items { get; set; } = new();
+}
+
+public sealed class AdminOrderItemResult
+{
+    public Guid Id { get; set; }
+    public string MlItemId { get; set; } = string.Empty;
+    public string? MlVariationId { get; set; }
+    public string? SabrVariantSku { get; set; }
+    public string? ProductName { get; set; }
+    public int Quantity { get; set; }
+    public int ReservedQuantity { get; set; }
+    public string MappingState { get; set; } = string.Empty;
+}
+
+public sealed class AdminFulfillmentOrderResult
+{
+    public Guid Id { get; set; }
+    public string TenantId { get; set; } = string.Empty;
+    public Guid ClientId { get; set; }
+    public string? ClientName { get; set; }
+    public string MlOrderId { get; set; } = string.Empty;
+    public string SellerId { get; set; } = string.Empty;
+    public string? ShipmentId { get; set; }
+    public string? ShippingMode { get; set; }
+    public string? LogisticType { get; set; }
+    public DateTimeOffset? ShipByDeadlineAt { get; set; }
+    public bool IsUrgent { get; set; }
+    public bool HasLabel { get; set; }
+    public int TotalItems { get; set; }
+    public DateTimeOffset SabrPaymentConfirmedAt { get; set; }
+}
+
 public static class MarketplaceMappingStates
 {
     public const string Mapped = "MAPPED";
@@ -211,6 +290,29 @@ public static class MarketplaceEventStatuses
     public const string DeadLetter = "DEAD_LETTER";
 }
 
+public static class MarketplaceOrderStatuses
+{
+    public const string PendingPayment   = "pending_payment";
+    public const string Paid             = "paid";
+    public const string PaymentConfirmed = "payment_confirmed";
+    public const string LabelGenerated   = "label_generated";
+    public const string Dispatched       = "dispatched";
+    public const string Delivered        = "delivered";
+    public const string Cancelled        = "cancelled";
+    public const string RefundRequested  = "refund_requested";
+    public const string Refunded         = "refunded";
+
+    public static readonly IReadOnlySet<string> CancellableStatuses = new HashSet<string>(StringComparer.Ordinal)
+    {
+        PendingPayment, Paid, PaymentConfirmed, LabelGenerated, RefundRequested
+    };
+
+    public static readonly IReadOnlySet<string> RefundableStatuses = new HashSet<string>(StringComparer.Ordinal)
+    {
+        Paid, PaymentConfirmed, LabelGenerated, Dispatched
+    };
+}
+
 public static class MarketplaceEventTopics
 {
     public const string WebhookOrders = "orders_v2";
@@ -218,11 +320,14 @@ public static class MarketplaceEventTopics
     public const string WebhookPayments = "payments";
     public const string MabangLabelDispatch = "mabang.label.dispatch";
 
-    public const string AuditOrderCreated = "audit.order.created";
-    public const string AuditOrderPaid = "audit.order.paid";
-    public const string AuditOrderCancelled = "audit.order.cancelled";
-    public const string AuditShipmentShipped = "audit.shipment.shipped";
-    public const string AuditLabelGenerated = "audit.label.generated";
+    public const string AuditOrderCreated       = "audit.order.created";
+    public const string AuditOrderPaid          = "audit.order.paid";
+    public const string AuditOrderCancelled     = "audit.order.cancelled";
+    public const string AuditOrderDispatched    = "audit.order.dispatched";
+    public const string AuditOrderRefundRequest = "audit.order.refund_requested";
+    public const string AuditOrderRefunded      = "audit.order.refunded";
+    public const string AuditShipmentShipped    = "audit.shipment.shipped";
+    public const string AuditLabelGenerated     = "audit.label.generated";
 }
 
 public sealed class MercadoLivreWebhookPayload

@@ -72,7 +72,7 @@ resource "aws_cloudfront_origin_access_control" "site" {
 }
 
 resource "aws_cloudfront_distribution" "site" {
-  for_each = aws_s3_bucket.site
+  for_each = var.create_distributions ? aws_s3_bucket.site : {}
 
   enabled             = true
   is_ipv6_enabled     = true
@@ -134,7 +134,7 @@ resource "aws_cloudfront_distribution" "site" {
 }
 
 resource "aws_s3_bucket_policy" "site" {
-  for_each = aws_s3_bucket.site
+  for_each = var.create_distributions ? aws_s3_bucket.site : {}
 
   bucket = each.value.id
   policy = jsonencode({

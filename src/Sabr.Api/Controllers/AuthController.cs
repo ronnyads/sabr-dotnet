@@ -50,10 +50,6 @@ public sealed class AuthController : ControllerBase
     public async Task<IActionResult> Login([FromBody] AuthLoginRequest request, CancellationToken cancellationToken)
     {
         var tenantId = _tenantProvider.TenantId;
-        if (string.IsNullOrWhiteSpace(tenantId))
-        {
-            return BadRequest(new { error = "Tenant not resolved" });
-        }
 
         var email = request.Email?.Trim().ToLowerInvariant() ?? string.Empty;
         var ip = GetClientIp() ?? "unknown";
@@ -68,14 +64,47 @@ public sealed class AuthController : ControllerBase
             });
         }
 
-        var result = await _authService.LoginAsync(tenantId, request, cancellationToken);
+        var result = string.IsNullOrWhiteSpace(tenantId)
+            ? await _authService.LoginAutoTenantAsync(request, cancellationToken)
+            : await _authService.LoginAsync(tenantId, request, cancellationToken);
         if (!result.Succeeded || result.Data == null)
         {
             _loginAttemptService.RegisterFailure("tenant", email, ip);
+
+            if (result.Errors.Any(error =>
+                    string.Equals(error.Field, "code", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(error.Message, AuthService.TenantAmbiguousCode, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Conflict(new ApiError
+                {
+                    Code = AuthService.TenantAmbiguousCode,
+                    Message = "Nao foi possivel identificar sua empresa automaticamente. Contate o suporte.",
+                    TraceId = HttpContext.TraceIdentifier
+                });
+            }
+
             return Unauthorized(new { errors = result.Errors });
         }
 
         _loginAttemptService.RegisterSuccess("tenant", email, ip);
+
+        if (string.IsNullOrWhiteSpace(result.Data.TenantSlug))
+        {
+            result.Data.TenantSlug = _tenantProvider.TenantSlug;
+        }
+
+        var resolvedTenantId = result.Data.TenantId;
+        if (string.IsNullOrWhiteSpace(resolvedTenantId))
+        {
+            _loginAttemptService.RegisterFailure("tenant", email, ip);
+            return Unauthorized(new
+            {
+                errors = new[]
+                {
+                    new { field = "credentials", message = "Invalid credentials" }
+                }
+            });
+        }
 
         var accountType = result.Data.AccountType;
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(_jwtOptions.AccessTokenMinutes);
@@ -84,14 +113,14 @@ public sealed class AuthController : ControllerBase
         var refreshToken = string.Equals(accountType, AccountTypes.Client, StringComparison.OrdinalIgnoreCase)
             ? await _authService.IssueClientRefreshTokenAsync(
                 result.Data.Id,
-                tenantId,
+                resolvedTenantId,
                 _refreshOptions.Days,
                 GetClientIp(),
                 Request.Headers.UserAgent.ToString(),
                 cancellationToken)
             : await _authService.IssueRefreshTokenAsync(
                 result.Data.Id,
-                tenantId,
+                resolvedTenantId,
                 _refreshOptions.Days,
                 GetClientIp(),
                 Request.Headers.UserAgent.ToString(),

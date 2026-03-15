@@ -831,6 +831,14 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }, cancellationToken);
     }
 
+    public async Task PingAsync(CancellationToken cancellationToken = default)
+    {
+        // /sites/MLB is a public endpoint that requires no authentication.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/sites/MLB");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     private async Task<T> ExecuteWithResilienceAsync<T>(
         Func<CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken)

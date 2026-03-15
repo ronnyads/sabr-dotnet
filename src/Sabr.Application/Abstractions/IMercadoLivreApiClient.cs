@@ -58,4 +58,7 @@ public interface IMercadoLivreApiClient
         int availableQuantity,
         string accessToken,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Lightweight connectivity check — hits a public ML endpoint that requires no auth.</summary>
+    Task PingAsync(CancellationToken cancellationToken = default);
 }

@@ -2,5 +2,7 @@ namespace Sabr.Domain.Enums;
 
 public enum MarketplaceProvider
 {
-    MercadoLivre = 1
+    MercadoLivre = 1,
+    TinyErp = 2,
+    Shopify = 3
 }

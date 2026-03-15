@@ -15,16 +15,16 @@ namespace Sabr.Api.Controllers;
 public sealed class ClientMarketplaceFeesController : ControllerBase
 {
     private readonly ITenantProvider _tenantProvider;
-    private readonly ListingDraftService _listingDraftService;
+    private readonly IListingFeeService _listingFeeService;
     private readonly ILogger<ClientMarketplaceFeesController> _logger;
 
     public ClientMarketplaceFeesController(
         ITenantProvider tenantProvider,
-        ListingDraftService listingDraftService,
+        IListingFeeService listingFeeService,
         ILogger<ClientMarketplaceFeesController> logger)
     {
         _tenantProvider = tenantProvider;
-        _listingDraftService = listingDraftService;
+        _listingFeeService = listingFeeService;
         _logger = logger;
     }
 
@@ -40,7 +40,7 @@ public sealed class ClientMarketplaceFeesController : ControllerBase
 
         try
         {
-            var result = await _listingDraftService.EstimateFeesAsync(
+            var result = await _listingFeeService.EstimateFeesAsync(
                 tenantId!,
                 clientId,
                 request ?? new MarketplaceFeesEstimateRequest(),

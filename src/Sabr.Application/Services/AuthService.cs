@@ -16,6 +16,7 @@ public sealed class AuthService
 {
     private const int MinPasswordLength = 8;
     private const string PlatformTenantId = "platform";
+    public const string TenantAmbiguousCode = "TENANT_AMBIGUOUS";
     private static readonly HashSet<string> AllowedSectorCodes = new(StringComparer.OrdinalIgnoreCase)
     {
         ProtheusPrefixes.InternalUserRh,
@@ -59,16 +60,15 @@ public sealed class AuthService
         {
             if (!user.IsActive || !PasswordHasher.VerifyPassword(request.Password, user.PasswordHash))
             {
-                return ServiceResult<AuthUserResult>.Failure(new[]
-                {
-                    new ValidationError("credentials", "Invalid credentials")
-                });
+                return InvalidCredentialsFailure();
             }
 
             user.LastLoginAt = DateTimeOffset.UtcNow;
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            return ServiceResult<AuthUserResult>.Success(MapAdminResult(user));
+            var mappedUser = MapAdminResult(user);
+            mappedUser.TenantSlug = await ResolveTenantSlugAsync(user.TenantId, cancellationToken);
+            return ServiceResult<AuthUserResult>.Success(mappedUser);
         }
 
         var client = await _dbContext.Clients
@@ -76,24 +76,97 @@ public sealed class AuthService
 
         if (client == null || client.Status == ClientStatus.Inactive)
         {
-            return ServiceResult<AuthUserResult>.Failure(new[]
-            {
-                new ValidationError("credentials", "Invalid credentials")
-            });
+            return InvalidCredentialsFailure();
         }
 
         if (!PasswordHasher.VerifyPassword(request.Password, client.PasswordHash))
         {
-            return ServiceResult<AuthUserResult>.Failure(new[]
-            {
-                new ValidationError("credentials", "Invalid credentials")
-            });
+            return InvalidCredentialsFailure();
         }
 
         client.LastLoginAt = DateTimeOffset.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return ServiceResult<AuthUserResult>.Success(MapClientResult(client));
+        var mappedClient = MapClientResult(client);
+        mappedClient.TenantSlug = await ResolveTenantSlugAsync(client.TenantId, cancellationToken);
+        return ServiceResult<AuthUserResult>.Success(mappedClient);
+    }
+
+    public async Task<ServiceResult<AuthUserResult>> LoginAutoTenantAsync(
+        AuthLoginRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var errors = ValidateLoginRequest(request);
+        if (errors.Count > 0)
+        {
+            return ServiceResult<AuthUserResult>.Failure(errors);
+        }
+
+        var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+
+        var adminCandidates = await (
+            from user in _dbContext.Users
+            join tenant in _dbContext.Tenants on user.TenantId equals tenant.Id
+            where user.Email == normalizedEmail &&
+                  user.IsActive &&
+                  tenant.Status == TenantStatus.Active
+            select new AdminLoginCandidate(user, tenant.Slug)
+        ).ToListAsync(cancellationToken);
+
+        var clientCandidates = await (
+            from client in _dbContext.Clients
+            join tenant in _dbContext.Tenants on client.TenantId equals tenant.Id
+            where client.Email == normalizedEmail &&
+                  client.Status != ClientStatus.Inactive &&
+                  tenant.Status == TenantStatus.Active
+            select new ClientLoginCandidate(client, tenant.Slug)
+        ).ToListAsync(cancellationToken);
+
+        var validAdminCandidates = adminCandidates
+            .Where(candidate => PasswordHasher.VerifyPassword(request.Password, candidate.User.PasswordHash))
+            .ToList();
+        var validClientCandidates = clientCandidates
+            .Where(candidate => PasswordHasher.VerifyPassword(request.Password, candidate.Client.PasswordHash))
+            .ToList();
+
+        if (validAdminCandidates.Count == 0 && validClientCandidates.Count == 0)
+        {
+            return InvalidCredentialsFailure();
+        }
+
+        var matchedTenantIds = validAdminCandidates
+            .Select(candidate => candidate.User.TenantId)
+            .Concat(validClientCandidates.Select(candidate => candidate.Client.TenantId))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (matchedTenantIds.Count > 1)
+        {
+            return ServiceResult<AuthUserResult>.Failure(new[]
+            {
+                new ValidationError("code", TenantAmbiguousCode),
+                new ValidationError("credentials", "Multiple tenant matches")
+            });
+        }
+
+        if (validAdminCandidates.Count > 0)
+        {
+            var selected = validAdminCandidates[0];
+            selected.User.LastLoginAt = DateTimeOffset.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            var mappedAdmin = MapAdminResult(selected.User);
+            mappedAdmin.TenantSlug = selected.TenantSlug;
+            return ServiceResult<AuthUserResult>.Success(mappedAdmin);
+        }
+
+        var matchedClient = validClientCandidates[0];
+        matchedClient.Client.LastLoginAt = DateTimeOffset.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        var mappedClient = MapClientResult(matchedClient.Client);
+        mappedClient.TenantSlug = matchedClient.TenantSlug;
+        return ServiceResult<AuthUserResult>.Success(mappedClient);
     }
 
     public async Task<ServiceResult<AuthUserResult>> LoginPlatformAsync(
@@ -186,9 +259,12 @@ public sealed class AuthService
             _dbContext.RefreshTokens.Add(newRefreshEntity);
             await _dbContext.SaveChangesAsync(cancellationToken);
 
+            var mappedUser = MapAdminResult(user);
+            mappedUser.TenantSlug = await ResolveTenantSlugAsync(tenantId, cancellationToken);
+
             return ServiceResult<AuthTokenResult>.Success(new AuthTokenResult
             {
-                User = MapAdminResult(user),
+                User = mappedUser,
                 RefreshToken = newRefreshToken
             });
         }
@@ -231,9 +307,12 @@ public sealed class AuthService
         _dbContext.ClientRefreshTokens.Add(newClientRefreshEntity);
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        var mappedClient = MapClientResult(client);
+        mappedClient.TenantSlug = await ResolveTenantSlugAsync(tenantId, cancellationToken);
+
         return ServiceResult<AuthTokenResult>.Success(new AuthTokenResult
         {
-            User = MapClientResult(client),
+            User = mappedClient,
             RefreshToken = newClientRefreshToken
         });
     }
@@ -523,6 +602,28 @@ public sealed class AuthService
         return ServiceResult<bool>.Success(true);
     }
 
+    private static ServiceResult<AuthUserResult> InvalidCredentialsFailure()
+    {
+        return ServiceResult<AuthUserResult>.Failure(new[]
+        {
+            new ValidationError("credentials", "Invalid credentials")
+        });
+    }
+
+    private async Task<string?> ResolveTenantSlugAsync(string tenantId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+        {
+            return null;
+        }
+
+        return await _dbContext.Tenants
+            .AsNoTracking()
+            .Where(tenant => tenant.Id == tenantId)
+            .Select(tenant => tenant.Slug)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     private static List<ValidationError> ValidateLoginRequest(AuthLoginRequest request)
     {
         var errors = new List<ValidationError>();
@@ -676,6 +777,9 @@ public sealed class AuthService
             OnboardingStep = client.OnboardingStep
         };
     }
+
+    private sealed record AdminLoginCandidate(User User, string TenantSlug);
+    private sealed record ClientLoginCandidate(Client Client, string TenantSlug);
 
     private static string GenerateToken()
     {

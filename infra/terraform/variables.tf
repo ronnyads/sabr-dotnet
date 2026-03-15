@@ -187,3 +187,15 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "cloudflare_pages_project" {
+  description = "Cloudflare Pages domain usado como CNAME para o frontend (ex: sabr-frontend.pages.dev). Deixar vazio enquanto o CloudFront AWS estiver bloqueado."
+  type        = string
+  default     = ""
+}
+
+variable "skip_cloudfront" {
+  description = "Quando true, o módulo s3_cloudfront não cria distributions (usar enquanto conta AWS não estiver verificada para CF)."
+  type        = bool
+  default     = false
+}

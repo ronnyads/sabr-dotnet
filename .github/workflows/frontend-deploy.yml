@@ -1,0 +1,121 @@
+name: frontend-deploy
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'package*.json'
+      - 'angular.json'
+      - '.github/workflows/frontend-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'sa-east-1' }}
+  NODE_VERSION: '20'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Test
+        run: npm run test -- --watch=false --browsers=ChromeHeadless --no-progress
+        continue-on-error: true   # avisar, não bloquear CI
+
+      - name: Build
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            npm run build -- --configuration production
+          else
+            npm run build -- --configuration development
+          fi
+
+      - name: Resolve deploy variables
+        id: deployvars
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "role_arn=${{ secrets.AWS_FRONTEND_ROLE_ARN_PROD }}"        >> "$GITHUB_OUTPUT"
+            echo "s3_bucket=${{ vars.S3_FRONTEND_BUCKET_PROD }}"             >> "$GITHUB_OUTPUT"
+            echo "cloudfront_id=${{ vars.CLOUDFRONT_DISTRIBUTION_ID_PROD }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "role_arn=${{ secrets.AWS_FRONTEND_ROLE_ARN_DEV }}"         >> "$GITHUB_OUTPUT"
+            echo "s3_bucket=${{ vars.S3_FRONTEND_BUCKET_DEV }}"              >> "$GITHUB_OUTPUT"
+            echo "cloudfront_id=${{ vars.CLOUDFRONT_DISTRIBUTION_ID_DEV }}"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.deployvars.outputs.role_arn }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync build to S3
+        run: |
+          DIST_DIR=$(ls -d dist/*/browser 2>/dev/null || ls -d dist/* 2>/dev/null | head -1)
+          echo "Uploading from: $DIST_DIR"
+
+          # Envia assets com cache longo (hash no nome do arquivo)
+          aws s3 sync "$DIST_DIR" "s3://${{ steps.deployvars.outputs.s3_bucket }}" \
+            --exclude "index.html" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --delete
+
+          # Envia index.html sem cache (sempre busca versão mais recente)
+          aws s3 cp "$DIST_DIR/index.html" "s3://${{ steps.deployvars.outputs.s3_bucket }}/index.html" \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --content-type "text/html"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.deployvars.outputs.cloudfront_id }}" \
+            --paths "/*" \
+            --query "Invalidation.Id" \
+            --output text)
+
+          echo "Invalidation ID: $INVALIDATION_ID"
+
+          # Aguarda invalidação concluir (timeout 5min)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ steps.deployvars.outputs.cloudfront_id }}" \
+            --id "$INVALIDATION_ID"
+
+      - name: Health check
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            URL="${{ vars.FRONTEND_URL_PROD }}"
+          else
+            URL="${{ vars.FRONTEND_URL_DEV }}"
+          fi
+
+          if [[ -n "$URL" ]]; then
+            for i in {1..5}; do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+              echo "Attempt $i: HTTP $STATUS"
+              [[ "$STATUS" == "200" ]] && exit 0
+              sleep 10
+            done
+            echo "WARNING: Health check did not return 200 after 5 attempts"
+          fi

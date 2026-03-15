@@ -86,6 +86,7 @@ module "s3_cloudfront" {
   project_name               = var.project_name
   root_domain                = var.root_domain
   cloudfront_certificate_arn = module.dns_acm.cloudfront_certificate_arn
+  create_distributions       = !var.skip_cloudfront
   tags                       = local.tags
 }
 
@@ -106,16 +107,25 @@ resource "aws_route53_record" "api" {
   }
 }
 
+# ─── Frontend DNS → Cloudflare Pages (substitui CloudFront AWS bloqueado) ────
+# Preencher cloudflare_pages_project no terraform.tfvars quando criar o projeto CF Pages.
+# Formato: "<project-name>.pages.dev"
+# Ex: cloudflare_pages_project = "sabr-frontend.pages.dev"
+locals {
+  frontend_sites = {
+    app_dev   = { subdomain = "app-dev",   cf_branch = "develop" }
+    app_prod  = { subdomain = "app",       cf_branch = "main"    }
+    admin_dev = { subdomain = "admin-dev", cf_branch = "develop" }
+    admin_prod = { subdomain = "admin",    cf_branch = "main"    }
+  }
+}
+
 resource "aws_route53_record" "frontend" {
-  for_each = module.s3_cloudfront.aliases
+  for_each = var.cloudflare_pages_project != "" ? local.frontend_sites : {}
 
   zone_id = module.dns_acm.hosted_zone_id
-  name    = each.value
-  type    = "A"
-
-  alias {
-    name                   = module.s3_cloudfront.distribution_domain_names[each.key]
-    zone_id                = module.s3_cloudfront.distribution_zone_ids[each.key]
-    evaluate_target_health = false
-  }
+  name    = "${each.value.subdomain}.${var.root_domain}"
+  type    = "CNAME"
+  ttl     = 300
+  records = [var.cloudflare_pages_project]
 }
