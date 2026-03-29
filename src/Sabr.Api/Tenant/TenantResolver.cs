@@ -13,7 +13,8 @@ public sealed class TenantResolver : ITenantResolver
         "api",
         "www",
         "admin",
-        "platform"
+        "platform",
+        "app"
     };
     private readonly AppDbContext _dbContext;
     private readonly IWebHostEnvironment _environment;
@@ -30,11 +31,21 @@ public sealed class TenantResolver : ITenantResolver
         var host = context.Request.Host.Host;
         var slug = ExtractSlug(host, context);
 
+        // API hostname (api.*) não carrega slug; tente origin ou header mesmo em produção.
+        if (string.IsNullOrWhiteSpace(slug) || string.Equals(slug, "api", StringComparison.OrdinalIgnoreCase))
+        {
+            var originSlug = ExtractSlugFromOrigin(context);
+            if (string.IsNullOrWhiteSpace(originSlug) || ReservedSubdomains.Contains(originSlug))
+                slug = ExtractSlugFromHeader(context);
+            else
+                slug = originSlug;
+        }
+
         // Dev-only fallback: when running API on localhost/IP but the SPA is on a subdomain (lvh.me),
         // allow extracting slug from Origin to avoid having to pass X-Tenant everywhere.
         if (string.IsNullOrWhiteSpace(slug) && _environment.IsDevelopment() && IsLocalDevHost(host))
         {
-            slug = ExtractSlugFromOrigin(context);
+            slug = ExtractSlugFromOrigin(context) ?? ExtractSlugFromHeader(context);
         }
         if (string.IsNullOrWhiteSpace(slug))
         {
@@ -134,6 +145,19 @@ public sealed class TenantResolver : ITenantResolver
         }
 
         return parts[0];
+    }
+
+    private static string? ExtractSlugFromHeader(HttpContext context)
+    {
+        if (context.Request.Headers.TryGetValue("X-Tenant", out var headerTenant))
+        {
+            var value = headerTenant.ToString();
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+        return null;
     }
 
     private static bool IsIpAddress(string host)
