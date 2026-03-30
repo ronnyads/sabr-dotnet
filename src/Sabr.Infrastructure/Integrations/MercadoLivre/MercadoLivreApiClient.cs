@@ -1350,4 +1350,20 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
 
         return false;
     }
+
+    public async Task RevokeApplicationAsync(long sellerId, string accessToken, CancellationToken cancellationToken = default)
+    {
+        var url = $"{_options.ApiBaseUrl.TrimEnd('/')}/users/{sellerId}/applications/{_options.ClientId}";
+        using var request = new HttpRequestMessage(HttpMethod.Delete, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        // Ignora 404 (já desconectado) e 401 (token já inválido) — não são erros fatais
+        if (!response.IsSuccessStatusCode &&
+            response.StatusCode != HttpStatusCode.NotFound &&
+            response.StatusCode != HttpStatusCode.Unauthorized)
+        {
+            response.EnsureSuccessStatusCode();
+        }
+    }
 }

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Sabr.Application.Abstractions;
 using Sabr.Application.Models;
 using Sabr.Application.Validation;
@@ -9,10 +10,17 @@ namespace Sabr.Application.Services;
 public sealed class MercadoLivreIntegrationService
 {
     private readonly IAppDbContext _dbContext;
+    private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
+    private readonly ILogger<MercadoLivreIntegrationService> _logger;
 
-    public MercadoLivreIntegrationService(IAppDbContext dbContext)
+    public MercadoLivreIntegrationService(
+        IAppDbContext dbContext,
+        IMercadoLivreApiClient mercadoLivreApiClient,
+        ILogger<MercadoLivreIntegrationService> logger)
     {
         _dbContext = dbContext;
+        _mercadoLivreApiClient = mercadoLivreApiClient;
+        _logger = logger;
     }
 
     public async Task<MercadoLivreIntegrationStatusResult> GetClientStatusAsync(
@@ -114,6 +122,27 @@ public sealed class MercadoLivreIntegrationService
                            && item.ClientId == clientId
                            && sellers.Contains(item.SellerId))
             .ToListAsync(cancellationToken);
+
+        // Antes de deletar do banco, revogar no ML (best-effort — não bloqueia desconexão se falhar)
+        foreach (var connection in connections)
+        {
+            try
+            {
+                await _mercadoLivreApiClient.RevokeApplicationAsync(
+                    connection.SellerId,
+                    connection.AccessToken,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to revoke ML application for sellerId={SellerId} tenantId={TenantId} clientId={ClientId} — continuing disconnect",
+                    connection.SellerId,
+                    tenantId,
+                    clientId);
+            }
+        }
 
         _dbContext.TenantMarketplaceListingMaps.RemoveRange(maps);
         _dbContext.TenantMarketplaceConnections.RemoveRange(connections);

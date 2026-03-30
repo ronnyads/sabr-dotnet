@@ -61,4 +61,8 @@ public interface IMercadoLivreApiClient
 
     /// <summary>Lightweight connectivity check — hits a public ML endpoint that requires no auth.</summary>
     Task PingAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Revoga a autorização do app na conta do vendedor no Mercado Livre.
+    /// DELETE /users/{sellerId}/applications/{clientId}</summary>
+    Task RevokeApplicationAsync(long sellerId, string accessToken, CancellationToken cancellationToken = default);
 }
