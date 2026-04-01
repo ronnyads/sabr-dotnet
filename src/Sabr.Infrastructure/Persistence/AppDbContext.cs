@@ -48,6 +48,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext
     public DbSet<StockReservation> StockReservations => Set<StockReservation>();
     public DbSet<MarketplaceEventLog> MarketplaceEventLogs => Set<MarketplaceEventLog>();
     public DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules => Set<TenantMarketplaceSlaRule>();
+    public DbSet<AiPromptConfig> AiPromptConfigs => Set<AiPromptConfig>();
 
     public override int SaveChanges()
     {

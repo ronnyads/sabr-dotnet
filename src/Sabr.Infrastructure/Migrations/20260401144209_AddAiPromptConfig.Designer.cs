@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Sabr.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using Sabr.Infrastructure.Persistence;
 namespace Sabr.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260401144209_AddAiPromptConfig")]
+    partial class AddAiPromptConfig
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -726,9 +729,6 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("character varying(8)")
                         .HasColumnName("currency_id");
 
-                    b.Property<bool>("FreeShipping")
-                        .HasColumnType("boolean");
-
                     b.Property<Guid>("IntegrationId")
                         .HasColumnType("uuid")
                         .HasColumnName("integration_id");
@@ -812,12 +812,6 @@ namespace Sabr.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
-
-                    b.Property<string>("WarrantyTime")
-                        .HasColumnType("text");
-
-                    b.Property<string>("WarrantyType")
-                        .HasColumnType("text");
 
                     b.Property<uint>("xmin")
                         .IsConcurrencyToken()

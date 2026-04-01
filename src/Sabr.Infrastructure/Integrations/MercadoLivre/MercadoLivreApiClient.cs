@@ -405,6 +405,40 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 payload["description"] = request.Description;
             }
 
+            // Add sale_terms (warranty) if provided
+            if (!string.IsNullOrWhiteSpace(request.WarrantyType) && !string.IsNullOrWhiteSpace(request.WarrantyTime))
+            {
+                payload["sale_terms"] = new[]
+                {
+                    new { id = "WARRANTY_TYPE", value_name = request.WarrantyType },
+                    new { id = "WARRANTY_TIME", value_name = request.WarrantyTime }
+                };
+            }
+
+            // Add shipping configuration
+            if (request.WidthCm.HasValue || request.HeightCm.HasValue || request.LengthCm.HasValue || request.WeightKg.HasValue || request.FreeShipping)
+            {
+                var shipping = new Dictionary<string, object?>
+                {
+                    ["mode"] = "me2",
+                    ["free_shipping"] = request.FreeShipping
+                };
+
+                // Add dimensions if provided
+                if (request.WidthCm.HasValue || request.HeightCm.HasValue || request.LengthCm.HasValue || request.WeightKg.HasValue)
+                {
+                    shipping["dimensions"] = new
+                    {
+                        width = request.WidthCm ?? 0,
+                        height = request.HeightCm ?? 0,
+                        length = request.LengthCm ?? 0,
+                        weight = (int?)((request.WeightKg ?? 0) * 1000)  // convert kg to grams
+                    };
+                }
+
+                payload["shipping"] = shipping;
+            }
+
             // TODO: confirm the exact required item creation payload for each ML category/listing type.
             var rawPayload = JsonSerializer.Serialize(payload);
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/items")

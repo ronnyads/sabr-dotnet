@@ -30,6 +30,14 @@ public sealed class ListingDraftUpsertRequest
     public List<string>? VariationAxes { get; set; }
     public List<ListingDraftVariationRequest>? Variations { get; set; }
     public List<string>? ClearFields { get; set; }
+
+    // ── Marketplace-specific fields ────────────────────────────────────────
+    // ML: Garantia (sale_terms)
+    public string? WarrantyType { get; set; }  // "Garantia do fabricante" | "Garantia do vendedor"
+    public string? WarrantyTime { get; set; }  // "90 dias" | "6 meses" | "12 meses" | "24 meses"
+
+    // ML: Frete grátis
+    public bool FreeShipping { get; set; } = false;
 }
 
 public sealed class ListingDraftVariationRequest

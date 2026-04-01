@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Sabr.Application.Abstractions;
+using Sabr.Application.Exceptions;
 using Sabr.Application.Validation;
 
 namespace Sabr.Api.Controllers;
@@ -38,13 +39,20 @@ public sealed class DocumentLookupController : ControllerBase
                 return UnprocessableEntity(new { error = "CNPJ invalido" });
             }
 
-            var result = await _lookup.LookupAsync(digits, cancellationToken);
-            if (result == null)
+            try
             {
-                return NotFound(new { error = "Documento nao encontrado" });
-            }
+                var result = await _lookup.LookupAsync(digits, cancellationToken);
+                if (result == null)
+                {
+                    return NotFound(new { error = "Documento nao encontrado" });
+                }
 
-            return Ok(result);
+                return Ok(result);
+            }
+            catch (ExternalServiceUnavailableException)
+            {
+                return StatusCode(503, new { error = "Serviço de validação temporariamente indisponível. Tente novamente em instantes." });
+            }
         }
 
         return BadRequest(new { error = "Documento deve ter 11 (CPF) ou 14 (CNPJ) digitos" });

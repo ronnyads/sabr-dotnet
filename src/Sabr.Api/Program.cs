@@ -33,6 +33,8 @@ using Sabr.Infrastructure.Integrations.Mabang;
 using Sabr.Infrastructure.Integrations.MercadoLivre;
 using Sabr.Infrastructure.Integrations.TinyErp;
 using Sabr.Infrastructure.Integrations.Shopify;
+using Sabr.Infrastructure.Integrations.Ai;
+using Sabr.Infrastructure.Options;
 using Sabr.Infrastructure.Persistence;
 using Sabr.Infrastructure.Persistence.Seeding;
 using Sabr.Infrastructure.Storage;
@@ -412,6 +414,13 @@ builder.Services.AddHttpClient<IMercadoLivreApiClient, MercadoLivreApiClient>((s
     client.BaseAddress = new Uri(options.ApiBaseUrl);
     client.Timeout = TimeSpan.FromSeconds(30);
 });
+
+// ── AI Service (Anthropic Claude) ──────────────────────────────────────────────
+builder.Services.AddOptions<Sabr.Infrastructure.Options.AnthropicOptions>()
+    .Bind(builder.Configuration.GetSection("Anthropic"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddHttpClient<Sabr.Application.Abstractions.IAiService, Sabr.Infrastructure.Integrations.Ai.AiService>();
 
 builder.Services.AddHttpClient<IMabangApiClient, MabangApiClient>((sp, client) =>
 {

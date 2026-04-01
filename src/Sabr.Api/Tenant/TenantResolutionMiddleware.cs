@@ -72,6 +72,8 @@ public sealed class TenantResolutionMiddleware
     {
         return (HttpMethods.Post.Equals(method, StringComparison.OrdinalIgnoreCase) &&
                 path.StartsWith("/api/v1/auth/login", StringComparison.OrdinalIgnoreCase)) ||
+               (HttpMethods.Post.Equals(method, StringComparison.OrdinalIgnoreCase) &&
+                path.StartsWith("/api/v1/auth/bootstrap", StringComparison.OrdinalIgnoreCase)) ||
                (HttpMethods.Get.Equals(method, StringComparison.OrdinalIgnoreCase) &&
                 path.StartsWith("/api/v1/auth/csrf", StringComparison.OrdinalIgnoreCase));
     }

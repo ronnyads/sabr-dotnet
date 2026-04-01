@@ -82,7 +82,8 @@ public sealed class AdminAuthController : ControllerBase
             AccessToken = token,
             ExpiresAt = expiresAt,
             AccountType = result.Data.AccountType,
-            User = result.Data
+            User = result.Data,
+            RefreshToken = refreshToken
         });
     }
 
@@ -95,10 +96,15 @@ public sealed class AdminAuthController : ControllerBase
         {
             HttpOnly = false,
             Secure = _refreshOptions.RequireHttps,
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.None,
             Expires = DateTimeOffset.UtcNow.AddDays(_refreshOptions.Days),
             Path = "/"
         };
+
+        if (!string.IsNullOrWhiteSpace(_refreshOptions.CookieDomain))
+        {
+            options.Domain = _refreshOptions.CookieDomain.Trim();
+        }
 
         Response.Cookies.Append(CsrfMiddleware.AdminCookieName, token, options);
         return Ok(new { token });
@@ -106,9 +112,12 @@ public sealed class AdminAuthController : ControllerBase
 
     [AllowAnonymous]
     [HttpPost("refresh")]
-    public async Task<IActionResult> Refresh(CancellationToken cancellationToken)
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest? request, CancellationToken cancellationToken)
     {
-        var refreshToken = Request.Cookies[_refreshOptions.CookieName];
+        var refreshToken =
+            Request.Cookies[_refreshOptions.CookieName] ??
+            request?.RefreshToken ??
+            Request.Headers["X-Refresh-Token"].FirstOrDefault();
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             return Unauthorized(new { error = "Refresh token missing" });
@@ -161,10 +170,10 @@ public sealed class AdminAuthController : ControllerBase
         {
             HttpOnly = true,
             Secure = _refreshOptions.RequireHttps,
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.None,
             Expires = DateTimeOffset.UtcNow.AddDays(_refreshOptions.Days),
-            // Keep platform auth refresh cookie scoped to platform auth routes to avoid collisions (esp. in dev).
-            Path = "/api/v1/admin/auth"
+            // Scope to entire admin/auth API endpoint tree to allow both login and refresh
+            Path = "/api/v1/admin"
         };
 
         Response.Cookies.Append(_refreshOptions.CookieName, token, options);
@@ -176,9 +185,9 @@ public sealed class AdminAuthController : ControllerBase
         {
             HttpOnly = true,
             Secure = _refreshOptions.RequireHttps,
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.None,
             Expires = DateTimeOffset.UtcNow.AddDays(-1),
-            Path = "/api/v1/admin/auth"
+            Path = "/api/v1/admin"
         };
 
         Response.Cookies.Append(_refreshOptions.CookieName, string.Empty, options);
@@ -223,7 +232,7 @@ public sealed class AdminAuthController : ControllerBase
 
         if (user.Role.HasValue)
         {
-            claims.Add(new Claim(ClaimTypes.Role, user.Role.Value.ToString()));
+            claims.Add(new Claim(ClaimTypes.Role, GetRoleName(user.Role.Value)));
         }
 
         if (!string.IsNullOrWhiteSpace(user.SectorCode))
@@ -239,6 +248,17 @@ public sealed class AdminAuthController : ControllerBase
             signingCredentials: credentials);
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private static string GetRoleName(UserRole role)
+    {
+        return role switch
+        {
+            UserRole.SuperAdmin => "SuperAdmin",
+            UserRole.Finance => "Finance",
+            UserRole.Admin => "Admin",
+            _ => "Admin"
+        };
     }
 
     private static string GenerateCsrfToken()

@@ -178,6 +178,12 @@ public sealed class MercadoLivreDisconnectRequest
     public string? SellerId { get; set; }
 }
 
+public sealed class MercadoLivreCallbackRequest
+{
+    public string? Code { get; set; }
+    public string? State { get; set; }
+}
+
 public sealed class MercadoLivreSyncNowRequest
 {
     public string? SellerId { get; set; }
@@ -434,6 +440,15 @@ public sealed class MercadoLivreCreateItemRequest
     public string SellerCustomField { get; set; } = string.Empty;
     public string SabrVariantSku { get; set; } = string.Empty;
     public List<MercadoLivreCreateItemVariationRequest> Variations { get; set; } = new();
+
+    // ── Warranty and Shipping ──────────────────────────────────────────────
+    public string? WarrantyType { get; set; }  // "Garantia do fabricante" | "Garantia do vendedor"
+    public string? WarrantyTime { get; set; }  // "90 dias" | "6 meses" | "12 meses" | "24 meses"
+    public bool FreeShipping { get; set; } = false;
+    public decimal? WidthCm { get; set; }
+    public decimal? HeightCm { get; set; }
+    public decimal? LengthCm { get; set; }
+    public decimal? WeightKg { get; set; }
 }
 
 public sealed class MercadoLivreCreateItemAttributeRequest
