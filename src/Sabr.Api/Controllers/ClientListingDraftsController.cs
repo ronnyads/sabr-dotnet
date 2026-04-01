@@ -210,6 +210,95 @@ public sealed class ClientListingDraftsController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Gera sugestões de conteúdo (título, descrição, etc.) via IA.
+    /// </summary>
+    [HttpPost("drafts/ai-generate")]
+    public async Task<IActionResult> GenerateAiContent(
+        [FromBody] ListingDraftAiGenerateRequest? request,
+        [FromServices] IAiService aiService,
+        [FromServices] AiPromptConfigService promptConfigService,
+        CancellationToken cancellationToken)
+    {
+        if (request == null || request.DraftId == Guid.Empty || string.IsNullOrWhiteSpace(request.Feature))
+            return BadRequest(new { error = "DraftId and Feature são obrigatórios" });
+
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+            return error!;
+
+        try
+        {
+            // Carregar prompt ativo
+            var promptConfig = await promptConfigService.GetActiveByFeatureAndChannelAsync(
+                request.Feature,
+                "mercadolivre",
+                cancellationToken);
+
+            if (promptConfig == null)
+                return BadRequest(CreateApiError("PROMPT_NOT_FOUND", $"Prompt não configurado para feature: {request.Feature}"));
+
+            // Para MVP, preparar variáveis vazias — o cliente envia título/descrição atualizados
+            var variables = new Dictionary<string, string>
+            {
+                ["title"] = "",
+                ["description"] = "",
+                ["name"] = "",
+                ["brand"] = "",
+                ["category"] = "",
+                ["price"] = "0",
+                ["cost"] = "0",
+                ["attributes"] = "{}",
+                ["condition"] = "new"
+            };
+
+            // Executar prompt via IA
+            var aiResult = await aiService.ExecuteAsync(promptConfig.Prompt, variables, cancellationToken);
+
+            // Tentar parsear resultado como JSON estruturado (para features como ml_sale_terms, ml_shipping)
+            Dictionary<string, string>? structured = null;
+            try
+            {
+                if (request.Feature is "ml_sale_terms" or "ml_shipping" or "ml_attributes")
+                {
+                    // Remove possível ```json wrapper
+                    var cleanedResult = aiResult
+                        .Replace("```json", "")
+                        .Replace("```", "")
+                        .Trim();
+
+                    using var doc = System.Text.Json.JsonDocument.Parse(cleanedResult);
+                    structured = new Dictionary<string, string>();
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        structured[prop.Name] = prop.Value.GetString() ?? "";
+                    }
+                }
+            }
+            catch
+            {
+                // Se não for JSON válido, apenas retorna texto livre
+            }
+
+            return Ok(new AiGenerateResponse
+            {
+                Feature = request.Feature,
+                Result = aiResult,
+                Structured = structured
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Erro ao gerar conteúdo com IA: draftId={DraftId} feature={Feature} tenantId={TenantId} clientId={ClientId}",
+                request.DraftId,
+                request.Feature,
+                tenantId,
+                clientId);
+            return StatusCode(503, CreateApiError("AI_SERVICE_ERROR", "Serviço de IA indisponível."));
+        }
+    }
+
     private bool TryGetClientContext(out string? tenantId, out Guid clientId, out IActionResult? errorResult)
     {
         tenantId = _tenantProvider.TenantId;
@@ -333,6 +422,18 @@ public sealed class ClientListingDraftsController : ControllerBase
             "DRAFT_NOT_FOUND" => NotFound(CreateApiError(code, message, errors)),
             _ => BadRequest(CreateApiError(code, message, errors))
         };
+    }
+
+    private static string? GetJsonValue(string json, string key)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty(key, out var element))
+                return element.GetString();
+        }
+        catch { }
+        return null;
     }
 
     private ApiError CreateApiError(string code, string message, object? errors = null)

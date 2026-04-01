@@ -369,6 +369,7 @@ builder.Services.AddScoped<AdminCategoryService>();
 builder.Services.AddScoped<AdminCatalogService>();
 builder.Services.AddScoped<AdminPlanService>();
 builder.Services.AddScoped<AdminClientPlanSubscriptionService>();
+builder.Services.AddScoped<AiPromptConfigService>();
 builder.Services.AddScoped<StagingFakeSeeder>();
 builder.Services.AddScoped<DevInitialSeeder>();
 builder.Services.AddSingleton<LoginAttemptService>();
