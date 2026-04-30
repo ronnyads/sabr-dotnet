@@ -11,8 +11,8 @@ namespace Sabr.Infrastructure.Migrations
             var now = DateTimeOffset.UtcNow;
 
             migrationBuilder.InsertData(
-                table: "ai_prompt_configs",
-                columns: new[] { "id", "feature", "channel", "name", "prompt", "is_active", "created_at", "updated_at" },
+                table: "AiPromptConfigs",
+                columns: new[] { "Id", "Feature", "Channel", "Name", "Prompt", "IsActive", "CreatedAt", "UpdatedAt" },
                 values: new object[,]
                 {
                     {
@@ -62,14 +62,24 @@ namespace Sabr.Infrastructure.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DeleteData(
-                table: "ai_prompt_configs",
-                keyColumn: "id",
-                keyValues: new object[] {
-                    new Guid("10000000-0000-0000-0000-000000000001"),
-                    new Guid("10000000-0000-0000-0000-000000000002"),
-                    new Guid("10000000-0000-0000-0000-000000000003"),
-                    new Guid("10000000-0000-0000-0000-000000000004")
-                });
+                table: "AiPromptConfigs",
+                keyColumn: "Id",
+                keyValue: new Guid("10000000-0000-0000-0000-000000000001"));
+
+            migrationBuilder.DeleteData(
+                table: "AiPromptConfigs",
+                keyColumn: "Id",
+                keyValue: new Guid("10000000-0000-0000-0000-000000000002"));
+
+            migrationBuilder.DeleteData(
+                table: "AiPromptConfigs",
+                keyColumn: "Id",
+                keyValue: new Guid("10000000-0000-0000-0000-000000000003"));
+
+            migrationBuilder.DeleteData(
+                table: "AiPromptConfigs",
+                keyColumn: "Id",
+                keyValue: new Guid("10000000-0000-0000-0000-000000000004"));
         }
     }
 }
