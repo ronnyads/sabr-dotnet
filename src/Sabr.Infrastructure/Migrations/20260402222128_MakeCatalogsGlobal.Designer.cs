@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Sabr.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using Sabr.Infrastructure.Persistence;
 namespace Sabr.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260402222128_MakeCatalogsGlobal")]
+    partial class MakeCatalogsGlobal
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1274,18 +1277,24 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("name");
 
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("tenant_id");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IsActive")
-                        .HasDatabaseName("ix_plans_active");
+                    b.HasIndex("TenantId", "IsActive")
+                        .HasDatabaseName("ix_plans_tenant_active");
 
-                    b.HasIndex("Name")
+                    b.HasIndex("TenantId", "Name")
                         .IsUnique()
-                        .HasDatabaseName("ux_plans_name");
+                        .HasDatabaseName("ux_plans_tenant_name");
 
                     b.ToTable("plans", null, t =>
                         {
@@ -1312,17 +1321,23 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("plan_id");
 
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("tenant_id");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("CatalogId")
-                        .HasDatabaseName("ix_plan_catalogs_catalog");
+                    b.HasIndex("TenantId", "CatalogId")
+                        .HasDatabaseName("ix_plan_catalogs_tenant_catalog");
 
-                    b.HasIndex("PlanId")
-                        .HasDatabaseName("ix_plan_catalogs_plan");
+                    b.HasIndex("TenantId", "PlanId")
+                        .HasDatabaseName("ix_plan_catalogs_tenant_plan");
 
-                    b.HasIndex("PlanId", "CatalogId")
+                    b.HasIndex("TenantId", "PlanId", "CatalogId")
                         .IsUnique()
-                        .HasDatabaseName("ux_plan_catalogs_plan_catalog");
+                        .HasDatabaseName("ux_plan_catalogs_tenant_plan_catalog");
 
                     b.ToTable("plan_catalogs", (string)null);
                 });

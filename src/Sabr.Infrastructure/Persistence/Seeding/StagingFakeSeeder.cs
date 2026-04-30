@@ -272,13 +272,12 @@ public sealed class StagingFakeSeeder
 
     private async Task UpsertPlanAsync(string tenantId, Guid id, string name, bool isActive, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        var plan = await _dbContext.Plans.FirstOrDefaultAsync(item => item.Id == id && item.TenantId == tenantId, cancellationToken);
+        var plan = await _dbContext.Plans.FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
         if (plan == null)
         {
             _dbContext.Plans.Add(new Plan
             {
                 Id = id,
-                TenantId = tenantId,
                 Name = name,
                 IsActive = isActive,
                 CreatedAt = now,
@@ -304,13 +303,12 @@ public sealed class StagingFakeSeeder
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        var catalog = await _dbContext.Catalogs.FirstOrDefaultAsync(item => item.Id == id && item.TenantId == tenantId, cancellationToken);
+        var catalog = await _dbContext.Catalogs.FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
         if (catalog == null)
         {
             _dbContext.Catalogs.Add(new Catalog
             {
                 Id = id,
-                TenantId = tenantId,
                 Name = name,
                 Description = description,
                 IsActive = isActive,
@@ -332,7 +330,7 @@ public sealed class StagingFakeSeeder
     private async Task UpsertPlanCatalogAsync(string tenantId, Guid planId, Guid catalogId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var relation = await _dbContext.PlanCatalogs.FirstOrDefaultAsync(
-            item => item.TenantId == tenantId && item.PlanId == planId && item.CatalogId == catalogId,
+            item => item.PlanId == planId && item.CatalogId == catalogId,
             cancellationToken);
 
         if (relation != null)
@@ -342,7 +340,6 @@ public sealed class StagingFakeSeeder
 
         _dbContext.PlanCatalogs.Add(new PlanCatalog
         {
-            TenantId = tenantId,
             PlanId = planId,
             CatalogId = catalogId,
             CreatedAt = now
@@ -355,7 +352,7 @@ public sealed class StagingFakeSeeder
     {
         var normalizedSku = Sku.Normalize(sku);
         var relation = await _dbContext.ProductCatalogs.FirstOrDefaultAsync(
-            item => item.TenantId == tenantId && item.CatalogId == catalogId && item.ProductSku == normalizedSku,
+            item => item.CatalogId == catalogId && item.ProductSku == normalizedSku,
             cancellationToken);
 
         if (relation != null)
@@ -365,7 +362,6 @@ public sealed class StagingFakeSeeder
 
         _dbContext.ProductCatalogs.Add(new ProductCatalog
         {
-            TenantId = tenantId,
             CatalogId = catalogId,
             ProductSku = normalizedSku,
             CreatedAt = now

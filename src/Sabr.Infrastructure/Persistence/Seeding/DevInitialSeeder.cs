@@ -55,7 +55,7 @@ public sealed class DevInitialSeeder
 
         var products = BuildProductSeeds();
         await EnsureProductsVariantsImagesAsync(products, now, cancellationToken);
-        await EnsureProductCatalogLinksAsync(tenant.Id, ActiveCatalogId, products, now, cancellationToken);
+        await EnsureProductCatalogLinksAsync(ActiveCatalogId, products, now, cancellationToken);
 
         var connection = await EnsureMercadoLivreConnectionWithoutTokenAsync(
             tenant.Id,
@@ -344,14 +344,13 @@ public sealed class DevInitialSeeder
         CancellationToken cancellationToken)
     {
         var plan = await _dbContext.Plans.FirstOrDefaultAsync(
-            item => item.Id == ActivePlanId && item.TenantId == tenantId,
+            item => item.Id == ActivePlanId,
             cancellationToken);
         if (plan == null)
         {
             _dbContext.Plans.Add(new Plan
             {
                 Id = ActivePlanId,
-                TenantId = tenantId,
                 Name = "Plano Dev Inicial",
                 BillingPeriod = BillingPeriod.Monthly,
                 IsActive = true,
@@ -368,14 +367,13 @@ public sealed class DevInitialSeeder
         }
 
         var catalog = await _dbContext.Catalogs.FirstOrDefaultAsync(
-            item => item.Id == ActiveCatalogId && item.TenantId == tenantId,
+            item => item.Id == ActiveCatalogId,
             cancellationToken);
         if (catalog == null)
         {
             _dbContext.Catalogs.Add(new Catalog
             {
                 Id = ActiveCatalogId,
-                TenantId = tenantId,
                 Name = "Catalogo Dev Inicial",
                 Description = "Catalogo ativo para bootstrap local completo",
                 IsActive = true,
@@ -392,13 +390,12 @@ public sealed class DevInitialSeeder
         }
 
         var relation = await _dbContext.PlanCatalogs.FirstOrDefaultAsync(
-            item => item.TenantId == tenantId && item.PlanId == ActivePlanId && item.CatalogId == ActiveCatalogId,
+            item => item.PlanId == ActivePlanId && item.CatalogId == ActiveCatalogId,
             cancellationToken);
         if (relation == null)
         {
             _dbContext.PlanCatalogs.Add(new PlanCatalog
             {
-                TenantId = tenantId,
                 PlanId = ActivePlanId,
                 CatalogId = ActiveCatalogId,
                 CreatedAt = now
@@ -553,7 +550,6 @@ public sealed class DevInitialSeeder
     }
 
     private async Task EnsureProductCatalogLinksAsync(
-        string tenantId,
         Guid catalogId,
         IReadOnlyCollection<ProductSeed> products,
         DateTimeOffset now,
@@ -563,8 +559,7 @@ public sealed class DevInitialSeeder
         {
             var normalizedSku = Sku.Normalize(product.BaseSku);
             var relation = await _dbContext.ProductCatalogs.FirstOrDefaultAsync(
-                item => item.TenantId == tenantId
-                        && item.CatalogId == catalogId
+                item => item.CatalogId == catalogId
                         && item.ProductSku == normalizedSku,
                 cancellationToken);
 
@@ -575,7 +570,6 @@ public sealed class DevInitialSeeder
 
             _dbContext.ProductCatalogs.Add(new ProductCatalog
             {
-                TenantId = tenantId,
                 CatalogId = catalogId,
                 ProductSku = normalizedSku,
                 CreatedAt = now

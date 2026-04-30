@@ -19,34 +19,20 @@ public sealed class AdminPlanService
     }
 
     public async Task<ServiceResult<PagedResult<AdminPlanResult>>> ListAsync(
-        string tenantSlug,
         int skip,
         int limit,
         string? search,
         bool? isActive,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<PagedResult<AdminPlanResult>>.Failure(tenantResult.Errors);
-        }
-
         var errors = PaginationGuard.ValidateOrError(skip, limit);
         if (errors.Count > 0)
-        {
             return ServiceResult<PagedResult<AdminPlanResult>>.Failure(errors);
-        }
 
-        var tenant = tenantResult.Data;
-        var query = _dbContext.Plans
-            .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id);
+        var query = _dbContext.Plans.AsNoTracking();
 
         if (isActive.HasValue)
-        {
             query = query.Where(item => item.IsActive == isActive.Value);
-        }
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -65,7 +51,7 @@ public sealed class AdminPlanService
         var planIds = items.Select(item => item.Id).ToList();
         var catalogCounts = await _dbContext.PlanCatalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && planIds.Contains(item.PlanId))
+            .Where(item => planIds.Contains(item.PlanId))
             .GroupBy(item => item.PlanId)
             .Select(group => new { group.Key, Count = group.Count() })
             .ToDictionaryAsync(item => item.Key, item => item.Count, cancellationToken);
@@ -76,7 +62,6 @@ public sealed class AdminPlanService
             return new AdminPlanResult
             {
                 Id = item.Id,
-                TenantId = tenant.Slug,
                 Name = item.Name,
                 BillingPeriod = item.BillingPeriod,
                 IsActive = item.IsActive,
@@ -96,54 +81,34 @@ public sealed class AdminPlanService
     }
 
     public async Task<ServiceResult<AdminPlanDetailResult>> GetByIdAsync(
-        string tenantSlug,
         Guid planId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminPlanDetailResult>.Failure(tenantResult.Errors);
-        }
-
-        return await GetByIdInternalAsync(tenantResult.Data, planId, cancellationToken);
+        return await GetByIdInternalAsync(planId, cancellationToken);
     }
 
     public async Task<ServiceResult<AdminPlanDetailResult>> CreateAsync(
-        string tenantSlug,
         AdminPlanUpsertRequest request,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminPlanDetailResult>.Failure(tenantResult.Errors);
-        }
-
         var errors = ValidatePlanRequest(request, actorUserId);
         if (errors.Count > 0)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(errors);
-        }
 
-        var tenant = tenantResult.Data;
         var normalizedName = request.Name.Trim();
         var duplicateName = await _dbContext.Plans.AnyAsync(
-            item => item.TenantId == tenant.Id && item.Name == normalizedName,
+            item => item.Name == normalizedName,
             cancellationToken);
 
         if (duplicateName)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(new[]
             {
                 new ValidationError("name", "Plan name already exists")
             });
-        }
 
         var plan = new Plan
         {
-            TenantId = tenant.Id,
             Name = normalizedName,
             BillingPeriod = ResolveBillingPeriod(request.BillingPeriod),
             IsActive = request.IsActive,
@@ -152,156 +117,95 @@ public sealed class AdminPlanService
         };
 
         _dbContext.Plans.Add(plan);
-        AddAuditEvent(
-            tenant.Id,
-            actorUserId,
-            "AdminPlans.Create",
-            nameof(Plan),
-            plan.Id,
-            new { plan.Name, plan.IsActive });
+        AddAuditEvent(actorUserId, "AdminPlans.Create", nameof(Plan), plan.Id, new { plan.Name, plan.IsActive });
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return await GetByIdInternalAsync(tenant, plan.Id, cancellationToken);
+        return await GetByIdInternalAsync(plan.Id, cancellationToken);
     }
 
     public async Task<ServiceResult<AdminPlanDetailResult>> UpdateAsync(
-        string tenantSlug,
         Guid planId,
         AdminPlanUpsertRequest request,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminPlanDetailResult>.Failure(tenantResult.Errors);
-        }
-
         var errors = ValidatePlanRequest(request, actorUserId);
         if (errors.Count > 0)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(errors);
-        }
 
-        var tenant = tenantResult.Data;
-        var plan = await _dbContext.Plans.FirstOrDefaultAsync(
-            item => item.TenantId == tenant.Id && item.Id == planId,
-            cancellationToken);
+        var plan = await _dbContext.Plans.FirstOrDefaultAsync(item => item.Id == planId, cancellationToken);
 
         if (plan == null)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(new[]
             {
                 new ValidationError("planId", "Plan not found")
             });
-        }
 
         var normalizedName = request.Name.Trim();
         var duplicateName = await _dbContext.Plans.AnyAsync(
-            item => item.TenantId == tenant.Id && item.Id != planId && item.Name == normalizedName,
+            item => item.Id != planId && item.Name == normalizedName,
             cancellationToken);
 
         if (duplicateName)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(new[]
             {
                 new ValidationError("name", "Plan name already exists")
             });
-        }
 
         plan.Name = normalizedName;
         plan.BillingPeriod = ResolveBillingPeriod(request.BillingPeriod);
         plan.IsActive = request.IsActive;
         plan.UpdatedAt = DateTimeOffset.UtcNow;
 
-        AddAuditEvent(
-            tenant.Id,
-            actorUserId,
-            "AdminPlans.Update",
-            nameof(Plan),
-            plan.Id,
-            new { plan.Name, plan.IsActive });
-
+        AddAuditEvent(actorUserId, "AdminPlans.Update", nameof(Plan), plan.Id, new { plan.Name, plan.IsActive });
         await _dbContext.SaveChangesAsync(cancellationToken);
-        return await GetByIdInternalAsync(tenant, plan.Id, cancellationToken);
+        return await GetByIdInternalAsync(plan.Id, cancellationToken);
     }
 
     public async Task<ServiceResult<bool>> DeactivateAsync(
-        string tenantSlug,
         Guid planId,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<bool>.Failure(tenantResult.Errors);
-        }
-
         if (actorUserId == Guid.Empty)
-        {
             return ServiceResult<bool>.Failure(new[]
             {
                 new ValidationError("actor", "Actor user is required")
             });
-        }
 
-        var tenant = tenantResult.Data;
-        var plan = await _dbContext.Plans.FirstOrDefaultAsync(
-            item => item.TenantId == tenant.Id && item.Id == planId,
-            cancellationToken);
+        var plan = await _dbContext.Plans.FirstOrDefaultAsync(item => item.Id == planId, cancellationToken);
 
         if (plan == null || !plan.IsActive)
-        {
             return ServiceResult<bool>.Success(false);
-        }
 
         plan.IsActive = false;
         plan.UpdatedAt = DateTimeOffset.UtcNow;
-        AddAuditEvent(
-            tenant.Id,
-            actorUserId,
-            "AdminPlans.Deactivate",
-            nameof(Plan),
-            plan.Id,
-            new { plan.Id });
+        AddAuditEvent(actorUserId, "AdminPlans.Deactivate", nameof(Plan), plan.Id, new { plan.Id });
         await _dbContext.SaveChangesAsync(cancellationToken);
         return ServiceResult<bool>.Success(true);
     }
 
     public async Task<ServiceResult<AdminPlanDetailResult>> ReplaceCatalogsAsync(
-        string tenantSlug,
         Guid planId,
         PlanReplaceCatalogsRequest request,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminPlanDetailResult>.Failure(tenantResult.Errors);
-        }
-
         if (actorUserId == Guid.Empty)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(new[]
             {
                 new ValidationError("actor", "Actor user is required")
             });
-        }
 
-        var tenant = tenantResult.Data;
         var plan = await _dbContext.Plans
             .AsNoTracking()
-            .FirstOrDefaultAsync(item => item.TenantId == tenant.Id && item.Id == planId, cancellationToken);
+            .FirstOrDefaultAsync(item => item.Id == planId, cancellationToken);
 
         if (plan == null)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(new[]
             {
                 new ValidationError("planId", "Plan not found")
             });
-        }
 
         request ??= new PlanReplaceCatalogsRequest();
         var desiredCatalogIds = (request.CatalogIds ?? new List<Guid>())
@@ -311,13 +215,11 @@ public sealed class AdminPlanService
 
         var validCatalogIds = await _dbContext.Catalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && desiredCatalogIds.Contains(item.Id) && item.IsActive)
+            .Where(item => desiredCatalogIds.Contains(item.Id) && item.IsActive)
             .Select(item => item.Id)
             .ToListAsync(cancellationToken);
 
-        var invalidCatalogIds = desiredCatalogIds
-            .Except(validCatalogIds)
-            .ToList();
+        var invalidCatalogIds = desiredCatalogIds.Except(validCatalogIds).ToList();
 
         if (invalidCatalogIds.Count > 0)
         {
@@ -325,7 +227,6 @@ public sealed class AdminPlanService
                 .Select(item => new ValidationError("invalidCatalogIds", item.ToString()))
                 .ToList();
             invalidCatalogErrors.Add(new ValidationError("catalogIds", "One or more catalog ids are invalid or inactive"));
-
             return ServiceResult<AdminPlanDetailResult>.Failure(invalidCatalogErrors);
         }
 
@@ -333,77 +234,55 @@ public sealed class AdminPlanService
         await using var transaction = await BeginTransactionIfSupportedAsync(efDbContext, cancellationToken);
 
         var currentRelations = await _dbContext.PlanCatalogs
-            .Where(item => item.TenantId == tenant.Id && item.PlanId == planId)
+            .Where(item => item.PlanId == planId)
             .ToListAsync(cancellationToken);
 
         var currentSet = currentRelations.Select(item => item.CatalogId).ToHashSet();
         var desiredSet = desiredCatalogIds.ToHashSet();
 
-        var toRemove = currentRelations
-            .Where(item => !desiredSet.Contains(item.CatalogId))
-            .ToList();
-
-        var toAdd = desiredCatalogIds
-            .Where(item => !currentSet.Contains(item))
-            .ToList();
+        var toRemove = currentRelations.Where(item => !desiredSet.Contains(item.CatalogId)).ToList();
+        var toAdd = desiredCatalogIds.Where(item => !currentSet.Contains(item)).ToList();
 
         if (toRemove.Count > 0)
-        {
             _dbContext.PlanCatalogs.RemoveRange(toRemove);
-        }
 
         if (toAdd.Count > 0)
         {
             _dbContext.PlanCatalogs.AddRange(toAdd.Select(item => new PlanCatalog
             {
-                TenantId = tenant.Id,
                 PlanId = planId,
                 CatalogId = item,
                 CreatedAt = DateTimeOffset.UtcNow
             }));
         }
 
-        AddAuditEvent(
-            tenant.Id,
-            actorUserId,
-            "AdminPlans.ReplaceCatalogs",
-            nameof(Plan),
-            planId,
-            new
-            {
-                Added = toAdd.Count,
-                Removed = toRemove.Count
-            });
+        AddAuditEvent(actorUserId, "AdminPlans.ReplaceCatalogs", nameof(Plan), planId,
+            new { Added = toAdd.Count, Removed = toRemove.Count });
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         if (transaction != null)
-        {
             await transaction.CommitAsync(cancellationToken);
-        }
 
-        return await GetByIdInternalAsync(tenant, planId, cancellationToken);
+        return await GetByIdInternalAsync(planId, cancellationToken);
     }
 
     private async Task<ServiceResult<AdminPlanDetailResult>> GetByIdInternalAsync(
-        Tenant tenant,
         Guid planId,
         CancellationToken cancellationToken)
     {
         var plan = await _dbContext.Plans
             .AsNoTracking()
-            .FirstOrDefaultAsync(item => item.TenantId == tenant.Id && item.Id == planId, cancellationToken);
+            .FirstOrDefaultAsync(item => item.Id == planId, cancellationToken);
 
         if (plan == null)
-        {
             return ServiceResult<AdminPlanDetailResult>.Failure(new[]
             {
                 new ValidationError("planId", "Plan not found")
             });
-        }
 
         var catalogIds = await _dbContext.PlanCatalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && item.PlanId == plan.Id)
+            .Where(item => item.PlanId == plan.Id)
             .OrderBy(item => item.CatalogId)
             .Select(item => item.CatalogId)
             .ToListAsync(cancellationToken);
@@ -411,7 +290,6 @@ public sealed class AdminPlanService
         return ServiceResult<AdminPlanDetailResult>.Success(new AdminPlanDetailResult
         {
             Id = plan.Id,
-            TenantId = tenant.Slug,
             Name = plan.Name,
             BillingPeriod = plan.BillingPeriod,
             IsActive = plan.IsActive,
@@ -419,40 +297,6 @@ public sealed class AdminPlanService
             CreatedAt = plan.CreatedAt,
             UpdatedAt = plan.UpdatedAt
         });
-    }
-
-    private async Task<ServiceResult<Tenant>> ResolveTenantAsync(string tenantSlug, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(tenantSlug))
-        {
-            return ServiceResult<Tenant>.Failure(new[]
-            {
-                new ValidationError("tenantId", "Tenant slug is required")
-            });
-        }
-
-        var normalizedSlug = tenantSlug.Trim().ToLowerInvariant();
-        var tenant = await _dbContext.Tenants.FirstOrDefaultAsync(
-            item => item.Slug == normalizedSlug,
-            cancellationToken);
-
-        if (tenant == null)
-        {
-            return ServiceResult<Tenant>.Failure(new[]
-            {
-                new ValidationError("tenantId", "Tenant not found")
-            });
-        }
-
-        if (tenant.Status != TenantStatus.Active)
-        {
-            return ServiceResult<Tenant>.Failure(new[]
-            {
-                new ValidationError("tenantStatus", "Tenant inactive")
-            });
-        }
-
-        return ServiceResult<Tenant>.Success(tenant);
     }
 
     private static List<ValidationError> ValidatePlanRequest(AdminPlanUpsertRequest request, Guid actorUserId)
@@ -465,23 +309,15 @@ public sealed class AdminPlanService
         }
 
         if (string.IsNullOrWhiteSpace(request.Name))
-        {
             errors.Add(new ValidationError("name", "Name is required"));
-        }
         else if (request.Name.Trim().Length > 200)
-        {
             errors.Add(new ValidationError("name", "Name cannot exceed 200 characters"));
-        }
 
         if (actorUserId == Guid.Empty)
-        {
             errors.Add(new ValidationError("actor", "Actor user is required"));
-        }
 
         if (request.BillingPeriod.HasValue && !Enum.IsDefined(typeof(BillingPeriod), request.BillingPeriod.Value))
-        {
             errors.Add(new ValidationError("billingPeriod", "Billing period is invalid"));
-        }
 
         return errors;
     }
@@ -489,24 +325,15 @@ public sealed class AdminPlanService
     private static BillingPeriod ResolveBillingPeriod(BillingPeriod? billingPeriod)
     {
         if (billingPeriod.HasValue && Enum.IsDefined(typeof(BillingPeriod), billingPeriod.Value))
-        {
             return billingPeriod.Value;
-        }
-
         return BillingPeriod.Monthly;
     }
 
-    private void AddAuditEvent(
-        string tenantId,
-        Guid actorUserId,
-        string action,
-        string entity,
-        Guid entityId,
-        object metadata)
+    private void AddAuditEvent(Guid actorUserId, string action, string entity, Guid entityId, object metadata)
     {
         _dbContext.AuditEvents.Add(new AuditEvent
         {
-            TenantId = tenantId,
+            TenantId = string.Empty,
             ActorType = "AdminUser",
             ActorId = actorUserId,
             Action = action,
@@ -522,10 +349,7 @@ public sealed class AdminPlanService
         CancellationToken cancellationToken)
     {
         if (!dbContext.Database.IsRelational())
-        {
             return null;
-        }
-
         return await dbContext.Database.BeginTransactionAsync(cancellationToken);
     }
 }

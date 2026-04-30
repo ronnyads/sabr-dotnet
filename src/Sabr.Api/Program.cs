@@ -59,7 +59,6 @@ var trustedForwardedProxies = builder.Configuration.GetSection("ForwardedHeaders
 var trustedForwardedNetworks = builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [];
 
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddDataProtection();
 builder.Services.AddSingleton<ITenantProvider, HttpContextTenantProvider>();
 builder.Services.AddScoped<ITenantResolver, TenantResolver>();
 builder.Services.AddControllers();
@@ -168,6 +167,12 @@ var connectionString = hasValidConfiguredConnectionString
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 builder.Services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
+
+// DataProtection configuration for OAuth state tokens
+// NOTE: Keys are not persisted between app restarts on Fly.io (each restart changes keys).
+// This causes OAuth state tokens to become invalid after redeploy/restart.
+// FIXME: Need to configure persistent key storage (via Fly volume mount or MemoryCache with database backup)
+builder.Services.AddDataProtection();
 
 // -- Cache (Redis em producao, Memory em dev) ----------------------------
 var redisConnStr = builder.Configuration.GetConnectionString("Redis");

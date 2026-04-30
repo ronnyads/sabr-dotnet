@@ -45,7 +45,6 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
                 new Catalog
                 {
                     Id = catalogAId,
-                    TenantId = tenantA,
                     Name = "Catalogo A",
                     IsActive = true,
                     CreatedAt = DateTimeOffset.UtcNow,
@@ -54,7 +53,6 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
                 new Catalog
                 {
                     Id = catalogBId,
-                    TenantId = tenantB,
                     Name = "Catalogo B",
                     IsActive = true,
                     CreatedAt = DateTimeOffset.UtcNow,

@@ -867,15 +867,14 @@ public sealed class AppDbContext : DbContext, IAppDbContext
             entity.ToTable("plans");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id").IsRequired();
-            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
             entity.Property(e => e.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
             entity.Property(e => e.BillingPeriod).HasColumnName("billing_period").IsRequired();
             entity.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
             entity.HasCheckConstraint("ck_plans_billing_period_valid", "\"billing_period\" IN (0, 1, 2, 3)");
-            entity.HasIndex(e => new { e.TenantId, e.Name }).IsUnique().HasDatabaseName("ux_plans_tenant_name");
-            entity.HasIndex(e => new { e.TenantId, e.IsActive }).HasDatabaseName("ix_plans_tenant_active");
+            entity.HasIndex(e => e.Name).IsUnique().HasDatabaseName("ux_plans_name");
+            entity.HasIndex(e => e.IsActive).HasDatabaseName("ix_plans_active");
         });
 
         modelBuilder.Entity<Catalog>(entity =>
@@ -883,14 +882,13 @@ public sealed class AppDbContext : DbContext, IAppDbContext
             entity.ToTable("catalogs");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id").IsRequired();
-            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
             entity.Property(e => e.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
             entity.Property(e => e.Description).HasColumnName("description").HasMaxLength(600);
             entity.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
-            entity.HasIndex(e => new { e.TenantId, e.Name }).IsUnique().HasDatabaseName("ux_catalogs_tenant_name");
-            entity.HasIndex(e => new { e.TenantId, e.IsActive }).HasDatabaseName("ix_catalogs_tenant_active");
+            entity.HasIndex(e => e.Name).IsUnique().HasDatabaseName("ux_catalogs_name");
+            entity.HasIndex(e => e.IsActive).HasDatabaseName("ix_catalogs_active");
         });
 
         modelBuilder.Entity<PlanCatalog>(entity =>
@@ -898,15 +896,14 @@ public sealed class AppDbContext : DbContext, IAppDbContext
             entity.ToTable("plan_catalogs");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id").IsRequired();
-            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
             entity.Property(e => e.PlanId).HasColumnName("plan_id").IsRequired();
             entity.Property(e => e.CatalogId).HasColumnName("catalog_id").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
-            entity.HasIndex(e => new { e.TenantId, e.PlanId, e.CatalogId })
+            entity.HasIndex(e => new { e.PlanId, e.CatalogId })
                 .IsUnique()
-                .HasDatabaseName("ux_plan_catalogs_tenant_plan_catalog");
-            entity.HasIndex(e => new { e.TenantId, e.PlanId }).HasDatabaseName("ix_plan_catalogs_tenant_plan");
-            entity.HasIndex(e => new { e.TenantId, e.CatalogId }).HasDatabaseName("ix_plan_catalogs_tenant_catalog");
+                .HasDatabaseName("ux_plan_catalogs_plan_catalog");
+            entity.HasIndex(e => e.PlanId).HasDatabaseName("ix_plan_catalogs_plan");
+            entity.HasIndex(e => e.CatalogId).HasDatabaseName("ix_plan_catalogs_catalog");
         });
 
         modelBuilder.Entity<ProductCatalog>(entity =>
@@ -914,15 +911,14 @@ public sealed class AppDbContext : DbContext, IAppDbContext
             entity.ToTable("product_catalogs");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id").IsRequired();
-            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
             entity.Property(e => e.CatalogId).HasColumnName("catalog_id").IsRequired();
             entity.Property(e => e.ProductSku).HasColumnName("product_sku").HasMaxLength(Sku.MaxLength).IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.HasCheckConstraint("ck_product_catalogs_sku_format", "\"product_sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");
-            entity.HasIndex(e => new { e.TenantId, e.CatalogId, e.ProductSku })
+            entity.HasIndex(e => new { e.CatalogId, e.ProductSku })
                 .IsUnique()
-                .HasDatabaseName("ux_product_catalogs_tenant_catalog_sku");
-            entity.HasIndex(e => new { e.TenantId, e.ProductSku }).HasDatabaseName("ix_product_catalogs_tenant_sku");
+                .HasDatabaseName("ux_product_catalogs_catalog_sku");
+            entity.HasIndex(e => e.ProductSku).HasDatabaseName("ix_product_catalogs_sku");
         });
 
         modelBuilder.Entity<ClientPlanSubscription>(entity =>
