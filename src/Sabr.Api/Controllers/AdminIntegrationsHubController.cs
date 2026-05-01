@@ -23,7 +23,6 @@ public sealed class AdminIntegrationsHubController : ControllerBase
         _db = db;
     }
 
-    // GET /api/v1/admin/integrations
     [HttpGet]
     public async Task<IActionResult> GetIntegrations(CancellationToken cancellationToken)
     {
@@ -34,33 +33,30 @@ public sealed class AdminIntegrationsHubController : ControllerBase
                 .Select(g => new { Provider = g.Key, Count = g.Count() })
                 .ToListAsync(cancellationToken);
 
-            var mlCount      = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.MercadoLivre)?.Count ?? 0;
-            var tinyCount    = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.TinyErp)?.Count ?? 0;
-            var shopifyCount = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.Shopify)?.Count ?? 0;
+            var counts = connections.ToDictionary(item => item.Provider, item => item.Count);
 
             var result = new List<IntegrationCardResult>
             {
-                new()
-                {
-                    Provider     = (int)MarketplaceProvider.MercadoLivre,
-                    Name         = "Mercado Livre",
-                    Description  = "Sincronize pedidos e produtos com o Mercado Livre.",
-                    ConnectedCount = mlCount
-                },
-                new()
-                {
-                    Provider     = (int)MarketplaceProvider.TinyErp,
-                    Name         = "Tiny ERP",
-                    Description  = "Integre pedidos e emissao de notas fiscais com o Tiny ERP.",
-                    ConnectedCount = tinyCount
-                },
-                new()
-                {
-                    Provider     = (int)MarketplaceProvider.Shopify,
-                    Name         = "Shopify",
-                    Description  = "Sincronize pedidos e inventário com a loja Shopify.",
-                    ConnectedCount = shopifyCount
-                }
+                BuildIntegrationCard(
+                    MarketplaceProvider.MercadoLivre,
+                    "Mercado Livre",
+                    "Sincronize pedidos e produtos com o Mercado Livre.",
+                    counts),
+                BuildIntegrationCard(
+                    MarketplaceProvider.TinyErp,
+                    "Tiny ERP",
+                    "Integre pedidos e emissao de notas fiscais com o Tiny ERP.",
+                    counts),
+                BuildIntegrationCard(
+                    MarketplaceProvider.Shopify,
+                    "Shopify",
+                    "Sincronize pedidos e inventario com a loja Shopify.",
+                    counts),
+                BuildIntegrationCard(
+                    MarketplaceProvider.TikTokShop,
+                    "TikTok Shop",
+                    "Conecte contas TikTok Shop e prepare a operacao para sincronizacao futura.",
+                    counts)
             };
 
             return Ok(result);
@@ -68,11 +64,10 @@ public sealed class AdminIntegrationsHubController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Admin: failed to load integrations hub. traceId={TraceId}", HttpContext.TraceIdentifier);
-            return StatusCode(500, new { code = "INTEGRATIONS_HUB_ERROR", message = "Falha ao carregar integrações." });
+            return StatusCode(500, new { code = "INTEGRATIONS_HUB_ERROR", message = "Falha ao carregar integracoes." });
         }
     }
 
-    // GET /api/v1/admin/integrations/mercadolivre/clients
     [HttpGet("mercadolivre/clients")]
     public async Task<IActionResult> GetMercadoLivreClients(
         [FromQuery] int skip = 0,
@@ -84,7 +79,6 @@ public sealed class AdminIntegrationsHubController : ControllerBase
         return Ok(result);
     }
 
-    // GET /api/v1/admin/integrations/tinyerp/clients
     [HttpGet("tinyerp/clients")]
     public async Task<IActionResult> GetTinyErpClients(
         [FromQuery] int skip = 0,
@@ -96,31 +90,80 @@ public sealed class AdminIntegrationsHubController : ControllerBase
         return Ok(result);
     }
 
-    // DELETE /api/v1/admin/integrations/mercadolivre/clients/{clientId}
+    [HttpGet("shopify/clients")]
+    public async Task<IActionResult> GetShopifyClients(
+        [FromQuery] int skip = 0,
+        [FromQuery] int limit = 20,
+        [FromQuery] string? search = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await GetClientsByProvider(MarketplaceProvider.Shopify, skip, limit, search, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpGet("tiktokshop/clients")]
+    public async Task<IActionResult> GetTikTokShopClients(
+        [FromQuery] int skip = 0,
+        [FromQuery] int limit = 20,
+        [FromQuery] string? search = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await GetClientsByProvider(MarketplaceProvider.TikTokShop, skip, limit, search, cancellationToken);
+        return Ok(result);
+    }
+
     [HttpDelete("mercadolivre/clients/{clientId:guid}")]
-    public async Task<IActionResult> DisconnectMercadoLivre([FromRoute] Guid clientId, CancellationToken cancellationToken)
+    public Task<IActionResult> DisconnectMercadoLivre([FromRoute] Guid clientId, CancellationToken cancellationToken)
     {
-        var rows = await _db.TenantMarketplaceConnections
-            .Where(c => c.ClientId == clientId && c.Provider == MarketplaceProvider.MercadoLivre)
-            .ToListAsync(cancellationToken);
-        _db.TenantMarketplaceConnections.RemoveRange(rows);
-        await _db.SaveChangesAsync(cancellationToken);
-        return Ok();
+        return DisconnectByProvider(MarketplaceProvider.MercadoLivre, clientId, cancellationToken);
     }
 
-    // DELETE /api/v1/admin/integrations/tinyerp/clients/{clientId}
     [HttpDelete("tinyerp/clients/{clientId:guid}")]
-    public async Task<IActionResult> DisconnectTinyErp([FromRoute] Guid clientId, CancellationToken cancellationToken)
+    public Task<IActionResult> DisconnectTinyErp([FromRoute] Guid clientId, CancellationToken cancellationToken)
+    {
+        return DisconnectByProvider(MarketplaceProvider.TinyErp, clientId, cancellationToken);
+    }
+
+    [HttpDelete("shopify/clients/{clientId:guid}")]
+    public Task<IActionResult> DisconnectShopify([FromRoute] Guid clientId, CancellationToken cancellationToken)
+    {
+        return DisconnectByProvider(MarketplaceProvider.Shopify, clientId, cancellationToken);
+    }
+
+    [HttpDelete("tiktokshop/clients/{clientId:guid}")]
+    public Task<IActionResult> DisconnectTikTokShop([FromRoute] Guid clientId, CancellationToken cancellationToken)
+    {
+        return DisconnectByProvider(MarketplaceProvider.TikTokShop, clientId, cancellationToken);
+    }
+
+    private static IntegrationCardResult BuildIntegrationCard(
+        MarketplaceProvider provider,
+        string name,
+        string description,
+        IReadOnlyDictionary<MarketplaceProvider, int> counts)
+    {
+        return new IntegrationCardResult
+        {
+            Provider = (int)provider,
+            Name = name,
+            Description = description,
+            ConnectedCount = counts.TryGetValue(provider, out var count) ? count : 0
+        };
+    }
+
+    private async Task<IActionResult> DisconnectByProvider(
+        MarketplaceProvider provider,
+        Guid clientId,
+        CancellationToken cancellationToken)
     {
         var rows = await _db.TenantMarketplaceConnections
-            .Where(c => c.ClientId == clientId && c.Provider == MarketplaceProvider.TinyErp)
+            .Where(c => c.ClientId == clientId && c.Provider == provider)
             .ToListAsync(cancellationToken);
+
         _db.TenantMarketplaceConnections.RemoveRange(rows);
         await _db.SaveChangesAsync(cancellationToken);
         return Ok();
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<PagedIntegrationClientsResult> GetClientsByProvider(
         MarketplaceProvider provider,
@@ -133,14 +176,14 @@ public sealed class AdminIntegrationsHubController : ControllerBase
 
         if (!string.IsNullOrWhiteSpace(search))
         {
-            var s = search.Trim().ToLower();
+            var normalizedSearch = search.Trim().ToLower();
             clientsQuery = clientsQuery.Where(c =>
-                c.AccountName.ToLower().Contains(s) ||
-                (c.LegalName  != null && c.LegalName.ToLower().Contains(s)) ||
-                (c.TradeName  != null && c.TradeName.ToLower().Contains(s)));
+                c.AccountName.ToLower().Contains(normalizedSearch) ||
+                (c.LegalName != null && c.LegalName.ToLower().Contains(normalizedSearch)) ||
+                (c.TradeName != null && c.TradeName.ToLower().Contains(normalizedSearch)));
         }
 
-        var total   = await clientsQuery.CountAsync(cancellationToken);
+        var total = await clientsQuery.CountAsync(cancellationToken);
         var clients = await clientsQuery
             .OrderBy(c => c.AccountName)
             .Skip(skip)
@@ -148,8 +191,8 @@ public sealed class AdminIntegrationsHubController : ControllerBase
             .Select(c => new { c.Id, c.TenantId, c.AccountName })
             .ToListAsync(cancellationToken);
 
-        var clientIds   = clients.Select(c => c.Id).ToList();
-        var tenantIds   = clients.Select(c => c.TenantId).Distinct().ToList();
+        var clientIds = clients.Select(c => c.Id).ToList();
+        var tenantIds = clients.Select(c => c.TenantId).Distinct().ToList();
 
         var connections = await _db.TenantMarketplaceConnections
             .Where(c => c.Provider == provider && clientIds.Contains(c.ClientId))
@@ -161,27 +204,32 @@ public sealed class AdminIntegrationsHubController : ControllerBase
             .Select(t => new { t.Id, t.Slug })
             .ToDictionaryAsync(t => t.Id, t => t.Slug, cancellationToken);
 
-        var connMap = connections
+        var connectionMap = connections
             .GroupBy(c => c.ClientId)
             .ToDictionary(g => g.Key, g => g.First());
 
         var items = clients.Select(c =>
         {
-            connMap.TryGetValue(c.Id, out var conn);
+            connectionMap.TryGetValue(c.Id, out var connection);
             tenantSlugs.TryGetValue(c.TenantId, out var slug);
+
             return new IntegrationClientResult
             {
-                ClientId             = c.Id,
-                TenantId             = c.TenantId,
-                TenantSlug           = slug ?? "",
-                ClientName           = c.AccountName,
-                IsConnected          = conn != null,
-                ConnectedAt          = conn?.CreatedAt.UtcDateTime,
-                LastSyncAt           = conn?.LastSyncAt?.UtcDateTime,
-                SellerOrCompanyInfo  = conn?.Nickname
+                ClientId = c.Id,
+                TenantId = c.TenantId,
+                TenantSlug = slug ?? string.Empty,
+                ClientName = c.AccountName,
+                IsConnected = connection != null,
+                ConnectedAt = connection?.CreatedAt.UtcDateTime,
+                LastSyncAt = connection?.LastSyncAt?.UtcDateTime,
+                SellerOrCompanyInfo = connection?.Nickname
             };
         }).ToList();
 
-        return new PagedIntegrationClientsResult { Items = items, Total = total };
+        return new PagedIntegrationClientsResult
+        {
+            Items = items,
+            Total = total
+        };
     }
 }

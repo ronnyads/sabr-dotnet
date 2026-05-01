@@ -33,6 +33,7 @@ using Sabr.Infrastructure.Integrations.Mabang;
 using Sabr.Infrastructure.Integrations.MercadoLivre;
 using Sabr.Infrastructure.Integrations.TinyErp;
 using Sabr.Infrastructure.Integrations.Shopify;
+using Sabr.Infrastructure.Integrations.TikTokShop;
 using Sabr.Infrastructure.Integrations.Ai;
 using Sabr.Infrastructure.Options;
 using Sabr.Infrastructure.Persistence;
@@ -146,6 +147,11 @@ builder.Services.AddOptions<MercadoLivreOptions>()
             options.Mabang.ApiKey = legacyMlApiKey;
         }
     })
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddOptions<TikTokShopOptions>()
+    .Bind(builder.Configuration.GetSection(TikTokShopOptions.SectionName))
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
@@ -379,6 +385,7 @@ builder.Services.AddScoped<StagingFakeSeeder>();
 builder.Services.AddScoped<DevInitialSeeder>();
 builder.Services.AddSingleton<LoginAttemptService>();
 builder.Services.AddSingleton<MercadoLivreOAuthStateService>();
+builder.Services.AddSingleton<TikTokShopOAuthStateService>();
 builder.Services.AddScoped<IProtheusOutboxProcessor, MockProtheusOutboxProcessor>();
 // Workers are disabled in the API by default — they run in Sabr.Worker.
 // Set BackgroundWorkers:Enabled=true in appsettings to run both in a single process (dev only).
@@ -452,6 +459,17 @@ builder.Services.AddHttpClient<IShopifyApiClient, ShopifyApiClient>(client =>
 });
 builder.Services.AddSingleton<ShopifyOAuthStateService>();
 builder.Services.AddScoped<ShopifyOAuthService>();
+
+builder.Services.AddHttpClient<ITikTokShopApiClient, TikTokShopApiClient>((sp, client) =>
+{
+    var options = sp.GetRequiredService<IOptions<TikTokShopOptions>>().Value;
+    client.BaseAddress = new Uri(options.ApiBaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<TikTokShopOAuthService>();
+builder.Services.AddScoped<TikTokShopSyncService>();
+builder.Services.AddScoped<TikTokShopMappingService>();
+builder.Services.AddScoped<TikTokShopPublishService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>

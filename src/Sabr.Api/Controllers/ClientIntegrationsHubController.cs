@@ -50,6 +50,7 @@ public sealed class ClientIntegrationsHubController : ControllerBase
             var mlConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.MercadoLivre);
             var tinyConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.TinyErp);
             var shopifyConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.Shopify);
+            var tikTokConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.TikTokShop);
 
             var result = new List<ClientIntegrationCardResult>
             {
@@ -77,11 +78,21 @@ public sealed class ClientIntegrationsHubController : ControllerBase
                 {
                     Provider = (int)MarketplaceProvider.Shopify,
                     Name = "Shopify",
-                    Description = "Sincronize pedidos e inventário com a sua loja Shopify.",
+                    Description = "Sincronize pedidos e inventario com a sua loja Shopify.",
                     IsConnected = shopifyConn != null,
                     ConnectedAt = shopifyConn?.CreatedAt.UtcDateTime,
                     LastSyncAt = shopifyConn?.LastSyncAt?.UtcDateTime,
                     Details = shopifyConn?.Nickname
+                },
+                new()
+                {
+                    Provider = (int)MarketplaceProvider.TikTokShop,
+                    Name = "TikTok Shop",
+                    Description = "Conecte sua operacao ao TikTok Shop para preparar sincronizacao de pedidos e catalogo.",
+                    IsConnected = tikTokConn != null,
+                    ConnectedAt = tikTokConn?.CreatedAt.UtcDateTime,
+                    LastSyncAt = tikTokConn?.LastSyncAt?.UtcDateTime,
+                    Details = tikTokConn?.Nickname
                 }
             };
 
@@ -100,10 +111,6 @@ public sealed class ClientIntegrationsHubController : ControllerBase
                 CreateApiError("INTEGRATIONS_HUB_INTERNAL_ERROR", "Falha interna ao carregar hub de integracoes"));
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
 
     private bool TryGetClientContext(out string? tenantId, out Guid clientId, out IActionResult? errorResult)
     {
