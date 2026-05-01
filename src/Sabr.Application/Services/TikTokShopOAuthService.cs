@@ -212,8 +212,7 @@ public sealed class TikTokShopOAuthService
         }
 
         // Refresh se o token expira nos próximos 5 minutos
-        var needsRefresh = connection.TokenExpiresAt.HasValue &&
-                           connection.TokenExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(5);
+        var needsRefresh = connection.TokenExpiresAt <= DateTimeOffset.UtcNow.AddMinutes(5);
 
         if (needsRefresh && !string.IsNullOrWhiteSpace(connection.RefreshToken))
         {
