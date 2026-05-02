@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Sabr.Application.Abstractions;
+using Sabr.Application.Exceptions;
 using Sabr.Application.Models;
 using Sabr.Application.Options;
 
@@ -13,15 +15,18 @@ public sealed class PublicCnpjLookupService : IDocumentLookup
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMemoryCache _cache;
     private readonly PublicCnpjOptions _options;
+    private readonly ILogger<PublicCnpjLookupService> _logger;
 
     public PublicCnpjLookupService(
         IHttpClientFactory httpClientFactory,
         IMemoryCache cache,
-        IOptions<PublicCnpjOptions> options)
+        IOptions<PublicCnpjOptions> options,
+        ILogger<PublicCnpjLookupService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _cache = cache;
         _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<DocumentLookupResult?> LookupAsync(string documentDigits, CancellationToken cancellationToken = default)
@@ -33,14 +38,28 @@ public sealed class PublicCnpjLookupService : IDocumentLookup
         }
 
         var client = _httpClientFactory.CreateClient("PublicCnpj");
-        var response = await client.GetAsync($"/api/cnpj/v1/{documentDigits}", cancellationToken);
+        HttpResponseMessage response;
+
+        try
+        {
+            response = await client.GetAsync($"/api/cnpj/v1/{documentDigits}", cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[PublicCnpj] Falha ao contactar BrasilAPI para CNPJ {Cnpj}", documentDigits);
+            throw new ExternalServiceUnavailableException("BrasilAPI indisponível", ex);
+        }
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
 
-        response.EnsureSuccessStatusCode();
+        if (response.StatusCode == HttpStatusCode.TooManyRequests || !response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("[PublicCnpj] BrasilAPI retornou {StatusCode} para CNPJ {Cnpj}", response.StatusCode, documentDigits);
+            throw new ExternalServiceUnavailableException($"BrasilAPI respondeu {(int)response.StatusCode}");
+        }
 
         var payload = await response.Content.ReadFromJsonAsync<BrasilApiCnpjResponse>(cancellationToken: cancellationToken);
         if (payload == null)

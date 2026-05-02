@@ -98,6 +98,31 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
         return File(result.Data.Content, result.Data.ContentType, result.Data.FileName);
     }
 
+    /// <summary>
+    /// Force disconnect a Mercado Livre integration for a client.
+    /// Used by admin to manually clean up problematic connections.
+    /// </summary>
+    [HttpDelete]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ForceDisconnect(
+        [FromRoute] string tenantSlug,
+        [FromRoute] Guid clientId,
+        [FromQuery] string? sellerId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _integrationService.DisconnectAsync(tenantSlug, clientId, sellerId, cancellationToken);
+        if (!result.Succeeded)
+        {
+            var message = result.Errors.Count > 0
+                ? result.Errors[0].Message
+                : "Failed to disconnect integration";
+            return NotFound(CreateApiError(result.ErrorCode ?? "DISCONNECT_FAILED", message));
+        }
+
+        return NoContent();
+    }
+
     private IActionResult MapValidationError(IReadOnlyCollection<ValidationError> errors)
     {
         if (errors.Count == 0)

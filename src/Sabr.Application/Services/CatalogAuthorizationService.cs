@@ -23,14 +23,10 @@ public sealed class CatalogAuthorizationService
 
         var allowedQuery =
             from subscription in _dbContext.ClientPlanSubscriptions
-            join plan in _dbContext.Plans on new { subscription.TenantId, PlanId = subscription.PlanId }
-                equals new { plan.TenantId, PlanId = plan.Id }
-            join planCatalog in _dbContext.PlanCatalogs on new { subscription.TenantId, subscription.PlanId }
-                equals new { planCatalog.TenantId, planCatalog.PlanId }
-            join catalog in _dbContext.Catalogs on new { planCatalog.TenantId, CatalogId = planCatalog.CatalogId }
-                equals new { catalog.TenantId, CatalogId = catalog.Id }
-            join productCatalog in _dbContext.ProductCatalogs on new { planCatalog.TenantId, planCatalog.CatalogId }
-                equals new { productCatalog.TenantId, productCatalog.CatalogId }
+            join plan in _dbContext.Plans on subscription.PlanId equals plan.Id
+            join planCatalog in _dbContext.PlanCatalogs on subscription.PlanId equals planCatalog.PlanId
+            join catalog in _dbContext.Catalogs on planCatalog.CatalogId equals catalog.Id
+            join productCatalog in _dbContext.ProductCatalogs on planCatalog.CatalogId equals productCatalog.CatalogId
             where subscription.TenantId == tenantId
                   && subscription.ClientId == clientId
                   && subscription.IsActive
@@ -49,14 +45,10 @@ public sealed class CatalogAuthorizationService
     {
         return
             (from subscription in _dbContext.ClientPlanSubscriptions
-             join plan in _dbContext.Plans on new { subscription.TenantId, PlanId = subscription.PlanId }
-                 equals new { plan.TenantId, PlanId = plan.Id }
-             join planCatalog in _dbContext.PlanCatalogs on new { subscription.TenantId, subscription.PlanId }
-                 equals new { planCatalog.TenantId, planCatalog.PlanId }
-             join catalog in _dbContext.Catalogs on new { planCatalog.TenantId, CatalogId = planCatalog.CatalogId }
-                 equals new { catalog.TenantId, CatalogId = catalog.Id }
-             join productCatalog in _dbContext.ProductCatalogs on new { planCatalog.TenantId, planCatalog.CatalogId }
-                 equals new { productCatalog.TenantId, productCatalog.CatalogId }
+             join plan in _dbContext.Plans on subscription.PlanId equals plan.Id
+             join planCatalog in _dbContext.PlanCatalogs on subscription.PlanId equals planCatalog.PlanId
+             join catalog in _dbContext.Catalogs on planCatalog.CatalogId equals catalog.Id
+             join productCatalog in _dbContext.ProductCatalogs on planCatalog.CatalogId equals productCatalog.CatalogId
              where subscription.TenantId == tenantId
                    && subscription.ClientId == clientId
                    && subscription.IsActive

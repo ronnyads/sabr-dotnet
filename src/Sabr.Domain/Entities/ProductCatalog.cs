@@ -3,7 +3,6 @@ namespace Sabr.Domain.Entities;
 public sealed class ProductCatalog
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public string TenantId { get; set; } = string.Empty;
     public Guid CatalogId { get; set; }
     private string _productSku = string.Empty;
     public string ProductSku

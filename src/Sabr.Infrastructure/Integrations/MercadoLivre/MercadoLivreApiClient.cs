@@ -405,6 +405,40 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 payload["description"] = request.Description;
             }
 
+            // Add sale_terms (warranty) if provided
+            if (!string.IsNullOrWhiteSpace(request.WarrantyType) && !string.IsNullOrWhiteSpace(request.WarrantyTime))
+            {
+                payload["sale_terms"] = new[]
+                {
+                    new { id = "WARRANTY_TYPE", value_name = request.WarrantyType },
+                    new { id = "WARRANTY_TIME", value_name = request.WarrantyTime }
+                };
+            }
+
+            // Add shipping configuration
+            if (request.WidthCm.HasValue || request.HeightCm.HasValue || request.LengthCm.HasValue || request.WeightKg.HasValue || request.FreeShipping)
+            {
+                var shipping = new Dictionary<string, object?>
+                {
+                    ["mode"] = "me2",
+                    ["free_shipping"] = request.FreeShipping
+                };
+
+                // Add dimensions if provided
+                if (request.WidthCm.HasValue || request.HeightCm.HasValue || request.LengthCm.HasValue || request.WeightKg.HasValue)
+                {
+                    shipping["dimensions"] = new
+                    {
+                        width = request.WidthCm ?? 0,
+                        height = request.HeightCm ?? 0,
+                        length = request.LengthCm ?? 0,
+                        weight = (int?)((request.WeightKg ?? 0) * 1000)  // convert kg to grams
+                    };
+                }
+
+                payload["shipping"] = shipping;
+            }
+
             // TODO: confirm the exact required item creation payload for each ML category/listing type.
             var rawPayload = JsonSerializer.Serialize(payload);
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/items")
@@ -829,6 +863,14 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             response.EnsureSuccessStatusCode();
             return true;
         }, cancellationToken);
+    }
+
+    public async Task PingAsync(CancellationToken cancellationToken = default)
+    {
+        // /sites/MLB is a public endpoint that requires no authentication.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/sites/MLB");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     private async Task<T> ExecuteWithResilienceAsync<T>(
@@ -1341,5 +1383,21 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }
 
         return false;
+    }
+
+    public async Task RevokeApplicationAsync(long sellerId, string accessToken, CancellationToken cancellationToken = default)
+    {
+        var url = $"{_options.ApiBaseUrl.TrimEnd('/')}/users/{sellerId}/applications/{_options.ClientId}";
+        using var request = new HttpRequestMessage(HttpMethod.Delete, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        // Ignora 404 (já desconectado) e 401 (token já inválido) — não são erros fatais
+        if (!response.IsSuccessStatusCode &&
+            response.StatusCode != HttpStatusCode.NotFound &&
+            response.StatusCode != HttpStatusCode.Unauthorized)
+        {
+            response.EnsureSuccessStatusCode();
+        }
     }
 }

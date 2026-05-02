@@ -1,10 +1,14 @@
 using System.Net.Http.Headers;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.IdentityModel.Tokens;
 using Sabr.Application.Services;
 using Sabr.Domain.Entities;
 using Sabr.Application.Abstractions;
@@ -20,8 +24,27 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        builder.ConfigureAppConfiguration((_, configBuilder) =>
+        {
+            // Injeta a mesma chave usada por TestJwtFactory para que a API valide
+            // tokens de teste sem mismatch de assinatura JWT (→ 401 falso).
+            configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Jwt:Key"]    = TestJwtFactory.TestSigningKey,
+                ["Jwt:Secret"] = TestJwtFactory.TestSigningKey,
+            });
+        });
         builder.ConfigureServices(services =>
         {
+            // Program.cs lê builder.Configuration antes do ConfigureAppConfiguration injetar
+            // o override, portanto sobrescrevemos o IssuerSigningKey diretamente via PostConfigure.
+            services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, opts =>
+            {
+                opts.TokenValidationParameters.IssuerSigningKey =
+                    new SymmetricSecurityKey(
+                        Encoding.UTF8.GetBytes(TestJwtFactory.TestSigningKey));
+            });
+
             var hostedServices = services
                 .Where(descriptor =>
                     descriptor.ServiceType == typeof(IHostedService) &&

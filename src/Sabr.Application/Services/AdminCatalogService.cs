@@ -19,30 +19,24 @@ public sealed class AdminCatalogService
         _dbContext = dbContext;
     }
 
-    public async Task<ServiceResult<PagedResult<AdminCatalogResult>>> ListAsync(
-        string tenantSlug,
+    // ──────────────────────────────────────────────────────────────────────
+    // Global (no tenant) — catalogs are platform-level resources
+    // ──────────────────────────────────────────────────────────────────────
+
+    public async Task<PagedResult<AdminCatalogResult>> ListAsync(
         int skip,
         int limit,
         string? search,
         bool? isActive,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<PagedResult<AdminCatalogResult>>.Failure(tenantResult.Errors);
-        }
-
         var errors = PaginationGuard.ValidateOrError(skip, limit);
         if (errors.Count > 0)
         {
-            return ServiceResult<PagedResult<AdminCatalogResult>>.Failure(errors);
+            throw new InvalidOperationException($"Invalid pagination: {string.Join(", ", errors.Select(e => e.Message))}");
         }
 
-        var tenant = tenantResult.Data;
-        var query = _dbContext.Catalogs
-            .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id);
+        var query = _dbContext.Catalogs.AsNoTracking();
 
         if (isActive.HasValue)
         {
@@ -66,16 +60,17 @@ public sealed class AdminCatalogService
             .ToListAsync(cancellationToken);
 
         var catalogIds = items.Select(item => item.Id).ToList();
+
         var productCounts = await _dbContext.ProductCatalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && catalogIds.Contains(item.CatalogId))
+            .Where(item => catalogIds.Contains(item.CatalogId))
             .GroupBy(item => item.CatalogId)
             .Select(group => new { group.Key, Count = group.Count() })
             .ToDictionaryAsync(item => item.Key, item => item.Count, cancellationToken);
 
         var planCounts = await _dbContext.PlanCatalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && catalogIds.Contains(item.CatalogId))
+            .Where(item => catalogIds.Contains(item.CatalogId))
             .GroupBy(item => item.CatalogId)
             .Select(group => new { group.Key, Count = group.Count() })
             .ToDictionaryAsync(item => item.Key, item => item.Count, cancellationToken);
@@ -87,7 +82,6 @@ public sealed class AdminCatalogService
             return new AdminCatalogResult
             {
                 Id = item.Id,
-                TenantId = tenant.Slug,
                 Name = item.Name,
                 Description = item.Description,
                 IsActive = item.IsActive,
@@ -98,51 +92,144 @@ public sealed class AdminCatalogService
             };
         }).ToList();
 
-        return ServiceResult<PagedResult<AdminCatalogResult>>.Success(new PagedResult<AdminCatalogResult>
+        return new PagedResult<AdminCatalogResult>
         {
             Items = results,
             Total = total,
             Skip = skip,
             Limit = limit
-        });
+        };
     }
 
+    // Keep for backward compatibility — tenant-scoped now returns global list
+    public async Task<ServiceResult<PagedResult<AdminCatalogResult>>> ListAsync(
+        string tenantSlug,
+        int skip,
+        int limit,
+        string? search,
+        bool? isActive,
+        CancellationToken cancellationToken = default)
+    {
+        var errors = PaginationGuard.ValidateOrError(skip, limit);
+        if (errors.Count > 0)
+        {
+            return ServiceResult<PagedResult<AdminCatalogResult>>.Failure(errors);
+        }
+
+        var result = await ListAsync(skip, limit, search, isActive, cancellationToken);
+        return ServiceResult<PagedResult<AdminCatalogResult>>.Success(result);
+    }
+
+    /// <summary>
+    /// Lista catálogos da plataforma (view global para SuperAdmin).
+    /// </summary>
+    public async Task<PagedResult<AdminCatalogGlobalResult>> ListGlobalAsync(
+        int skip,
+        int limit,
+        string? search,
+        bool? isActive,
+        CancellationToken cancellationToken = default)
+    {
+        var errors = PaginationGuard.ValidateOrError(skip, limit);
+        if (errors.Count > 0)
+        {
+            throw new InvalidOperationException($"Invalid pagination: {string.Join(", ", errors.Select(e => e.Message))}");
+        }
+
+        var query = _dbContext.Catalogs.AsNoTracking();
+
+        if (isActive.HasValue)
+        {
+            query = query.Where(x => x.IsActive == isActive.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToUpperInvariant();
+            query = query.Where(x =>
+                x.Name.ToUpper().Contains(term) ||
+                (x.Description != null && x.Description.ToUpper().Contains(term)));
+        }
+
+        var total = await query.CountAsync(cancellationToken);
+        var items = await query
+            .OrderByDescending(x => x.UpdatedAt)
+            .ThenBy(x => x.Name)
+            .Skip(skip)
+            .Take(limit)
+            .ToListAsync(cancellationToken);
+
+        var catalogIds = items.Select(x => x.Id).ToList();
+
+        var productCounts = await _dbContext.ProductCatalogs
+            .AsNoTracking()
+            .Where(item => catalogIds.Contains(item.CatalogId))
+            .GroupBy(item => item.CatalogId)
+            .Select(group => new { group.Key, Count = group.Count() })
+            .ToDictionaryAsync(item => item.Key, item => item.Count, cancellationToken);
+
+        var planCounts = await _dbContext.PlanCatalogs
+            .AsNoTracking()
+            .Where(item => catalogIds.Contains(item.CatalogId))
+            .GroupBy(item => item.CatalogId)
+            .Select(group => new { group.Key, Count = group.Count() })
+            .ToDictionaryAsync(item => item.Key, item => item.Count, cancellationToken);
+
+        var results = items.Select(x =>
+        {
+            productCounts.TryGetValue(x.Id, out var productCount);
+            planCounts.TryGetValue(x.Id, out var planCount);
+            return new AdminCatalogGlobalResult
+            {
+                Id = x.Id,
+                Name = x.Name,
+                Description = x.Description,
+                IsActive = x.IsActive,
+                ProductCount = productCount,
+                PlanCount = planCount,
+                UpdatedAt = x.UpdatedAt
+            };
+        }).ToList();
+
+        return new PagedResult<AdminCatalogGlobalResult>
+        {
+            Items = results,
+            Total = total,
+            Skip = skip,
+            Limit = limit
+        };
+    }
+
+    public async Task<ServiceResult<AdminCatalogDetailResult>> GetByIdAsync(
+        Guid catalogId,
+        CancellationToken cancellationToken = default)
+    {
+        return await GetByIdInternalAsync(catalogId, cancellationToken);
+    }
+
+    // Backward compat overload (tenant param ignored)
     public async Task<ServiceResult<AdminCatalogDetailResult>> GetByIdAsync(
         string tenantSlug,
         Guid catalogId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminCatalogDetailResult>.Failure(tenantResult.Errors);
-        }
-
-        return await GetByIdInternalAsync(tenantResult.Data, catalogId, cancellationToken);
+        return await GetByIdInternalAsync(catalogId, cancellationToken);
     }
 
     public async Task<ServiceResult<AdminCatalogDetailResult>> CreateAsync(
-        string tenantSlug,
         AdminCatalogUpsertRequest request,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminCatalogDetailResult>.Failure(tenantResult.Errors);
-        }
-
         var errors = ValidateCatalogRequest(request, actorUserId);
         if (errors.Count > 0)
         {
             return ServiceResult<AdminCatalogDetailResult>.Failure(errors);
         }
 
-        var tenant = tenantResult.Data;
         var normalizedName = request.Name.Trim();
         var duplicateName = await _dbContext.Catalogs.AnyAsync(
-            item => item.TenantId == tenant.Id && item.Name == normalizedName,
+            item => item.Name == normalizedName,
             cancellationToken);
 
         if (duplicateName)
@@ -155,7 +242,6 @@ public sealed class AdminCatalogService
 
         var catalog = new Catalog
         {
-            TenantId = tenant.Id,
             Name = normalizedName,
             Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
             IsActive = request.IsActive,
@@ -165,7 +251,7 @@ public sealed class AdminCatalogService
 
         _dbContext.Catalogs.Add(catalog);
         AddAuditEvent(
-            tenant.Id,
+            string.Empty,
             actorUserId,
             "AdminCatalogs.Create",
             nameof(Catalog),
@@ -173,31 +259,33 @@ public sealed class AdminCatalogService
             new { catalog.Name, catalog.IsActive });
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return await GetByIdInternalAsync(tenant, catalog.Id, cancellationToken);
+        return await GetByIdInternalAsync(catalog.Id, cancellationToken);
+    }
+
+    // Backward compat overload (tenantSlug param used only for audit)
+    public async Task<ServiceResult<AdminCatalogDetailResult>> CreateAsync(
+        string tenantSlug,
+        AdminCatalogUpsertRequest request,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return await CreateAsync(request, actorUserId, cancellationToken);
     }
 
     public async Task<ServiceResult<AdminCatalogDetailResult>> UpdateAsync(
-        string tenantSlug,
         Guid catalogId,
         AdminCatalogUpsertRequest request,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminCatalogDetailResult>.Failure(tenantResult.Errors);
-        }
-
         var errors = ValidateCatalogRequest(request, actorUserId);
         if (errors.Count > 0)
         {
             return ServiceResult<AdminCatalogDetailResult>.Failure(errors);
         }
 
-        var tenant = tenantResult.Data;
         var catalog = await _dbContext.Catalogs.FirstOrDefaultAsync(
-            item => item.TenantId == tenant.Id && item.Id == catalogId,
+            item => item.Id == catalogId,
             cancellationToken);
 
         if (catalog == null)
@@ -210,7 +298,7 @@ public sealed class AdminCatalogService
 
         var normalizedName = request.Name.Trim();
         var duplicateName = await _dbContext.Catalogs.AnyAsync(
-            item => item.TenantId == tenant.Id && item.Id != catalogId && item.Name == normalizedName,
+            item => item.Id != catalogId && item.Name == normalizedName,
             cancellationToken);
 
         if (duplicateName)
@@ -227,7 +315,7 @@ public sealed class AdminCatalogService
         catalog.UpdatedAt = DateTimeOffset.UtcNow;
 
         AddAuditEvent(
-            tenant.Id,
+            string.Empty,
             actorUserId,
             "AdminCatalogs.Update",
             nameof(Catalog),
@@ -235,21 +323,25 @@ public sealed class AdminCatalogService
             new { catalog.Name, catalog.IsActive });
 
         await _dbContext.SaveChangesAsync(cancellationToken);
-        return await GetByIdInternalAsync(tenant, catalog.Id, cancellationToken);
+        return await GetByIdInternalAsync(catalog.Id, cancellationToken);
+    }
+
+    // Backward compat overload (tenantSlug param ignored)
+    public async Task<ServiceResult<AdminCatalogDetailResult>> UpdateAsync(
+        string tenantSlug,
+        Guid catalogId,
+        AdminCatalogUpsertRequest request,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return await UpdateAsync(catalogId, request, actorUserId, cancellationToken);
     }
 
     public async Task<ServiceResult<bool>> DeactivateAsync(
-        string tenantSlug,
         Guid catalogId,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<bool>.Failure(tenantResult.Errors);
-        }
-
         if (actorUserId == Guid.Empty)
         {
             return ServiceResult<bool>.Failure(new[]
@@ -258,9 +350,8 @@ public sealed class AdminCatalogService
             });
         }
 
-        var tenant = tenantResult.Data;
         var catalog = await _dbContext.Catalogs.FirstOrDefaultAsync(
-            item => item.TenantId == tenant.Id && item.Id == catalogId,
+            item => item.Id == catalogId,
             cancellationToken);
 
         if (catalog == null || !catalog.IsActive)
@@ -271,7 +362,7 @@ public sealed class AdminCatalogService
         catalog.IsActive = false;
         catalog.UpdatedAt = DateTimeOffset.UtcNow;
         AddAuditEvent(
-            tenant.Id,
+            string.Empty,
             actorUserId,
             "AdminCatalogs.Deactivate",
             nameof(Catalog),
@@ -282,19 +373,22 @@ public sealed class AdminCatalogService
         return ServiceResult<bool>.Success(true);
     }
 
-    public async Task<ServiceResult<AdminCatalogDetailResult>> ReplaceProductsAsync(
+    // Backward compat overload (tenantSlug param ignored)
+    public async Task<ServiceResult<bool>> DeactivateAsync(
         string tenantSlug,
+        Guid catalogId,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return await DeactivateAsync(catalogId, actorUserId, cancellationToken);
+    }
+
+    public async Task<ServiceResult<AdminCatalogDetailResult>> ReplaceProductsAsync(
         Guid catalogId,
         CatalogReplaceProductsRequest request,
         Guid actorUserId,
         CancellationToken cancellationToken = default)
     {
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            return ServiceResult<AdminCatalogDetailResult>.Failure(tenantResult.Errors);
-        }
-
         if (actorUserId == Guid.Empty)
         {
             return ServiceResult<AdminCatalogDetailResult>.Failure(new[]
@@ -303,10 +397,9 @@ public sealed class AdminCatalogService
             });
         }
 
-        var tenant = tenantResult.Data;
         var catalog = await _dbContext.Catalogs
             .AsNoTracking()
-            .FirstOrDefaultAsync(item => item.TenantId == tenant.Id && item.Id == catalogId, cancellationToken);
+            .FirstOrDefaultAsync(item => item.Id == catalogId, cancellationToken);
 
         if (catalog == null)
         {
@@ -368,7 +461,7 @@ public sealed class AdminCatalogService
         await using var transaction = await BeginTransactionIfSupportedAsync(efDbContext, cancellationToken);
 
         var currentRelations = await _dbContext.ProductCatalogs
-            .Where(item => item.TenantId == tenant.Id && item.CatalogId == catalogId)
+            .Where(item => item.CatalogId == catalogId)
             .ToListAsync(cancellationToken);
 
         var currentSkuSet = currentRelations.Select(item => item.ProductSku).ToHashSet(StringComparer.Ordinal);
@@ -391,7 +484,6 @@ public sealed class AdminCatalogService
         {
             _dbContext.ProductCatalogs.AddRange(toAdd.Select(item => new ProductCatalog
             {
-                TenantId = tenant.Id,
                 CatalogId = catalogId,
                 ProductSku = item,
                 CreatedAt = DateTimeOffset.UtcNow
@@ -399,7 +491,7 @@ public sealed class AdminCatalogService
         }
 
         AddAuditEvent(
-            tenant.Id,
+            string.Empty,
             actorUserId,
             "AdminCatalogs.ReplaceProducts",
             nameof(Catalog),
@@ -416,7 +508,18 @@ public sealed class AdminCatalogService
             await transaction.CommitAsync(cancellationToken);
         }
 
-        return await GetByIdInternalAsync(tenant, catalogId, cancellationToken);
+        return await GetByIdInternalAsync(catalogId, cancellationToken);
+    }
+
+    // Backward compat overload (tenantSlug param ignored)
+    public async Task<ServiceResult<AdminCatalogDetailResult>> ReplaceProductsAsync(
+        string tenantSlug,
+        Guid catalogId,
+        CatalogReplaceProductsRequest request,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return await ReplaceProductsAsync(catalogId, request, actorUserId, cancellationToken);
     }
 
     public async Task<ServiceResult<AdminCatalogDetailResult>> ReplacePlansAsync(
@@ -443,7 +546,7 @@ public sealed class AdminCatalogService
         var tenant = tenantResult.Data;
         var catalog = await _dbContext.Catalogs
             .AsNoTracking()
-            .FirstOrDefaultAsync(item => item.TenantId == tenant.Id && item.Id == catalogId, cancellationToken);
+            .FirstOrDefaultAsync(item => item.Id == catalogId, cancellationToken);
 
         if (catalog == null)
         {
@@ -461,7 +564,7 @@ public sealed class AdminCatalogService
 
         var validPlanIds = await _dbContext.Plans
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && desiredPlanIds.Contains(item.Id) && item.IsActive)
+            .Where(item => desiredPlanIds.Contains(item.Id) && item.IsActive)
             .Select(item => item.Id)
             .ToListAsync(cancellationToken);
 
@@ -483,7 +586,7 @@ public sealed class AdminCatalogService
         await using var transaction = await BeginTransactionIfSupportedAsync(efDbContext, cancellationToken);
 
         var currentRelations = await _dbContext.PlanCatalogs
-            .Where(item => item.TenantId == tenant.Id && item.CatalogId == catalogId)
+            .Where(item => item.CatalogId == catalogId)
             .ToListAsync(cancellationToken);
 
         var currentSet = currentRelations.Select(item => item.PlanId).ToHashSet();
@@ -506,7 +609,6 @@ public sealed class AdminCatalogService
         {
             _dbContext.PlanCatalogs.AddRange(toAdd.Select(item => new PlanCatalog
             {
-                TenantId = tenant.Id,
                 CatalogId = catalogId,
                 PlanId = item,
                 CreatedAt = DateTimeOffset.UtcNow
@@ -531,17 +633,16 @@ public sealed class AdminCatalogService
             await transaction.CommitAsync(cancellationToken);
         }
 
-        return await GetByIdInternalAsync(tenant, catalogId, cancellationToken);
+        return await GetByIdInternalAsync(catalogId, cancellationToken);
     }
 
     private async Task<ServiceResult<AdminCatalogDetailResult>> GetByIdInternalAsync(
-        Tenant tenant,
         Guid catalogId,
         CancellationToken cancellationToken)
     {
         var catalog = await _dbContext.Catalogs
             .AsNoTracking()
-            .FirstOrDefaultAsync(item => item.TenantId == tenant.Id && item.Id == catalogId, cancellationToken);
+            .FirstOrDefaultAsync(item => item.Id == catalogId, cancellationToken);
 
         if (catalog == null)
         {
@@ -553,14 +654,14 @@ public sealed class AdminCatalogService
 
         var productSkus = await _dbContext.ProductCatalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && item.CatalogId == catalog.Id)
+            .Where(item => item.CatalogId == catalog.Id)
             .OrderBy(item => item.ProductSku)
             .Select(item => item.ProductSku)
             .ToListAsync(cancellationToken);
 
         var planIds = await _dbContext.PlanCatalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && item.CatalogId == catalog.Id)
+            .Where(item => item.CatalogId == catalog.Id)
             .OrderBy(item => item.PlanId)
             .Select(item => item.PlanId)
             .ToListAsync(cancellationToken);
@@ -568,7 +669,6 @@ public sealed class AdminCatalogService
         return ServiceResult<AdminCatalogDetailResult>.Success(new AdminCatalogDetailResult
         {
             Id = catalog.Id,
-            TenantId = tenant.Slug,
             Name = catalog.Name,
             Description = catalog.Description,
             IsActive = catalog.IsActive,

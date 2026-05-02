@@ -40,6 +40,7 @@ public interface IAppDbContext
     DbSet<StockReservation> StockReservations { get; }
     DbSet<MarketplaceEventLog> MarketplaceEventLogs { get; }
     DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules { get; }
+    DbSet<AiPromptConfig> AiPromptConfigs { get; }
     Task<long> NextClientProtheusCodeAsync(CancellationToken cancellationToken = default);
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

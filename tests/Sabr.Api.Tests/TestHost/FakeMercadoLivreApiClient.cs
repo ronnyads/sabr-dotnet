@@ -313,6 +313,12 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         return Task.CompletedTask;
     }
 
+    public Task PingAsync(CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task RevokeApplicationAsync(long sellerId, string accessToken, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
     public void Reset()
     {
         ExchangeCodeException = null;

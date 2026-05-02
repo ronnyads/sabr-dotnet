@@ -144,15 +144,6 @@ public sealed class ProductAdminService
         var product = await _dbContext.Products.FirstOrDefaultAsync(p => p.Sku == normalizedSku, cancellationToken);
         if (product == null)
         {
-            if (request.IsActive)
-            {
-                var activationErrors = await ValidateActivationAsync(normalizedSku, request.TenantSlug, cancellationToken);
-                if (activationErrors.Count > 0)
-                {
-                    return ServiceResult<ProductPricingUpdateResult>.Failure(activationErrors);
-                }
-            }
-
             product = new Product
             {
                 Sku = normalizedSku,
@@ -192,15 +183,6 @@ public sealed class ProductAdminService
             }
 
             return ServiceResult<ProductPricingUpdateResult>.Success(MapToPricingResult(product));
-        }
-
-        if (!product.IsActive && request.IsActive)
-        {
-            var activationErrors = await ValidateActivationAsync(normalizedSku, request.TenantSlug, cancellationToken);
-            if (activationErrors.Count > 0)
-            {
-                return ServiceResult<ProductPricingUpdateResult>.Failure(activationErrors);
-            }
         }
 
         var oldCost = product.CostPriceCents;
@@ -336,15 +318,6 @@ public sealed class ProductAdminService
         if (errors.Count > 0)
         {
             return ServiceResult<AdminProductResult>.Failure(errors);
-        }
-
-        if (!product.IsActive && candidate.IsActive)
-        {
-            var activationErrors = await ValidateActivationAsync(product.Sku, request.TenantSlug, cancellationToken);
-            if (activationErrors.Count > 0)
-            {
-                return ServiceResult<AdminProductResult>.Failure(activationErrors);
-            }
         }
 
         var oldCost = product.CostPriceCents;
@@ -507,6 +480,129 @@ public sealed class ProductAdminService
         return ServiceResult<bool>.Success(true);
     }
 
+    public async Task<ServiceResult<IReadOnlyCollection<Guid>>> GetLinkedCatalogIdsGlobalAsync(
+        string sku,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Sku.TryParse(sku, out var parsedSku))
+        {
+            return ServiceResult<IReadOnlyCollection<Guid>>.Failure(new[]
+            {
+                new ValidationError("sku", "SKU format is invalid")
+            });
+        }
+
+        var ids = await _dbContext.ProductCatalogs
+            .AsNoTracking()
+            .Where(item => item.ProductSku == parsedSku.Value)
+            .Select(item => item.CatalogId)
+            .Distinct()
+            .OrderBy(item => item)
+            .ToListAsync(cancellationToken);
+
+        return ServiceResult<IReadOnlyCollection<Guid>>.Success(ids);
+    }
+
+    public async Task<ServiceResult<AdminProductResult>> ReplaceCatalogsGlobalAsync(
+        string sku,
+        ProductReplaceCatalogsRequest request,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (actorUserId == Guid.Empty)
+        {
+            return ServiceResult<AdminProductResult>.Failure(new[]
+            {
+                new ValidationError("actor", "Actor user is required")
+            });
+        }
+
+        if (!Sku.TryParse(sku, out var parsedSku))
+        {
+            return ServiceResult<AdminProductResult>.Failure(new[]
+            {
+                new ValidationError("sku", "SKU format is invalid")
+            });
+        }
+
+        var product = await _dbContext.Products.FirstOrDefaultAsync(item => item.Sku == parsedSku.Value, cancellationToken);
+        if (product == null)
+        {
+            return ServiceResult<AdminProductResult>.Failure(new[]
+            {
+                new ValidationError("sku", "Product not found")
+            });
+        }
+
+        request ??= new ProductReplaceCatalogsRequest();
+        var desiredCatalogIds = (request.CatalogIds ?? new List<Guid>())
+            .Where(item => item != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        if (product.IsActive && desiredCatalogIds.Count == 0)
+        {
+            return ServiceResult<AdminProductResult>.Failure(new[]
+            {
+                new ValidationError("catalogLinks", "Active product must be linked to at least one catalog")
+            });
+        }
+
+        var validCatalogIds = await _dbContext.Catalogs
+            .AsNoTracking()
+            .Where(item => desiredCatalogIds.Contains(item.Id) && item.IsActive)
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken);
+
+        var invalidCatalogIds = desiredCatalogIds.Except(validCatalogIds).ToList();
+        if (invalidCatalogIds.Count > 0)
+        {
+            var invalidErrors = invalidCatalogIds
+                .Select(item => new ValidationError("invalidCatalogIds", item.ToString()))
+                .ToList();
+            invalidErrors.Add(new ValidationError("catalogIds", "One or more catalog ids are invalid or inactive"));
+            return ServiceResult<AdminProductResult>.Failure(invalidErrors);
+        }
+
+        var efDbContext = (DbContext)_dbContext;
+        await using var transaction = await BeginTransactionIfSupportedAsync(efDbContext, cancellationToken);
+
+        var currentLinks = await _dbContext.ProductCatalogs
+            .Where(item => item.ProductSku == parsedSku.Value)
+            .ToListAsync(cancellationToken);
+
+        var currentSet = currentLinks.Select(item => item.CatalogId).ToHashSet();
+        var desiredSet = desiredCatalogIds.ToHashSet();
+
+        var toRemove = currentLinks.Where(item => !desiredSet.Contains(item.CatalogId)).ToList();
+        var toAdd = desiredCatalogIds.Where(item => !currentSet.Contains(item)).ToList();
+
+        if (toRemove.Count > 0)
+            _dbContext.ProductCatalogs.RemoveRange(toRemove);
+
+        if (toAdd.Count > 0)
+        {
+            _dbContext.ProductCatalogs.AddRange(toAdd.Select(item => new ProductCatalog
+            {
+                CatalogId = item,
+                ProductSku = parsedSku.Value,
+                CreatedAt = DateTimeOffset.UtcNow
+            }));
+        }
+
+        AddAuditEvent("AdminProducts.ReplaceCatalogs", actorUserId, string.Empty, parsedSku.Value, new
+        {
+            Added = toAdd.Count,
+            Removed = toRemove.Count
+        });
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        if (transaction != null)
+            await transaction.CommitAsync(cancellationToken);
+
+        return await GetBySkuAsync(parsedSku.Value, cancellationToken);
+    }
+
     public async Task<ServiceResult<IReadOnlyCollection<Guid>>> GetLinkedCatalogIdsAsync(
         string tenantSlug,
         string sku,
@@ -528,7 +624,7 @@ public sealed class ProductAdminService
 
         var ids = await _dbContext.ProductCatalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenantResult.Data.Id && item.ProductSku == parsedSku.Value)
+            .Where(item => item.ProductSku == parsedSku.Value)
             .Select(item => item.CatalogId)
             .Distinct()
             .OrderBy(item => item)
@@ -592,7 +688,7 @@ public sealed class ProductAdminService
 
         var validCatalogIds = await _dbContext.Catalogs
             .AsNoTracking()
-            .Where(item => item.TenantId == tenant.Id && desiredCatalogIds.Contains(item.Id) && item.IsActive)
+            .Where(item => desiredCatalogIds.Contains(item.Id) && item.IsActive)
             .Select(item => item.Id)
             .ToListAsync(cancellationToken);
 
@@ -613,7 +709,7 @@ public sealed class ProductAdminService
         await using var transaction = await BeginTransactionIfSupportedAsync(efDbContext, cancellationToken);
 
         var currentLinks = await _dbContext.ProductCatalogs
-            .Where(item => item.TenantId == tenant.Id && item.ProductSku == parsedSku.Value)
+            .Where(item => item.ProductSku == parsedSku.Value)
             .ToListAsync(cancellationToken);
 
         var currentSet = currentLinks.Select(item => item.CatalogId).ToHashSet();
@@ -631,7 +727,6 @@ public sealed class ProductAdminService
         {
             _dbContext.ProductCatalogs.AddRange(toAdd.Select(item => new ProductCatalog
             {
-                TenantId = tenant.Id,
                 CatalogId = item,
                 ProductSku = parsedSku.Value,
                 CreatedAt = DateTimeOffset.UtcNow
@@ -1041,26 +1136,13 @@ public sealed class ProductAdminService
 
     private async Task<List<ValidationError>> ValidateActivationAsync(
         string sku,
-        string? tenantSlug,
         CancellationToken cancellationToken)
     {
         var errors = new List<ValidationError>();
-        if (string.IsNullOrWhiteSpace(tenantSlug))
-        {
-            errors.Add(new ValidationError("tenantId", "Tenant slug is required when activating a product"));
-            return errors;
-        }
-
-        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
-        if (!tenantResult.Succeeded || tenantResult.Data == null)
-        {
-            errors.AddRange(tenantResult.Errors);
-            return errors;
-        }
 
         var hasCatalogLink = await _dbContext.ProductCatalogs
             .AsNoTracking()
-            .AnyAsync(item => item.TenantId == tenantResult.Data.Id && item.ProductSku == sku, cancellationToken);
+            .AnyAsync(item => item.ProductSku == sku, cancellationToken);
 
         if (!hasCatalogLink)
         {

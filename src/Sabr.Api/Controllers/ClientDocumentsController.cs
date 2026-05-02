@@ -140,14 +140,17 @@ public sealed class ClientDocumentsController : ControllerBase
             return NotFound(new { error = "Document file not found" });
         }
 
+        // Extrai o path relativo independente de como foi salvo (URL absoluta ou path relativo)
+        string normalizedRelativePath;
         if (Uri.TryCreate(document.FileUrl, UriKind.Absolute, out var absoluteFileUrl))
         {
-            return Redirect(absoluteFileUrl.ToString());
+            // Usa apenas o path da URL (descarta host/scheme)
+            normalizedRelativePath = absoluteFileUrl.AbsolutePath.TrimStart('/');
         }
-
-        var normalizedRelativePath = document.FileUrl
-            .Replace('\\', '/')
-            .TrimStart('/');
+        else
+        {
+            normalizedRelativePath = document.FileUrl.Replace('\\', '/').TrimStart('/');
+        }
 
         if (string.IsNullOrWhiteSpace(normalizedRelativePath))
         {

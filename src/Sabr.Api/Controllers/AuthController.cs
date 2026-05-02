@@ -50,10 +50,7 @@ public sealed class AuthController : ControllerBase
     public async Task<IActionResult> Login([FromBody] AuthLoginRequest request, CancellationToken cancellationToken)
     {
         var tenantId = _tenantProvider.TenantId;
-        if (string.IsNullOrWhiteSpace(tenantId))
-        {
-            return BadRequest(new { error = "Tenant not resolved" });
-        }
+        var isPlatform = _tenantProvider.IsPlatform;
 
         var email = request.Email?.Trim().ToLowerInvariant() ?? string.Empty;
         var ip = GetClientIp() ?? "unknown";
@@ -68,14 +65,49 @@ public sealed class AuthController : ControllerBase
             });
         }
 
-        var result = await _authService.LoginAsync(tenantId, request, cancellationToken);
+        var result = isPlatform
+            ? await _authService.LoginPlatformAsync(request, cancellationToken)
+            : string.IsNullOrWhiteSpace(tenantId)
+                ? await _authService.LoginAutoTenantAsync(request, cancellationToken)
+                : await _authService.LoginAsync(tenantId, request, cancellationToken);
         if (!result.Succeeded || result.Data == null)
         {
             _loginAttemptService.RegisterFailure("tenant", email, ip);
+
+            if (result.Errors.Any(error =>
+                    string.Equals(error.Field, "code", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(error.Message, AuthService.TenantAmbiguousCode, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Conflict(new ApiError
+                {
+                    Code = AuthService.TenantAmbiguousCode,
+                    Message = "Nao foi possivel identificar sua empresa automaticamente. Contate o suporte.",
+                    TraceId = HttpContext.TraceIdentifier
+                });
+            }
+
             return Unauthorized(new { errors = result.Errors });
         }
 
         _loginAttemptService.RegisterSuccess("tenant", email, ip);
+
+        if (string.IsNullOrWhiteSpace(result.Data.TenantSlug))
+        {
+            result.Data.TenantSlug = _tenantProvider.TenantSlug;
+        }
+
+        var resolvedTenantId = result.Data.TenantId;
+        if (string.IsNullOrWhiteSpace(resolvedTenantId))
+        {
+            _loginAttemptService.RegisterFailure("tenant", email, ip);
+            return Unauthorized(new
+            {
+                errors = new[]
+                {
+                    new { field = "credentials", message = "Invalid credentials" }
+                }
+            });
+        }
 
         var accountType = result.Data.AccountType;
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(_jwtOptions.AccessTokenMinutes);
@@ -84,14 +116,14 @@ public sealed class AuthController : ControllerBase
         var refreshToken = string.Equals(accountType, AccountTypes.Client, StringComparison.OrdinalIgnoreCase)
             ? await _authService.IssueClientRefreshTokenAsync(
                 result.Data.Id,
-                tenantId,
+                resolvedTenantId,
                 _refreshOptions.Days,
                 GetClientIp(),
                 Request.Headers.UserAgent.ToString(),
                 cancellationToken)
             : await _authService.IssueRefreshTokenAsync(
                 result.Data.Id,
-                tenantId,
+                resolvedTenantId,
                 _refreshOptions.Days,
                 GetClientIp(),
                 Request.Headers.UserAgent.ToString(),
@@ -104,7 +136,8 @@ public sealed class AuthController : ControllerBase
             AccessToken = token,
             ExpiresAt = expiresAt,
             AccountType = accountType,
-            User = result.Data
+            User = result.Data,
+            RefreshToken = refreshToken
         });
     }
 
@@ -113,22 +146,30 @@ public sealed class AuthController : ControllerBase
     public IActionResult Csrf()
     {
         var token = GenerateCsrfToken();
+        var isPlatform = _tenantProvider.IsPlatform;
+        var cookieName = isPlatform ? CsrfMiddleware.AdminCookieName : CsrfMiddleware.TenantCookieName;
+        var headerName = isPlatform ? CsrfMiddleware.AdminHeaderName : CsrfMiddleware.TenantHeaderName;
         var options = new CookieOptions
         {
             HttpOnly = false,
             Secure = _refreshOptions.RequireHttps,
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.None,
             Expires = DateTimeOffset.UtcNow.AddDays(_refreshOptions.Days),
             Path = "/"
         };
 
-        Response.Cookies.Append(CsrfMiddleware.TenantCookieName, token, options);
-        return Ok(new { token });
+        if (!string.IsNullOrWhiteSpace(_refreshOptions.CookieDomain))
+        {
+            options.Domain = _refreshOptions.CookieDomain.Trim();
+        }
+
+        Response.Cookies.Append(cookieName, token, options);
+        return Ok(new { token, header = headerName });
     }
 
     [AllowAnonymous]
     [HttpPost("refresh")]
-    public async Task<IActionResult> Refresh(CancellationToken cancellationToken)
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest? request, CancellationToken cancellationToken)
     {
         var tenantId = _tenantProvider.TenantId;
         if (string.IsNullOrWhiteSpace(tenantId))
@@ -136,7 +177,10 @@ public sealed class AuthController : ControllerBase
             return BadRequest(new { error = "Tenant not resolved" });
         }
 
-        var refreshToken = Request.Cookies[_refreshOptions.CookieName];
+        var refreshToken =
+            Request.Cookies[_refreshOptions.CookieName] ??
+            request?.RefreshToken ??
+            Request.Headers["X-Refresh-Token"].FirstOrDefault();
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             return Unauthorized(new { error = "Refresh token missing" });
@@ -244,7 +288,7 @@ public sealed class AuthController : ControllerBase
         {
             HttpOnly = true,
             Secure = _refreshOptions.RequireHttps,
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.None,
             Expires = DateTimeOffset.UtcNow.AddDays(_refreshOptions.Days),
             // Keep tenant auth refresh cookie scoped to tenant auth routes to avoid collisions (esp. in dev).
             Path = "/api/v1/auth"
@@ -271,7 +315,7 @@ public sealed class AuthController : ControllerBase
         {
             HttpOnly = true,
             Secure = _refreshOptions.RequireHttps,
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.None,
             Expires = DateTimeOffset.UtcNow.AddDays(-1),
             Path = "/api/v1/auth"
         };

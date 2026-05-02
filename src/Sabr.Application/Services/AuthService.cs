@@ -16,6 +16,7 @@ public sealed class AuthService
 {
     private const int MinPasswordLength = 8;
     private const string PlatformTenantId = "platform";
+    public const string TenantAmbiguousCode = "TENANT_AMBIGUOUS";
     private static readonly HashSet<string> AllowedSectorCodes = new(StringComparer.OrdinalIgnoreCase)
     {
         ProtheusPrefixes.InternalUserRh,
@@ -59,16 +60,15 @@ public sealed class AuthService
         {
             if (!user.IsActive || !PasswordHasher.VerifyPassword(request.Password, user.PasswordHash))
             {
-                return ServiceResult<AuthUserResult>.Failure(new[]
-                {
-                    new ValidationError("credentials", "Invalid credentials")
-                });
+                return InvalidCredentialsFailure();
             }
 
             user.LastLoginAt = DateTimeOffset.UtcNow;
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            return ServiceResult<AuthUserResult>.Success(MapAdminResult(user));
+            var mappedUser = MapAdminResult(user);
+            mappedUser.TenantSlug = await ResolveTenantSlugAsync(user.TenantId, cancellationToken);
+            return ServiceResult<AuthUserResult>.Success(mappedUser);
         }
 
         var client = await _dbContext.Clients
@@ -76,24 +76,20 @@ public sealed class AuthService
 
         if (client == null || client.Status == ClientStatus.Inactive)
         {
-            return ServiceResult<AuthUserResult>.Failure(new[]
-            {
-                new ValidationError("credentials", "Invalid credentials")
-            });
+            return InvalidCredentialsFailure();
         }
 
         if (!PasswordHasher.VerifyPassword(request.Password, client.PasswordHash))
         {
-            return ServiceResult<AuthUserResult>.Failure(new[]
-            {
-                new ValidationError("credentials", "Invalid credentials")
-            });
+            return InvalidCredentialsFailure();
         }
 
         client.LastLoginAt = DateTimeOffset.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return ServiceResult<AuthUserResult>.Success(MapClientResult(client));
+        var mappedClient = MapClientResult(client);
+        mappedClient.TenantSlug = await ResolveTenantSlugAsync(client.TenantId, cancellationToken);
+        return ServiceResult<AuthUserResult>.Success(mappedClient);
     }
 
     public async Task<ServiceResult<AuthUserResult>> LoginPlatformAsync(
@@ -108,25 +104,97 @@ public sealed class AuthService
 
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
         var user = await _dbContext.PlatformUsers
-            .FirstOrDefaultAsync(u =>
-                u.EmailNormalized == normalizedEmail,
-                cancellationToken);
+            .FirstOrDefaultAsync(u => u.Email == normalizedEmail && u.IsActive, cancellationToken);
 
-        if (user == null || !user.IsActive || !PasswordHasher.VerifyPassword(request.Password, user.PasswordHash))
+        if (user == null || !PasswordHasher.VerifyPassword(request.Password, user.PasswordHash))
+        {
+            return InvalidCredentialsFailure();
+        }
+
+        var mapped = MapPlatformResult(user);
+        mapped.TenantId = PlatformTenantId;
+        mapped.TenantSlug = null;
+        mapped.Scope = "platform";
+        user.LastLoginAt = DateTimeOffset.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return ServiceResult<AuthUserResult>.Success(mapped);
+    }
+
+    public async Task<ServiceResult<AuthUserResult>> LoginAutoTenantAsync(
+        AuthLoginRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var errors = ValidateLoginRequest(request);
+        if (errors.Count > 0)
+        {
+            return ServiceResult<AuthUserResult>.Failure(errors);
+        }
+
+        var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+
+        var adminCandidates = await (
+            from user in _dbContext.Users
+            join tenant in _dbContext.Tenants on user.TenantId equals tenant.Id
+            where user.Email == normalizedEmail &&
+                  user.IsActive &&
+                  tenant.Status == TenantStatus.Active
+            select new AdminLoginCandidate(user, tenant.Slug)
+        ).ToListAsync(cancellationToken);
+
+        var clientCandidates = await (
+            from client in _dbContext.Clients
+            join tenant in _dbContext.Tenants on client.TenantId equals tenant.Id
+            where client.Email == normalizedEmail &&
+                  client.Status != ClientStatus.Inactive &&
+                  tenant.Status == TenantStatus.Active
+            select new ClientLoginCandidate(client, tenant.Slug)
+        ).ToListAsync(cancellationToken);
+
+        var validAdminCandidates = adminCandidates
+            .Where(candidate => PasswordHasher.VerifyPassword(request.Password, candidate.User.PasswordHash))
+            .ToList();
+        var validClientCandidates = clientCandidates
+            .Where(candidate => PasswordHasher.VerifyPassword(request.Password, candidate.Client.PasswordHash))
+            .ToList();
+
+        if (validAdminCandidates.Count == 0 && validClientCandidates.Count == 0)
+        {
+            return InvalidCredentialsFailure();
+        }
+
+        var matchedTenantIds = validAdminCandidates
+            .Select(candidate => candidate.User.TenantId)
+            .Concat(validClientCandidates.Select(candidate => candidate.Client.TenantId))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (matchedTenantIds.Count > 1)
         {
             return ServiceResult<AuthUserResult>.Failure(new[]
             {
-                new ValidationError("credentials", "Invalid credentials")
+                new ValidationError("code", TenantAmbiguousCode),
+                new ValidationError("credentials", "Multiple tenant matches")
             });
         }
 
-        user.LastLoginAt = DateTimeOffset.UtcNow;
+        if (validAdminCandidates.Count > 0)
+        {
+            var selected = validAdminCandidates[0];
+            selected.User.LastLoginAt = DateTimeOffset.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            var mappedAdmin = MapAdminResult(selected.User);
+            mappedAdmin.TenantSlug = selected.TenantSlug;
+            return ServiceResult<AuthUserResult>.Success(mappedAdmin);
+        }
+
+        var matchedClient = validClientCandidates[0];
+        matchedClient.Client.LastLoginAt = DateTimeOffset.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        var result = MapPlatformResult(user);
-        result.TenantId = PlatformTenantId;
-        result.Scope = "platform";
-        return ServiceResult<AuthUserResult>.Success(result);
+        var mappedClient = MapClientResult(matchedClient.Client);
+        mappedClient.TenantSlug = matchedClient.TenantSlug;
+        return ServiceResult<AuthUserResult>.Success(mappedClient);
     }
 
     public async Task<ServiceResult<AuthTokenResult>> RefreshAsync(
@@ -186,9 +254,12 @@ public sealed class AuthService
             _dbContext.RefreshTokens.Add(newRefreshEntity);
             await _dbContext.SaveChangesAsync(cancellationToken);
 
+            var mappedUser = MapAdminResult(user);
+            mappedUser.TenantSlug = await ResolveTenantSlugAsync(tenantId, cancellationToken);
+
             return ServiceResult<AuthTokenResult>.Success(new AuthTokenResult
             {
-                User = MapAdminResult(user),
+                User = mappedUser,
                 RefreshToken = newRefreshToken
             });
         }
@@ -231,9 +302,12 @@ public sealed class AuthService
         _dbContext.ClientRefreshTokens.Add(newClientRefreshEntity);
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        var mappedClient = MapClientResult(client);
+        mappedClient.TenantSlug = await ResolveTenantSlugAsync(tenantId, cancellationToken);
+
         return ServiceResult<AuthTokenResult>.Success(new AuthTokenResult
         {
-            User = MapClientResult(client),
+            User = mappedClient,
             RefreshToken = newClientRefreshToken
         });
     }
@@ -422,15 +496,6 @@ public sealed class AuthService
             return ServiceResult<AuthUserResult>.Failure(errors);
         }
 
-        if (await _dbContext.Users.AnyAsync(cancellationToken) ||
-            await _dbContext.PlatformUsers.AnyAsync(cancellationToken))
-        {
-            return ServiceResult<AuthUserResult>.Failure(new[]
-            {
-                new ValidationError("bootstrap", "Bootstrap already completed")
-            });
-        }
-
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
         var normalizedSlug = request.TenantSlug.Trim().ToLowerInvariant();
         var normalizedTenantName = request.TenantName.Trim();
@@ -445,28 +510,28 @@ public sealed class AuthService
             });
         }
 
-        if (await _dbContext.Tenants.AnyAsync(t => t.Slug == normalizedSlug, cancellationToken))
+        var tenant = await _dbContext.Tenants
+            .FirstOrDefaultAsync(t => t.Slug == normalizedSlug, cancellationToken);
+
+        if (tenant == null)
         {
-            return ServiceResult<AuthUserResult>.Failure(new[]
+            tenant = new Tenant
             {
-                new ValidationError("tenantSlug", "Tenant slug already exists")
-            });
+                Id = Guid.NewGuid().ToString("N"),
+                Name = normalizedTenantName,
+                Slug = normalizedSlug,
+                Status = TenantStatus.Active,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            _dbContext.Tenants.Add(tenant);
         }
 
-        var tenant = new Tenant
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Name = normalizedTenantName,
-            Slug = normalizedSlug,
-            Status = TenantStatus.Active,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-
-        var user = new Domain.Entities.User
+        var existingUser = await _dbContext.Users
+            .FirstOrDefaultAsync(u => u.Email == normalizedEmail && u.TenantId == tenant.Id, cancellationToken);
+        var user = existingUser ?? new Domain.Entities.User
         {
             Name = request.Name.Trim(),
             Email = normalizedEmail,
-            PasswordHash = PasswordHasher.HashPassword(request.Password),
             Role = role,
             SectorCode = sectorCode,
             TenantId = tenant.Id,
@@ -475,20 +540,43 @@ public sealed class AuthService
             ProtheusOperation = ProtheusOperationType.CREATE
         };
 
-        var platformUser = new PlatformUser
-        {
-            Name = request.Name.Trim(),
-            Email = normalizedEmail,
-            EmailNormalized = normalizedEmail,
-            PasswordHash = user.PasswordHash,
-            Role = ToPlatformRole(role),
-            ProtheusTag = ProtheusTag.Build(sectorCode, ProtheusOperationType.CREATE),
-            IsActive = true
-        };
+        user.Name = request.Name.Trim();
+        user.PasswordHash = PasswordHasher.HashPassword(request.Password);
+        user.Role = role;
+        user.SectorCode = sectorCode;
+        user.IsActive = true;
 
-        _dbContext.Tenants.Add(tenant);
-        _dbContext.Users.Add(user);
-        _dbContext.PlatformUsers.Add(platformUser);
+        var platformUser = await _dbContext.PlatformUsers
+            .FirstOrDefaultAsync(p => p.Email == normalizedEmail, cancellationToken);
+
+        if (platformUser == null)
+        {
+            platformUser = new PlatformUser
+            {
+                Name = request.Name.Trim(),
+                Email = normalizedEmail,
+                EmailNormalized = normalizedEmail,
+                Role = ToPlatformRole(role),
+                ProtheusTag = ProtheusTag.Build(sectorCode, ProtheusOperationType.CREATE),
+                IsActive = true
+            };
+        }
+
+        platformUser.Name = request.Name.Trim();
+        platformUser.PasswordHash = user.PasswordHash;
+        platformUser.Role = ToPlatformRole(role);
+        platformUser.IsActive = true;
+
+        if (existingUser == null)
+        {
+            _dbContext.Users.Add(user);
+        }
+
+        if (platformUser.Id == Guid.Empty)
+        {
+            _dbContext.PlatformUsers.Add(platformUser);
+        }
+
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return ServiceResult<AuthUserResult>.Success(MapPlatformResult(platformUser));
@@ -521,6 +609,28 @@ public sealed class AuthService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return ServiceResult<bool>.Success(true);
+    }
+
+    private static ServiceResult<AuthUserResult> InvalidCredentialsFailure()
+    {
+        return ServiceResult<AuthUserResult>.Failure(new[]
+        {
+            new ValidationError("credentials", "Invalid credentials")
+        });
+    }
+
+    private async Task<string?> ResolveTenantSlugAsync(string tenantId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+        {
+            return null;
+        }
+
+        return await _dbContext.Tenants
+            .AsNoTracking()
+            .Where(tenant => tenant.Id == tenantId)
+            .Select(tenant => tenant.Slug)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private static List<ValidationError> ValidateLoginRequest(AuthLoginRequest request)
@@ -676,6 +786,9 @@ public sealed class AuthService
             OnboardingStep = client.OnboardingStep
         };
     }
+
+    private sealed record AdminLoginCandidate(User User, string TenantSlug);
+    private sealed record ClientLoginCandidate(Client Client, string TenantSlug);
 
     private static string GenerateToken()
     {

@@ -6,6 +6,7 @@ public sealed class AuthUserResult
 {
     public Guid Id { get; set; }
     public string TenantId { get; set; } = string.Empty;
+    public string? TenantSlug { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string AccountType { get; set; } = "admin";

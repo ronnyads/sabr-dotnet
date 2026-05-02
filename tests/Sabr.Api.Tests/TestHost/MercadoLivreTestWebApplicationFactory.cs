@@ -1,4 +1,6 @@
 using System.Net.Http.Headers;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -6,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.IdentityModel.Tokens;
 using Sabr.Application.Abstractions;
 using Sabr.Application.Services;
 using Sabr.Domain.Entities;
@@ -28,6 +31,9 @@ public sealed class MercadoLivreTestWebApplicationFactory : WebApplicationFactor
         {
             configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
             {
+                // JWT: mesma chave que TestJwtFactory usa para assinar → evita mismatch (401 falso).
+                ["Jwt:Key"]    = TestJwtFactory.TestSigningKey,
+                ["Jwt:Secret"] = TestJwtFactory.TestSigningKey,
                 ["MercadoLivre:ClientId"] = "DEV_ML_CLIENT_ID",
                 ["MercadoLivre:ClientSecret"] = "DEV_ML_CLIENT_SECRET",
                 ["MercadoLivre:RedirectUri"] = "http://localhost:5250/api/v1/client/integrations/mercadolivre/callback",
@@ -43,6 +49,15 @@ public sealed class MercadoLivreTestWebApplicationFactory : WebApplicationFactor
         });
         builder.ConfigureServices(services =>
         {
+            // Program.cs lê builder.Configuration antes do ConfigureAppConfiguration injetar
+            // override, portanto sobrescrevemos o IssuerSigningKey via PostConfigure.
+            services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, opts =>
+            {
+                opts.TokenValidationParameters.IssuerSigningKey =
+                    new SymmetricSecurityKey(
+                        Encoding.UTF8.GetBytes(TestJwtFactory.TestSigningKey));
+            });
+
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<AppDbContext>();
             services.RemoveAll<IAppDbContext>();

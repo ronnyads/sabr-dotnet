@@ -447,7 +447,6 @@ public sealed class MyProductsServiceTests
         dbContext.Plans.Add(new Plan
         {
             Id = planId,
-            TenantId = tenantId,
             Name = $"Plan {planId:N}",
             IsActive = true
         });
@@ -455,21 +454,18 @@ public sealed class MyProductsServiceTests
         dbContext.Catalogs.Add(new Catalog
         {
             Id = catalogId,
-            TenantId = tenantId,
             Name = $"Catalog {catalogId:N}",
             IsActive = true
         });
 
         dbContext.PlanCatalogs.Add(new PlanCatalog
         {
-            TenantId = tenantId,
             PlanId = planId,
             CatalogId = catalogId
         });
 
         dbContext.ProductCatalogs.Add(new ProductCatalog
         {
-            TenantId = tenantId,
             CatalogId = catalogId,
             ProductSku = sku
         });

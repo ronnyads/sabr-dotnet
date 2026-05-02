@@ -3,7 +3,6 @@ namespace Sabr.Application.Models;
 public sealed class AdminCatalogResult
 {
     public Guid Id { get; set; }
-    public string TenantId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public bool IsActive { get; set; }

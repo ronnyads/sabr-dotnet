@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Sabr.Application.Abstractions;
 using Sabr.Application.Models;
 using Sabr.Application.Validation;
@@ -9,10 +10,17 @@ namespace Sabr.Application.Services;
 public sealed class MercadoLivreIntegrationService
 {
     private readonly IAppDbContext _dbContext;
+    private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
+    private readonly ILogger<MercadoLivreIntegrationService> _logger;
 
-    public MercadoLivreIntegrationService(IAppDbContext dbContext)
+    public MercadoLivreIntegrationService(
+        IAppDbContext dbContext,
+        IMercadoLivreApiClient mercadoLivreApiClient,
+        ILogger<MercadoLivreIntegrationService> logger)
     {
         _dbContext = dbContext;
+        _mercadoLivreApiClient = mercadoLivreApiClient;
+        _logger = logger;
     }
 
     public async Task<MercadoLivreIntegrationStatusResult> GetClientStatusAsync(

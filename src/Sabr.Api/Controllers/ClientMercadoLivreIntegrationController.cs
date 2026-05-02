@@ -144,6 +144,49 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         }
     }
 
+    [HttpPost("callback")]
+    [AllowAnonymous]
+    public async Task<IActionResult> CallbackAsync(
+        [FromBody] MercadoLivreCallbackRequest? request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Code) || string.IsNullOrWhiteSpace(request?.State))
+        {
+            return BadRequest(new { error = "missing_code_or_state" });
+        }
+
+        if (!_oauthStateService.TryReadState(request.State, out var payload))
+        {
+            return BadRequest(new { error = "invalid_state" });
+        }
+
+        try
+        {
+            var result = await _oauthService.HandleCallbackAsync(payload.TenantId, payload.ClientId, request.Code, cancellationToken);
+            if (!result.Succeeded || result.Data == null)
+            {
+                _logger.LogWarning(
+                    "MercadoLivre OAuth callback failed without exception. tenantId={TenantId} clientId={ClientId} traceId={TraceId}",
+                    payload.TenantId,
+                    payload.ClientId,
+                    HttpContext.TraceIdentifier);
+                return BadRequest(new { error = "oauth_error" });
+            }
+
+            return Ok(new { status = "success" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "MercadoLivre OAuth callback failed with exception. tenantId={TenantId} clientId={ClientId} traceId={TraceId}",
+                payload.TenantId,
+                payload.ClientId,
+                HttpContext.TraceIdentifier);
+            return BadRequest(new { error = "oauth_error" });
+        }
+    }
+
     [HttpPost("disconnect")]
     public async Task<IActionResult> Disconnect([FromBody] MercadoLivreDisconnectRequest? request, CancellationToken cancellationToken)
     {
