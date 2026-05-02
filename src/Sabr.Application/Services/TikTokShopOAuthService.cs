@@ -261,6 +261,82 @@ public sealed class TikTokShopOAuthService
         return ServiceResult<bool>.Success(true);
     }
 
+    public async Task<ServiceResult<bool>> ResetAsync(
+        string tenantId,
+        Guid clientId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
+        {
+            return ServiceResult<bool>.Failure(new[]
+            {
+                new ValidationError("context", "Invalid tenant/client context")
+            });
+        }
+
+        var orderIds = await _dbContext.MarketplaceOrders
+            .Where(o => o.TenantId == tenantId
+                        && o.ClientId == clientId
+                        && o.Provider == MarketplaceProvider.TikTokShop)
+            .Select(o => o.Id)
+            .ToListAsync(cancellationToken);
+
+        if (orderIds.Count > 0)
+        {
+            var reservations = await _dbContext.StockReservations
+                .Where(r => orderIds.Contains(r.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            _dbContext.StockReservations.RemoveRange(reservations);
+
+            var shipments = await _dbContext.MarketplaceShipments
+                .Where(s => orderIds.Contains(s.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            _dbContext.MarketplaceShipments.RemoveRange(shipments);
+
+            var items = await _dbContext.MarketplaceOrderItems
+                .Where(i => orderIds.Contains(i.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            _dbContext.MarketplaceOrderItems.RemoveRange(items);
+
+            var orders = await _dbContext.MarketplaceOrders
+                .Where(o => orderIds.Contains(o.Id))
+                .ToListAsync(cancellationToken);
+            _dbContext.MarketplaceOrders.RemoveRange(orders);
+        }
+
+        var eventLogs = await _dbContext.MarketplaceEventLogs
+            .Where(e => e.TenantId == tenantId
+                        && e.ClientId == clientId
+                        && e.Provider == MarketplaceProvider.TikTokShop)
+            .ToListAsync(cancellationToken);
+        _dbContext.MarketplaceEventLogs.RemoveRange(eventLogs);
+
+        var slaRules = await _dbContext.TenantMarketplaceSlaRules
+            .Where(r => r.TenantId == tenantId
+                        && r.ClientId == clientId
+                        && r.Provider == MarketplaceProvider.TikTokShop)
+            .ToListAsync(cancellationToken);
+        _dbContext.TenantMarketplaceSlaRules.RemoveRange(slaRules);
+
+        var listingMaps = await _dbContext.TenantMarketplaceListingMaps
+            .Where(m => m.TenantId == tenantId
+                        && m.ClientId == clientId
+                        && m.Provider == MarketplaceProvider.TikTokShop)
+            .ToListAsync(cancellationToken);
+        _dbContext.TenantMarketplaceListingMaps.RemoveRange(listingMaps);
+
+        var connections = await _dbContext.TenantMarketplaceConnections
+            .Where(c => c.TenantId == tenantId
+                        && c.ClientId == clientId
+                        && c.Provider == MarketplaceProvider.TikTokShop)
+            .ToListAsync(cancellationToken);
+        _dbContext.TenantMarketplaceConnections.RemoveRange(connections);
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return ServiceResult<bool>.Success(true);
+    }
+
     private static string BuildDisplayName(TikTokShopTokenPayload tokenData)
     {
         var sellerName = tokenData.SellerName?.Trim();

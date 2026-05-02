@@ -130,6 +130,23 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         }
     }
 
+    [HttpPost("reset")]
+    public async Task<IActionResult> Reset(CancellationToken cancellationToken)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+        {
+            return error!;
+        }
+
+        var result = await _oauthService.ResetAsync(tenantId!, clientId, cancellationToken);
+        if (!result.Succeeded)
+        {
+            return MapValidationError(result.Errors);
+        }
+
+        return NoContent();
+    }
+
     [HttpPost("disconnect")]
     public async Task<IActionResult> Disconnect(CancellationToken cancellationToken)
     {

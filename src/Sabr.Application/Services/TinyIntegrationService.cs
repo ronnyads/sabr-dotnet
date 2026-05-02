@@ -101,6 +101,81 @@ public sealed class TinyIntegrationService
         return ServiceResult<bool>.Success(true);
     }
 
+    // ── Reset ─────────────────────────────────────────────────────────────────
+
+    public async Task<ServiceResult<bool>> ResetAsync(
+        string tenantId,
+        Guid clientId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
+        {
+            return ServiceResult<bool>.Failure(new[]
+            {
+                new ValidationError("context", "Invalid tenant/client context")
+            });
+        }
+
+        var orderIds = await _dbContext.MarketplaceOrders
+            .Where(o => o.TenantId == tenantId
+                        && o.ClientId == clientId
+                        && o.Provider == MarketplaceProvider.TinyErp)
+            .Select(o => o.Id)
+            .ToListAsync(cancellationToken);
+
+        if (orderIds.Count > 0)
+        {
+            var reservations = await _dbContext.StockReservations
+                .Where(r => orderIds.Contains(r.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            _dbContext.StockReservations.RemoveRange(reservations);
+
+            var shipments = await _dbContext.MarketplaceShipments
+                .Where(s => orderIds.Contains(s.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            _dbContext.MarketplaceShipments.RemoveRange(shipments);
+
+            var items = await _dbContext.MarketplaceOrderItems
+                .Where(i => orderIds.Contains(i.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            _dbContext.MarketplaceOrderItems.RemoveRange(items);
+
+            var orders = await _dbContext.MarketplaceOrders
+                .Where(o => orderIds.Contains(o.Id))
+                .ToListAsync(cancellationToken);
+            _dbContext.MarketplaceOrders.RemoveRange(orders);
+        }
+
+        var eventLogs = await _dbContext.MarketplaceEventLogs
+            .Where(e => e.TenantId == tenantId
+                        && e.ClientId == clientId
+                        && e.Provider == MarketplaceProvider.TinyErp)
+            .ToListAsync(cancellationToken);
+        _dbContext.MarketplaceEventLogs.RemoveRange(eventLogs);
+
+        var slaRules = await _dbContext.TenantMarketplaceSlaRules
+            .Where(r => r.TenantId == tenantId
+                        && r.ClientId == clientId
+                        && r.Provider == MarketplaceProvider.TinyErp)
+            .ToListAsync(cancellationToken);
+        _dbContext.TenantMarketplaceSlaRules.RemoveRange(slaRules);
+
+        var allConnections = await _dbContext.TenantMarketplaceConnections
+            .Where(c => c.TenantId == tenantId
+                        && c.ClientId == clientId
+                        && c.Provider == MarketplaceProvider.TinyErp)
+            .ToListAsync(cancellationToken);
+        _dbContext.TenantMarketplaceConnections.RemoveRange(allConnections);
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Tiny ERP integration reset. tenantId={TenantId} clientId={ClientId} orders={Orders}",
+            tenantId, clientId, orderIds.Count);
+
+        return ServiceResult<bool>.Success(true);
+    }
+
     // ── Sync Orders ───────────────────────────────────────────────────────────
 
     public async Task<ServiceResult<TinySyncResult>> SyncOrdersAsync(
