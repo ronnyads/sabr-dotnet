@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Logging;
 
 namespace Sabr.Api.Security;
 
@@ -10,10 +11,14 @@ public sealed class MercadoLivreOAuthStateService
     private static readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IDataProtector _protector;
+    private readonly ILogger<MercadoLivreOAuthStateService> _logger;
 
-    public MercadoLivreOAuthStateService(IDataProtectionProvider dataProtectionProvider)
+    public MercadoLivreOAuthStateService(
+        IDataProtectionProvider dataProtectionProvider,
+        ILogger<MercadoLivreOAuthStateService> logger)
     {
         _protector = dataProtectionProvider.CreateProtector(Purpose);
+        _logger = logger;
     }
 
     public string CreateState(string tenantId, Guid clientId, string? returnUrl)
@@ -29,7 +34,11 @@ public sealed class MercadoLivreOAuthStateService
 
         var json = JsonSerializer.Serialize(payload, JsonOptions);
         var protectedPayload = _protector.Protect(json);
-        return Base64UrlEncode(protectedPayload);
+        var state = Base64UrlEncode(protectedPayload);
+        _logger.LogInformation(
+            "ML OAuth state created. tenantId={TenantId} clientId={ClientId} stateLen={Len} statePrefix={Prefix}",
+            tenantId, clientId, state.Length, state[..Math.Min(20, state.Length)]);
+        return state;
     }
 
     public bool TryReadState(string state, out MercadoLivreOAuthStatePayload payload)
@@ -47,16 +56,20 @@ public sealed class MercadoLivreOAuthStateService
             var parsed = JsonSerializer.Deserialize<MercadoLivreOAuthStatePayload>(unprotected, JsonOptions);
             if (parsed == null)
             {
+                _logger.LogWarning("ML OAuth state deserialized to null. statePrefix={Prefix}", state[..Math.Min(20, state.Length)]);
                 return false;
             }
 
             if (parsed.ClientId == Guid.Empty || string.IsNullOrWhiteSpace(parsed.TenantId))
             {
+                _logger.LogWarning("ML OAuth state missing clientId or tenantId.");
                 return false;
             }
 
-            if (DateTimeOffset.UtcNow - parsed.IssuedAtUtc > StateTtl)
+            var age = DateTimeOffset.UtcNow - parsed.IssuedAtUtc;
+            if (age > StateTtl)
             {
+                _logger.LogWarning("ML OAuth state expired. age={Age} ttl={Ttl}", age, StateTtl);
                 return false;
             }
 
@@ -64,8 +77,13 @@ public sealed class MercadoLivreOAuthStateService
             payload = parsed;
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex,
+                "ML OAuth TryReadState failed to unprotect/parse. stateLen={Len} statePrefix={Prefix} exType={ExType}",
+                state.Length,
+                state[..Math.Min(20, state.Length)],
+                ex.GetType().Name);
             return false;
         }
     }
