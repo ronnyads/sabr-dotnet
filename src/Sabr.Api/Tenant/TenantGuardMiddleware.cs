@@ -26,6 +26,14 @@ public sealed class TenantGuardMiddleware
             return;
         }
 
+        // OAuth callbacks carry tenant context inside the signed state param — not via host header
+        if (path.StartsWith("/api/v1/client/integrations/mercadolivre/callback", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("/api/v1/client/integrations/tiktokshop/callback", StringComparison.OrdinalIgnoreCase))
+        {
+            await _next(context);
+            return;
+        }
+
         var isPlatform = context.Items.TryGetValue(TenantContextKeys.IsPlatform, out var platformObj) &&
                          platformObj is bool p && p;
 
