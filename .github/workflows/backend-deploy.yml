@@ -50,15 +50,8 @@ jobs:
 
       - name: Fly deploy
         run: |
-          # dev → sabr-api-dev | main → sabr-api
-          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-            APP="sabr-api"
-          else
-            APP="sabr-api-dev"
-          fi
-
           flyctl deploy \
-            --app "$APP" \
+            --app "sabr-api-dev" \
             --remote-only \
             --wait-timeout 300
         env:
