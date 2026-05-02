@@ -157,7 +157,9 @@ public sealed class MercadoLivreIntegrationService
             _dbContext.StockReservations.RemoveRange(reservations);
 
             var shipments = await _dbContext.MarketplaceShipments
-                .Where(s => orderIds.Contains(s.MarketplaceOrderId))
+                .Where(s => s.TenantId == tenantId
+                            && s.ClientId == clientId
+                            && s.Provider == MarketplaceProvider.MercadoLivre)
                 .ToListAsync(cancellationToken);
             _dbContext.MarketplaceShipments.RemoveRange(shipments);
 

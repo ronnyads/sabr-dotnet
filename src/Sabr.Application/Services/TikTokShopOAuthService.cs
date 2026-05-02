@@ -289,7 +289,9 @@ public sealed class TikTokShopOAuthService
             _dbContext.StockReservations.RemoveRange(reservations);
 
             var shipments = await _dbContext.MarketplaceShipments
-                .Where(s => orderIds.Contains(s.MarketplaceOrderId))
+                .Where(s => s.TenantId == tenantId
+                            && s.ClientId == clientId
+                            && s.Provider == MarketplaceProvider.TikTokShop)
                 .ToListAsync(cancellationToken);
             _dbContext.MarketplaceShipments.RemoveRange(shipments);
 
