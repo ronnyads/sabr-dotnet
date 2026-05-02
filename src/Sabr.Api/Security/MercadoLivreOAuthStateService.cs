@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Sabr.Api.Options;
+using Sabr.Application.Options;
 
 namespace Sabr.Api.Security;
 
