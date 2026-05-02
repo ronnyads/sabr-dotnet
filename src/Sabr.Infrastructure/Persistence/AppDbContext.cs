@@ -1,4 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using System.Data;
 using Sabr.Application.Abstractions;
 using Sabr.Domain.Common;
@@ -9,9 +10,11 @@ using Sabr.Domain.ValueObjects;
 
 namespace Sabr.Infrastructure.Persistence;
 
-public sealed class AppDbContext : DbContext, IAppDbContext
+public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<User> Users => Set<User>();
