@@ -1,23 +1,29 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Sabr.Api.Options;
 
 namespace Sabr.Api.Security;
 
+// Uses HMAC-SHA256 signed tokens instead of DataProtection to avoid key
+// persistence issues across Fly.io restarts. The JWT secret is stable.
 public sealed class MercadoLivreOAuthStateService
 {
-    private const string Purpose = "sabr:mercadolivre:oauth-state:v1";
+    private const string Version = "v2";
     private static readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly IDataProtector _protector;
+    private readonly byte[] _signingKey;
     private readonly ILogger<MercadoLivreOAuthStateService> _logger;
 
     public MercadoLivreOAuthStateService(
-        IDataProtectionProvider dataProtectionProvider,
+        IOptions<JwtOptions> jwtOptions,
         ILogger<MercadoLivreOAuthStateService> logger)
     {
-        _protector = dataProtectionProvider.CreateProtector(Purpose);
+        var secret = jwtOptions.Value.Key ?? jwtOptions.Value.Secret
+            ?? throw new InvalidOperationException("JWT key is required for ML OAuth state signing.");
+        _signingKey = Encoding.UTF8.GetBytes(secret);
         _logger = logger;
     }
 
@@ -25,6 +31,7 @@ public sealed class MercadoLivreOAuthStateService
     {
         var payload = new MercadoLivreOAuthStatePayload
         {
+            Ver = Version,
             TenantId = tenantId.Trim(),
             ClientId = clientId,
             ReturnUrl = NormalizeReturnUrl(returnUrl),
@@ -33,8 +40,10 @@ public sealed class MercadoLivreOAuthStateService
         };
 
         var json = JsonSerializer.Serialize(payload, JsonOptions);
-        var protectedPayload = _protector.Protect(json);
-        var state = Base64UrlEncode(protectedPayload);
+        var b64 = Base64UrlEncode(Encoding.UTF8.GetBytes(json));
+        var sig = Base64UrlEncode(ComputeHmac(b64));
+        var state = $"{b64}.{sig}";
+
         _logger.LogInformation(
             "ML OAuth state created. tenantId={TenantId} clientId={ClientId} stateLen={Len} statePrefix={Prefix}",
             tenantId, clientId, state.Length, state[..Math.Min(20, state.Length)]);
@@ -51,12 +60,32 @@ public sealed class MercadoLivreOAuthStateService
 
         try
         {
-            var raw = Base64UrlDecode(state);
-            var unprotected = _protector.Unprotect(raw);
-            var parsed = JsonSerializer.Deserialize<MercadoLivreOAuthStatePayload>(unprotected, JsonOptions);
+            var dotIndex = state.LastIndexOf('.');
+            if (dotIndex < 1 || dotIndex >= state.Length - 1)
+            {
+                _logger.LogWarning("ML OAuth state missing signature separator. statePrefix={Prefix}",
+                    state[..Math.Min(20, state.Length)]);
+                return false;
+            }
+
+            var b64 = state[..dotIndex];
+            var receivedSig = state[(dotIndex + 1)..];
+            var expectedSig = Base64UrlEncode(ComputeHmac(b64));
+
+            if (!CryptographicOperations.FixedTimeEquals(
+                    Encoding.UTF8.GetBytes(receivedSig),
+                    Encoding.UTF8.GetBytes(expectedSig)))
+            {
+                _logger.LogWarning("ML OAuth state HMAC mismatch. statePrefix={Prefix}",
+                    state[..Math.Min(20, state.Length)]);
+                return false;
+            }
+
+            var json = Encoding.UTF8.GetString(Base64UrlDecode(b64));
+            var parsed = JsonSerializer.Deserialize<MercadoLivreOAuthStatePayload>(json, JsonOptions);
             if (parsed == null)
             {
-                _logger.LogWarning("ML OAuth state deserialized to null. statePrefix={Prefix}", state[..Math.Min(20, state.Length)]);
+                _logger.LogWarning("ML OAuth state deserialized to null.");
                 return false;
             }
 
@@ -80,7 +109,7 @@ public sealed class MercadoLivreOAuthStateService
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "ML OAuth TryReadState failed to unprotect/parse. stateLen={Len} statePrefix={Prefix} exType={ExType}",
+                "ML OAuth TryReadState failed. stateLen={Len} statePrefix={Prefix} exType={ExType}",
                 state.Length,
                 state[..Math.Min(20, state.Length)],
                 ex.GetType().Name);
@@ -115,35 +144,35 @@ public sealed class MercadoLivreOAuthStateService
         return candidate;
     }
 
-    private static string Base64UrlEncode(string plain)
+    private byte[] ComputeHmac(string data)
     {
-        var bytes = Encoding.UTF8.GetBytes(plain);
+        using var hmac = new HMACSHA256(_signingKey);
+        return hmac.ComputeHash(Encoding.UTF8.GetBytes(data));
+    }
+
+    private static string Base64UrlEncode(byte[] bytes)
+    {
         return Convert.ToBase64String(bytes)
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
     }
 
-    private static string Base64UrlDecode(string value)
+    private static byte[] Base64UrlDecode(string value)
     {
         var padded = value.Replace('-', '+').Replace('_', '/');
         switch (padded.Length % 4)
         {
-            case 2:
-                padded += "==";
-                break;
-            case 3:
-                padded += "=";
-                break;
+            case 2: padded += "=="; break;
+            case 3: padded += "="; break;
         }
-
-        var bytes = Convert.FromBase64String(padded);
-        return Encoding.UTF8.GetString(bytes);
+        return Convert.FromBase64String(padded);
     }
 }
 
 public sealed class MercadoLivreOAuthStatePayload
 {
+    public string Ver { get; set; } = string.Empty;
     public string TenantId { get; set; } = string.Empty;
     public Guid ClientId { get; set; }
     public string ReturnUrl { get; set; } = "/client/integrations/mercadolivre";
