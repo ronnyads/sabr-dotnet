@@ -123,27 +123,6 @@ public sealed class MercadoLivreIntegrationService
                            && sellers.Contains(item.SellerId))
             .ToListAsync(cancellationToken);
 
-        // Antes de deletar do banco, revogar no ML (best-effort — não bloqueia desconexão se falhar)
-        foreach (var connection in connections)
-        {
-            try
-            {
-                await _mercadoLivreApiClient.RevokeApplicationAsync(
-                    connection.SellerId,
-                    connection.AccessToken,
-                    cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to revoke ML application for sellerId={SellerId} tenantId={TenantId} clientId={ClientId} — continuing disconnect",
-                    connection.SellerId,
-                    tenantId,
-                    clientId);
-            }
-        }
-
         _dbContext.TenantMarketplaceListingMaps.RemoveRange(maps);
         _dbContext.TenantMarketplaceConnections.RemoveRange(connections);
         await _dbContext.SaveChangesAsync(cancellationToken);
