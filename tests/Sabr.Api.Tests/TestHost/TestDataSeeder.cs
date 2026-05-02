@@ -67,7 +67,6 @@ public static class TestDataSeeder
             db.Plans.Add(new Plan
             {
                 Id = activePlanId,
-                TenantId = tenantId,
                 Name = $"PLAN-ACT-{activePlanId:N}",
                 IsActive = true
             });
@@ -78,7 +77,6 @@ public static class TestDataSeeder
             db.Plans.Add(new Plan
             {
                 Id = inactivePlanId,
-                TenantId = tenantId,
                 Name = $"PLAN-INACT-{inactivePlanId:N}",
                 IsActive = false
             });
@@ -89,7 +87,6 @@ public static class TestDataSeeder
             db.Catalogs.Add(new Catalog
             {
                 Id = activeCatalogId,
-                TenantId = tenantId,
                 Name = $"CAT-ACT-{activeCatalogId:N}",
                 IsActive = true
             });
@@ -100,27 +97,24 @@ public static class TestDataSeeder
             db.Catalogs.Add(new Catalog
             {
                 Id = inactiveCatalogId,
-                TenantId = tenantId,
                 Name = $"CAT-INACT-{inactiveCatalogId:N}",
                 IsActive = false
             });
         }
 
-        if (!await db.PlanCatalogs.AnyAsync(pc => pc.TenantId == tenantId && pc.PlanId == activePlanId && pc.CatalogId == activeCatalogId, cancellationToken))
+        if (!await db.PlanCatalogs.AnyAsync(pc => pc.PlanId == activePlanId && pc.CatalogId == activeCatalogId, cancellationToken))
         {
             db.PlanCatalogs.Add(new PlanCatalog
             {
-                TenantId = tenantId,
                 PlanId = activePlanId,
                 CatalogId = activeCatalogId
             });
         }
 
-        if (!await db.PlanCatalogs.AnyAsync(pc => pc.TenantId == tenantId && pc.PlanId == inactivePlanId && pc.CatalogId == inactiveCatalogId, cancellationToken))
+        if (!await db.PlanCatalogs.AnyAsync(pc => pc.PlanId == inactivePlanId && pc.CatalogId == inactiveCatalogId, cancellationToken))
         {
             db.PlanCatalogs.Add(new PlanCatalog
             {
-                TenantId = tenantId,
                 PlanId = inactivePlanId,
                 CatalogId = inactiveCatalogId
             });
@@ -138,11 +132,10 @@ public static class TestDataSeeder
             });
         }
 
-        if (!await db.ProductCatalogs.AnyAsync(pc => pc.TenantId == tenantId && pc.CatalogId == activeCatalogId && pc.ProductSku == allowedSku, cancellationToken))
+        if (!await db.ProductCatalogs.AnyAsync(pc => pc.CatalogId == activeCatalogId && pc.ProductSku == allowedSku, cancellationToken))
         {
             db.ProductCatalogs.Add(new ProductCatalog
             {
-                TenantId = tenantId,
                 CatalogId = activeCatalogId,
                 ProductSku = allowedSku
             });
@@ -162,11 +155,10 @@ public static class TestDataSeeder
                 });
             }
 
-            if (!await db.ProductCatalogs.AnyAsync(pc => pc.TenantId == tenantId && pc.CatalogId == inactiveCatalogId && pc.ProductSku == blockedSku, cancellationToken))
+            if (!await db.ProductCatalogs.AnyAsync(pc => pc.CatalogId == inactiveCatalogId && pc.ProductSku == blockedSku, cancellationToken))
             {
                 db.ProductCatalogs.Add(new ProductCatalog
                 {
-                    TenantId = tenantId,
                     CatalogId = inactiveCatalogId,
                     ProductSku = blockedSku!
                 });

@@ -22,6 +22,42 @@ namespace Sabr.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Sabr.Domain.Entities.AiPromptConfig", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Feature")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Prompt")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AiPromptConfigs");
+                });
+
             modelBuilder.Entity("Sabr.Domain.Entities.AuditEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -108,24 +144,18 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("name");
 
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("tenant_id");
-
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "IsActive")
-                        .HasDatabaseName("ix_catalogs_tenant_active");
+                    b.HasIndex("IsActive")
+                        .HasDatabaseName("ix_catalogs_active");
 
-                    b.HasIndex("TenantId", "Name")
+                    b.HasIndex("Name")
                         .IsUnique()
-                        .HasDatabaseName("ux_catalogs_tenant_name");
+                        .HasDatabaseName("ux_catalogs_name");
 
                     b.ToTable("catalogs", (string)null);
                 });
@@ -690,6 +720,9 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("character varying(8)")
                         .HasColumnName("currency_id");
 
+                    b.Property<bool>("FreeShipping")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid>("IntegrationId")
                         .HasColumnType("uuid")
                         .HasColumnName("integration_id");
@@ -773,6 +806,12 @@ namespace Sabr.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
+
+                    b.Property<string>("WarrantyTime")
+                        .HasColumnType("text");
+
+                    b.Property<string>("WarrantyType")
+                        .HasColumnType("text");
 
                     b.Property<uint>("xmin")
                         .IsConcurrencyToken()
@@ -1235,24 +1274,18 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("name");
 
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("tenant_id");
-
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "IsActive")
-                        .HasDatabaseName("ix_plans_tenant_active");
+                    b.HasIndex("IsActive")
+                        .HasDatabaseName("ix_plans_active");
 
-                    b.HasIndex("TenantId", "Name")
+                    b.HasIndex("Name")
                         .IsUnique()
-                        .HasDatabaseName("ux_plans_tenant_name");
+                        .HasDatabaseName("ux_plans_name");
 
                     b.ToTable("plans", null, t =>
                         {
@@ -1279,23 +1312,17 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("plan_id");
 
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("tenant_id");
-
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "CatalogId")
-                        .HasDatabaseName("ix_plan_catalogs_tenant_catalog");
+                    b.HasIndex("CatalogId")
+                        .HasDatabaseName("ix_plan_catalogs_catalog");
 
-                    b.HasIndex("TenantId", "PlanId")
-                        .HasDatabaseName("ix_plan_catalogs_tenant_plan");
+                    b.HasIndex("PlanId")
+                        .HasDatabaseName("ix_plan_catalogs_plan");
 
-                    b.HasIndex("TenantId", "PlanId", "CatalogId")
+                    b.HasIndex("PlanId", "CatalogId")
                         .IsUnique()
-                        .HasDatabaseName("ux_plan_catalogs_tenant_plan_catalog");
+                        .HasDatabaseName("ux_plan_catalogs_plan_catalog");
 
                     b.ToTable("plan_catalogs", (string)null);
                 });
@@ -1551,20 +1578,14 @@ namespace Sabr.Infrastructure.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("product_sku");
 
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("tenant_id");
-
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "ProductSku")
-                        .HasDatabaseName("ix_product_catalogs_tenant_sku");
+                    b.HasIndex("ProductSku")
+                        .HasDatabaseName("ix_product_catalogs_sku");
 
-                    b.HasIndex("TenantId", "CatalogId", "ProductSku")
+                    b.HasIndex("CatalogId", "ProductSku")
                         .IsUnique()
-                        .HasDatabaseName("ux_product_catalogs_tenant_catalog_sku");
+                        .HasDatabaseName("ux_product_catalogs_catalog_sku");
 
                     b.ToTable("product_catalogs", null, t =>
                         {

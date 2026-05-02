@@ -37,6 +37,7 @@ npm run start:client:stack
 Matriz rapida de erro em DEV:
 - `504` em `/api/v1/auth/csrf` ou `/api/v1/auth/login`: API offline/inacessivel na porta `5250`.
 - `401` em login: credencial invalida ou contexto de autenticacao.
+- `28P01` no startup da API: credencial de banco invalida para `sabr_user` (runbook: `docs/runbooks/login-local-28p01.md`).
 
 ## Build Lock (MSB3026/MSB3027)
 Quando o `Sabr.Api` esta em execucao, o processo pode bloquear `Sabr.Application.dll` e `Sabr.Infrastructure.dll` dentro de `src/Sabr.Api/bin/Debug/net8.0`, causando:

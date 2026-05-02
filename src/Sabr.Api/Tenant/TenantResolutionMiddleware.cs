@@ -15,6 +15,7 @@ public sealed class TenantResolutionMiddleware
     public async Task InvokeAsync(HttpContext context, ITenantResolver resolver, IWebHostEnvironment env)
     {
         var path = context.Request.Path.Value ?? string.Empty;
+        var method = context.Request.Method;
         if (!path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
@@ -46,6 +47,12 @@ public sealed class TenantResolutionMiddleware
         var tenantInfo = await resolver.ResolveAsync(context, context.RequestAborted);
         if (tenantInfo == null)
         {
+            if (CanProceedWithoutResolvedTenant(path, method))
+            {
+                await _next(context);
+                return;
+            }
+
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
             await context.Response.WriteAsJsonAsync(new { error = "Tenant not found" });
             return;
@@ -59,6 +66,16 @@ public sealed class TenantResolutionMiddleware
         }
 
         await _next(context);
+    }
+
+    private static bool CanProceedWithoutResolvedTenant(string path, string method)
+    {
+        return (HttpMethods.Post.Equals(method, StringComparison.OrdinalIgnoreCase) &&
+                path.StartsWith("/api/v1/auth/login", StringComparison.OrdinalIgnoreCase)) ||
+               (HttpMethods.Post.Equals(method, StringComparison.OrdinalIgnoreCase) &&
+                path.StartsWith("/api/v1/auth/bootstrap", StringComparison.OrdinalIgnoreCase)) ||
+               (HttpMethods.Get.Equals(method, StringComparison.OrdinalIgnoreCase) &&
+                path.StartsWith("/api/v1/auth/csrf", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsLocalDevHost(string host)

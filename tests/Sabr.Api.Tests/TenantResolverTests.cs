@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Sabr.Api.Tenant;
 using DomainTenant = Sabr.Domain.Entities.Tenant;
 using Sabr.Infrastructure.Persistence;
@@ -19,6 +20,13 @@ public sealed class TenantResolverTests
         public IFileProvider WebRootFileProvider { get; set; } = default!;
         public string ContentRootPath { get; set; } = string.Empty;
         public IFileProvider ContentRootFileProvider { get; set; } = default!;
+    }
+
+    private sealed class NullLogger<T> : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => false;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) { }
     }
 
     private static AppDbContext CreateDb()
@@ -38,7 +46,7 @@ public sealed class TenantResolverTests
         await db.SaveChangesAsync();
 
         var env = new TestHostEnvironment { EnvironmentName = Environments.Production };
-        var resolver = new TenantResolver(db, env);
+        var resolver = new TenantResolver(db, env, new NullLogger<TenantResolver>());
 
         var ctx = new DefaultHttpContext();
         ctx.Request.Host = new HostString("loja.sabr.com.br");
@@ -56,7 +64,7 @@ public sealed class TenantResolverTests
     {
         await using var db = CreateDb();
         var env = new TestHostEnvironment { EnvironmentName = Environments.Production };
-        var resolver = new TenantResolver(db, env);
+        var resolver = new TenantResolver(db, env, new NullLogger<TenantResolver>());
 
         var ctx = new DefaultHttpContext();
         ctx.Request.Host = new HostString("admin.sabr.com.br");
@@ -74,7 +82,7 @@ public sealed class TenantResolverTests
     {
         await using var db = CreateDb();
         var env = new TestHostEnvironment { EnvironmentName = Environments.Production };
-        var resolver = new TenantResolver(db, env);
+        var resolver = new TenantResolver(db, env, new NullLogger<TenantResolver>());
 
         var ctx = new DefaultHttpContext();
         ctx.Request.Host = new HostString("api.sabr.com.br");
@@ -89,7 +97,7 @@ public sealed class TenantResolverTests
     {
         await using var db = CreateDb();
         var env = new TestHostEnvironment { EnvironmentName = Environments.Production };
-        var resolver = new TenantResolver(db, env);
+        var resolver = new TenantResolver(db, env, new NullLogger<TenantResolver>());
 
         var ctx = new DefaultHttpContext();
         ctx.Request.Host = new HostString("platform.sabr.com.br");
@@ -108,7 +116,7 @@ public sealed class TenantResolverTests
         await db.SaveChangesAsync();
 
         var env = new TestHostEnvironment { EnvironmentName = Environments.Development };
-        var resolver = new TenantResolver(db, env);
+        var resolver = new TenantResolver(db, env, new NullLogger<TenantResolver>());
 
         var ctx = new DefaultHttpContext();
         ctx.Request.Host = new HostString("localhost");
@@ -130,7 +138,7 @@ public sealed class TenantResolverTests
         await db.SaveChangesAsync();
 
         var env = new TestHostEnvironment { EnvironmentName = Environments.Development };
-        var resolver = new TenantResolver(db, env);
+        var resolver = new TenantResolver(db, env, new NullLogger<TenantResolver>());
 
         var ctx = new DefaultHttpContext();
         ctx.Request.Host = new HostString("localhost");

@@ -40,6 +40,15 @@ public sealed class ListingDraft
     public string? LastErrorCode { get; set; }
     public string? LastErrorMessage { get; set; }
     public string? LastErrorRawJson { get; set; }
+
+    // ── Marketplace-specific fields ────────────────────────────────────────
+    // ML: Garantia (sale_terms)
+    public string? WarrantyType { get; set; }  // "Garantia do fabricante" | "Garantia do vendedor"
+    public string? WarrantyTime { get; set; }  // "90 dias" | "6 meses" | "12 meses" | "24 meses"
+
+    // ML: Frete
+    public bool FreeShipping { get; set; } = false;
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

@@ -20,7 +20,12 @@ using Sabr.Domain.ValueObjects;
 
 namespace Sabr.Application.Services;
 
-public sealed class ListingDraftService
+public sealed class ListingDraftService :
+    IListingDraftCrudService,
+    IListingFeeService,
+    IListingCategoryService,
+    IListingPublishService,
+    IListingQueryService
 {
     private const int MaxPublishQuantity = 999999;
     private const string PublishModeSingleVariant = "SingleVariant";

@@ -119,6 +119,39 @@ public sealed class AdminProductsController : ControllerBase
         return NoContent();
     }
 
+    [HttpGet("{sku}/catalogs")]
+    public async Task<IActionResult> GetCatalogLinks(
+        [FromRoute] string sku,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _productAdminService.GetLinkedCatalogIdsGlobalAsync(sku, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapError(result.Errors);
+
+        return Ok(new ProductCatalogLinksResult
+        {
+            ProductSku = Sabr.Domain.ValueObjects.Sku.Normalize(sku),
+            CatalogIds = result.Data
+        });
+    }
+
+    [HttpPut("{sku}/catalogs")]
+    public async Task<IActionResult> ReplaceCatalogLinks(
+        [FromRoute] string sku,
+        [FromBody] ProductReplaceCatalogsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var actorId = ResolveActorId();
+        if (actorId == Guid.Empty)
+            return Unauthorized(CreateApiError("INVALID_ACTOR", "Invalid actor"));
+
+        var result = await _productAdminService.ReplaceCatalogsGlobalAsync(sku, request, actorId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapError(result.Errors);
+
+        return Ok(result.Data);
+    }
+
     [HttpPut("{sku}/pricing")]
     public async Task<IActionResult> UpdatePricing(
         [FromRoute] string sku,

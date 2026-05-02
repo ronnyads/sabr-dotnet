@@ -16,17 +16,20 @@ public sealed class MarketplaceOrderPaymentService
     private readonly StockAvailabilityService _stockAvailabilityService;
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly MercadoLivreOptions _options;
+    private readonly TinyIntegrationService _tinyIntegrationService;
 
     public MarketplaceOrderPaymentService(
         IAppDbContext dbContext,
         StockAvailabilityService stockAvailabilityService,
         MarketplaceAuditLogService auditLogService,
-        IOptions<MercadoLivreOptions> options)
+        IOptions<MercadoLivreOptions> options,
+        TinyIntegrationService tinyIntegrationService)
     {
         _dbContext = dbContext;
         _stockAvailabilityService = stockAvailabilityService;
         _auditLogService = auditLogService;
         _options = options.Value;
+        _tinyIntegrationService = tinyIntegrationService;
     }
 
     public async Task<ServiceResult<MarketplaceMarkPaidExecutionResult>> MarkPaidAsync(
@@ -176,6 +179,14 @@ public sealed class MarketplaceOrderPaymentService
                 clientId,
                 consumedBySku.Keys,
                 cancellationToken);
+
+            if (order.Provider == MarketplaceProvider.TinyErp)
+            {
+                foreach (var sku in consumedBySku.Keys)
+                {
+                    _ = _tinyIntegrationService.PushStockToTinyAsync(tenantId, clientId, sku);
+                }
+            }
         }
 
         return ServiceResult<MarketplaceMarkPaidExecutionResult>.Success(new MarketplaceMarkPaidExecutionResult

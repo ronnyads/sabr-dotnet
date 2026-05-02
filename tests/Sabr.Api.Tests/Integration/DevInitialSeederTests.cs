@@ -40,8 +40,8 @@ public sealed class DevInitialSeederTests : IClassFixture<TestWebApplicationFact
 
         Assert.True(await db.PlatformUsers.AnyAsync(item => item.EmailNormalized == PlatformAdminEmail));
         Assert.True(await db.Users.AnyAsync(item => item.TenantId == tenant.Id && item.Email == TenantOwnerEmail));
-        Assert.True(await db.Plans.AnyAsync(item => item.TenantId == tenant.Id && item.IsActive));
-        Assert.True(await db.Catalogs.AnyAsync(item => item.TenantId == tenant.Id && item.IsActive));
+        Assert.True(await db.Plans.AnyAsync(item => item.IsActive));
+        Assert.True(await db.Catalogs.AnyAsync(item => item.IsActive));
         Assert.True(await db.ClientPlanSubscriptions.AnyAsync(item =>
             item.TenantId == tenant.Id && item.ClientId == client.Id && item.IsActive));
 

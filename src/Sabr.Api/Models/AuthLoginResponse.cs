@@ -9,4 +9,6 @@ public sealed class AuthLoginResponse
     public DateTimeOffset ExpiresAt { get; set; }
     public string AccountType { get; set; } = "admin";
     public AuthUserResult User { get; set; } = new();
+    // Optional refresh token for clients that cannot use cookies (fallback).
+    public string? RefreshToken { get; set; }
 }

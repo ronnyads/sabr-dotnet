@@ -15,16 +15,16 @@ namespace Sabr.Api.Controllers;
 public sealed class ClientMarketplaceCategoriesController : ControllerBase
 {
     private readonly ITenantProvider _tenantProvider;
-    private readonly ListingDraftService _listingDraftService;
+    private readonly IListingCategoryService _listingCategoryService;
     private readonly ILogger<ClientMarketplaceCategoriesController> _logger;
 
     public ClientMarketplaceCategoriesController(
         ITenantProvider tenantProvider,
-        ListingDraftService listingDraftService,
+        IListingCategoryService listingCategoryService,
         ILogger<ClientMarketplaceCategoriesController> logger)
     {
         _tenantProvider = tenantProvider;
-        _listingDraftService = listingDraftService;
+        _listingCategoryService = listingCategoryService;
         _logger = logger;
     }
 
@@ -40,7 +40,7 @@ public sealed class ClientMarketplaceCategoriesController : ControllerBase
 
         try
         {
-            var result = await _listingDraftService.GetCategoryAttributesAsync(
+            var result = await _listingCategoryService.GetCategoryAttributesAsync(
                 tenantId!,
                 clientId,
                 request ?? new MarketplaceCategoryAttributesRequest(),
@@ -77,7 +77,7 @@ public sealed class ClientMarketplaceCategoriesController : ControllerBase
 
         try
         {
-            var result = await _listingDraftService.SuggestCategoriesAsync(
+            var result = await _listingCategoryService.SuggestCategoriesAsync(
                 tenantId!,
                 clientId,
                 request ?? new MarketplaceCategorySuggestRequest(),

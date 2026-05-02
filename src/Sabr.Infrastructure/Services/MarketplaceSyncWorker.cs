@@ -44,9 +44,12 @@ public sealed class MarketplaceSyncWorker : BackgroundService
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var syncService = scope.ServiceProvider.GetRequiredService<MercadoLivreSyncService>();
-            await syncService.SyncAllConnectionsAsync(cancellationToken: cancellationToken);
-            await syncService.ExpireReservationsAsync(cancellationToken);
+            var mlSyncService = scope.ServiceProvider.GetRequiredService<MercadoLivreSyncService>();
+            await mlSyncService.SyncAllConnectionsAsync(cancellationToken: cancellationToken);
+            await mlSyncService.ExpireReservationsAsync(cancellationToken);
+
+            var shopifySyncService = scope.ServiceProvider.GetRequiredService<ShopifyOAuthService>();
+            await shopifySyncService.SyncAllConnectionsAsync(cancellationToken);
         }
         catch (Exception ex)
         {

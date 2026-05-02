@@ -81,7 +81,7 @@ public sealed class AdminClientPlanSubscriptionService
             .ToList();
 
         var desiredPlans = await _dbContext.Plans
-            .Where(item => item.TenantId == tenant.Id && desiredPlanIds.Contains(item.Id))
+            .Where(item => desiredPlanIds.Contains(item.Id))
             .ToListAsync(cancellationToken);
 
         var existingPlanIds = desiredPlans.Select(item => item.Id).ToHashSet();
@@ -218,8 +218,7 @@ public sealed class AdminClientPlanSubscriptionService
     {
         return await (
                 from subscription in _dbContext.ClientPlanSubscriptions
-                join plan in _dbContext.Plans on new { subscription.TenantId, PlanId = subscription.PlanId }
-                    equals new { plan.TenantId, PlanId = plan.Id }
+                join plan in _dbContext.Plans on subscription.PlanId equals plan.Id
                 where subscription.TenantId == tenantId
                       && subscription.ClientId == clientId
                       && subscription.IsActive

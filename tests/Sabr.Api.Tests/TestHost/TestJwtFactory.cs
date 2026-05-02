@@ -10,7 +10,15 @@ public static class TestJwtFactory
 {
     private const string Issuer = "SABR3";
     private const string Audience = "SABR3";
-    private const string SigningKey = "CHANGE_ME_SUPER_SECRET_KEY_32CHARS_MIN";
+
+    /// <summary>
+    /// Chave de assinatura usada pelos testes.
+    /// Deve ser injetada via ConfigureAppConfiguration nas factories para que a API
+    /// valide tokens gerados aqui sem mismatch de assinatura.
+    /// </summary>
+    internal const string TestSigningKey = "sabr-tests-only-signing-key-not-used-in-production-xunit";
+
+    private const string SigningKey = TestSigningKey;
 
     public static string CreateTenantClientToken(string tenantId, Guid clientId, Guid userId)
     {

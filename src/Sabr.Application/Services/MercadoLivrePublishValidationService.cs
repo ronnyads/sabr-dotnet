@@ -138,7 +138,7 @@ public sealed class MercadoLivrePublishValidationService
             var catalogId = request.CatalogId.Value;
             var productSkus = await _dbContext.ProductCatalogs
                 .AsNoTracking()
-                .Where(item => item.TenantId == tenantId && item.CatalogId == catalogId)
+                .Where(item => item.CatalogId == catalogId)
                 .Select(item => item.ProductSku)
                 .Distinct()
                 .ToListAsync(cancellationToken);
@@ -172,14 +172,14 @@ public sealed class MercadoLivrePublishValidationService
 
             var catalogIds = await _dbContext.PlanCatalogs
                 .AsNoTracking()
-                .Where(item => item.TenantId == tenantId && item.PlanId == planId)
+                .Where(item => item.PlanId == planId)
                 .Select(item => item.CatalogId)
                 .Distinct()
                 .ToListAsync(cancellationToken);
 
             var productSkus = await _dbContext.ProductCatalogs
                 .AsNoTracking()
-                .Where(item => item.TenantId == tenantId && catalogIds.Contains(item.CatalogId))
+                .Where(item => catalogIds.Contains(item.CatalogId))
                 .Select(item => item.ProductSku)
                 .Distinct()
                 .ToListAsync(cancellationToken);

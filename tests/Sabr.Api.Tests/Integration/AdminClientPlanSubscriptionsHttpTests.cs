@@ -37,14 +37,13 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
             await SeedGraphAsync(db, tenantId, slug, clientId);
 
             var activeCatalogId = await db.Catalogs
-                .Where(item => item.TenantId == tenantId && item.IsActive)
+                .Where(item => item.IsActive)
                 .Select(item => item.Id)
                 .FirstAsync();
 
             db.Plans.Add(new Plan
             {
                 Id = planId,
-                TenantId = tenantId,
                 Name = "Plano Mensal Cliente",
                 BillingPeriod = BillingPeriod.Monthly,
                 IsActive = true,
@@ -54,7 +53,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
 
             db.PlanCatalogs.Add(new PlanCatalog
             {
-                TenantId = tenantId,
                 PlanId = planId,
                 CatalogId = activeCatalogId,
                 CreatedAt = DateTimeOffset.UtcNow
@@ -126,7 +124,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
             db.Plans.Add(new Plan
             {
                 Id = otherTenantPlanId,
-                TenantId = tenantB,
                 Name = "Plano Outro Tenant",
                 BillingPeriod = BillingPeriod.Monthly,
                 IsActive = true,
@@ -168,7 +165,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
             db.Plans.Add(new Plan
             {
                 Id = inactivePlanId,
-                TenantId = tenantId,
                 Name = "Plano Inativo",
                 BillingPeriod = BillingPeriod.Monthly,
                 IsActive = false,
@@ -232,14 +228,13 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await SeedGraphAsync(db, tenantId, slug, clientId);
             var activeCatalogId = await db.Catalogs
-                .Where(item => item.TenantId == tenantId && item.IsActive)
+                .Where(item => item.IsActive)
                 .Select(item => item.Id)
                 .FirstAsync();
 
             db.Plans.Add(new Plan
             {
                 Id = planId,
-                TenantId = tenantId,
                 Name = "Plano Estavel",
                 BillingPeriod = BillingPeriod.Monthly,
                 IsActive = true,
@@ -249,7 +244,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
 
             db.PlanCatalogs.Add(new PlanCatalog
             {
-                TenantId = tenantId,
                 PlanId = planId,
                 CatalogId = activeCatalogId,
                 CreatedAt = DateTimeOffset.UtcNow
@@ -311,7 +305,7 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await SeedGraphAsync(db, tenantId, slug, clientId);
             var activeCatalogId = await db.Catalogs
-                .Where(item => item.TenantId == tenantId && item.IsActive)
+                .Where(item => item.IsActive)
                 .Select(item => item.Id)
                 .FirstAsync();
 
@@ -319,7 +313,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
                 new Plan
                 {
                     Id = planMonthly,
-                    TenantId = tenantId,
                     Name = "Plano Mensal",
                     BillingPeriod = BillingPeriod.Monthly,
                     IsActive = true,
@@ -329,7 +322,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
                 new Plan
                 {
                     Id = planQuarterly,
-                    TenantId = tenantId,
                     Name = "Plano Trimestral",
                     BillingPeriod = BillingPeriod.Quarterly,
                     IsActive = true,
@@ -339,7 +331,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
                 new Plan
                 {
                     Id = planSemiannual,
-                    TenantId = tenantId,
                     Name = "Plano Semestral",
                     BillingPeriod = BillingPeriod.Semiannual,
                     IsActive = true,
@@ -349,7 +340,6 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
                 new Plan
                 {
                     Id = planAnnual,
-                    TenantId = tenantId,
                     Name = "Plano Anual",
                     BillingPeriod = BillingPeriod.Annual,
                     IsActive = true,
@@ -358,10 +348,10 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
                 });
 
             db.PlanCatalogs.AddRange(
-                new PlanCatalog { TenantId = tenantId, PlanId = planMonthly, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow },
-                new PlanCatalog { TenantId = tenantId, PlanId = planQuarterly, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow },
-                new PlanCatalog { TenantId = tenantId, PlanId = planSemiannual, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow },
-                new PlanCatalog { TenantId = tenantId, PlanId = planAnnual, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow });
+                new PlanCatalog { PlanId = planMonthly, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow },
+                new PlanCatalog { PlanId = planQuarterly, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow },
+                new PlanCatalog { PlanId = planSemiannual, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow },
+                new PlanCatalog { PlanId = planAnnual, CatalogId = activeCatalogId, CreatedAt = DateTimeOffset.UtcNow });
 
             await db.SaveChangesAsync();
         }
