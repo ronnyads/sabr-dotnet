@@ -55,8 +55,13 @@ public sealed class MercadoLivreOAuthStateService
         payload = default!;
         if (string.IsNullOrWhiteSpace(state))
         {
+            _logger.LogWarning("ML OAuth TryReadState called with null/empty state.");
             return false;
         }
+
+        _logger.LogInformation(
+            "ML OAuth TryReadState called. stateLen={Len} statePrefix={Prefix}",
+            state.Length, state[..Math.Min(30, state.Length)]);
 
         try
         {

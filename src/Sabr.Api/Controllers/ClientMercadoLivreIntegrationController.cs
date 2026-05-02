@@ -150,6 +150,13 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         [FromBody] MercadoLivreCallbackRequest? request,
         CancellationToken cancellationToken)
     {
+        _logger.LogInformation(
+            "ML OAuth POST callback received. hasCode={HasCode} hasState={HasState} stateLen={StateLen} statePrefix={StatePrefix}",
+            !string.IsNullOrWhiteSpace(request?.Code),
+            !string.IsNullOrWhiteSpace(request?.State),
+            request?.State?.Length ?? 0,
+            request?.State?[..Math.Min(30, request?.State?.Length ?? 0)] ?? "(null)");
+
         if (string.IsNullOrWhiteSpace(request?.Code) || string.IsNullOrWhiteSpace(request?.State))
         {
             return BadRequest(new { error = "missing_code_or_state" });
