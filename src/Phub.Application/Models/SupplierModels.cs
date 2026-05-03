@@ -42,3 +42,13 @@ public sealed class UpdatePlatformFinancialConfigRequest
     public long WithdrawalFeeFixedCents { get; set; }
     public int SettlementDelayDays { get; set; }
 }
+
+public sealed class AdminCreateSupplierRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+    public string? CompanyName { get; set; }
+    public string? Document { get; set; }
+    public string? Phone { get; set; }
+}

@@ -34,6 +34,12 @@ public sealed class TenantResolutionMiddleware
             return;
         }
 
+        if (path.StartsWith("/api/v1/client/integrations/tiktokshop/callback", StringComparison.OrdinalIgnoreCase))
+        {
+            await _next(context);
+            return;
+        }
+
         // Dev convenience: allow admin realm to work on localhost without requiring host=admin.*.
         // In production, platform/admin is always derived from the host (admin.sabr.com.br).
         if (env.IsDevelopment() && IsLocalDevHost(context.Request.Host.Host) &&

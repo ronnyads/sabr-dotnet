@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Phub.Application.Models;
 using Phub.Application.Services;
 
 namespace Phub.Api.Controllers;
@@ -25,6 +26,13 @@ public sealed class AdminSuppliersController : ControllerBase
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
         var result = await _service.GetAsync(id, ct);
+        return result.ToActionResult();
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] AdminCreateSupplierRequest request, CancellationToken ct)
+    {
+        var result = await _service.CreateAsync(request, ct);
         return result.ToActionResult();
     }
 

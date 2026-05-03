@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
+using Phub.Application.Security;
 using Phub.Application.Validation;
 using Phub.Domain.Entities;
 using Phub.Domain.Enums;
@@ -69,6 +70,44 @@ public sealed class AdminSupplierService
         supplier.Status = SupplierStatus.Suspended;
         supplier.IsActive = false;
 
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return ServiceResult<SupplierResult>.Success(MapResult(supplier));
+    }
+
+    public async Task<ServiceResult<SupplierResult>> CreateAsync(
+        AdminCreateSupplierRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var errors = new List<ValidationError>();
+        if (string.IsNullOrWhiteSpace(request.Name))
+            errors.Add(new ValidationError("name", "Name is required"));
+        if (string.IsNullOrWhiteSpace(request.Email) || !request.Email.Contains('@'))
+            errors.Add(new ValidationError("email", "Invalid email"));
+        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 8)
+            errors.Add(new ValidationError("password", "Password must be at least 8 characters"));
+        if (errors.Count > 0)
+            return ServiceResult<SupplierResult>.Failure(errors);
+
+        var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var exists = await _dbContext.Suppliers
+            .AnyAsync(s => s.EmailNormalized == normalizedEmail, cancellationToken);
+        if (exists)
+            return ServiceResult<SupplierResult>.Failure(new[] { new ValidationError("email", "Email already registered") });
+
+        var supplier = new Supplier
+        {
+            Name = request.Name.Trim(),
+            Email = request.Email.Trim(),
+            EmailNormalized = normalizedEmail,
+            PasswordHash = PasswordHasher.HashPassword(request.Password),
+            Status = SupplierStatus.Active,
+            IsActive = true,
+            CompanyName = request.CompanyName?.Trim(),
+            Document = request.Document?.Trim(),
+            Phone = request.Phone?.Trim()
+        };
+
+        _dbContext.Suppliers.Add(supplier);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return ServiceResult<SupplierResult>.Success(MapResult(supplier));
     }
