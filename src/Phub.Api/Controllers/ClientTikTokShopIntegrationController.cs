@@ -97,12 +97,12 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
         {
-            return Redirect(BuildClientRedirectTarget("/client/integrations/tiktokshop?tiktok=missing_code_or_state"));
+            return TopLevelRedirect(BuildClientRedirectTarget("/client/integrations/tiktokshop?tiktok=missing_code_or_state"));
         }
 
         if (!_oauthStateService.TryReadState(state, out var payload))
         {
-            return Redirect(BuildClientRedirectTarget("/client/integrations/tiktokshop?tiktok=invalid_state"));
+            return TopLevelRedirect(BuildClientRedirectTarget("/client/integrations/tiktokshop?tiktok=invalid_state"));
         }
 
         try
@@ -113,12 +113,14 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
             if (!result.Succeeded || result.Data == null)
             {
                 _logger.LogWarning(
-                    "TikTok Shop OAuth callback failed without exception. tenantId={TenantId} clientId={ClientId} traceId={TraceId}",
-                    payload.TenantId, payload.ClientId, HttpContext.TraceIdentifier);
-                return Redirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "oauth_error")));
+                    "TikTok Shop OAuth callback failed without exception. tenantId={TenantId} clientId={ClientId} errors={Errors} traceId={TraceId}",
+                    payload.TenantId, payload.ClientId,
+                    string.Join("; ", result.Errors.Select(e => e.Message)),
+                    HttpContext.TraceIdentifier);
+                return TopLevelRedirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "oauth_error")));
             }
 
-            return Redirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "connected")));
+            return TopLevelRedirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "connected")));
         }
         catch (Exception ex)
         {
@@ -126,8 +128,19 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
                 ex,
                 "TikTok Shop OAuth callback failed with exception. tenantId={TenantId} clientId={ClientId} traceId={TraceId}",
                 payload.TenantId, payload.ClientId, HttpContext.TraceIdentifier);
-            return Redirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "oauth_error")));
+            return TopLevelRedirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "oauth_error")));
         }
+    }
+
+    private ContentResult TopLevelRedirect(string url)
+    {
+        var safe = System.Text.Encodings.Web.HtmlEncoder.Default.Encode(url);
+        return Content($"""
+            <!DOCTYPE html>
+            <html><head><meta http-equiv="refresh" content="0;url={safe}"></head>
+            <body><script>try{{window.top.location.href="{safe}"}}catch(_){{window.location.href="{safe}"}}</script></body>
+            </html>
+            """, "text/html");
     }
 
     [HttpPost("reset")]
