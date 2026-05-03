@@ -52,6 +52,13 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<MarketplaceEventLog> MarketplaceEventLogs => Set<MarketplaceEventLog>();
     public DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules => Set<TenantMarketplaceSlaRule>();
     public DbSet<AiPromptConfig> AiPromptConfigs => Set<AiPromptConfig>();
+    public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<SupplierRefreshToken> SupplierRefreshTokens => Set<SupplierRefreshToken>();
+    public DbSet<SupplierProduct> SupplierProducts => Set<SupplierProduct>();
+    public DbSet<SupplierWalletAccount> SupplierWalletAccounts => Set<SupplierWalletAccount>();
+    public DbSet<SupplierWalletEntry> SupplierWalletEntries => Set<SupplierWalletEntry>();
+    public DbSet<SupplierWithdrawal> SupplierWithdrawals => Set<SupplierWithdrawal>();
+    public DbSet<PlatformFinancialConfig> PlatformFinancialConfigs => Set<PlatformFinancialConfig>();
 
     public override int SaveChanges()
     {
@@ -476,6 +483,66 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             }
 
             if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = now;
+            }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<Supplier>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                entry.Entity.CreatedAt = now;
+                entry.Entity.UpdatedAt = now;
+                entry.Entity.EmailNormalized = entry.Entity.Email.Trim().ToLowerInvariant();
+            }
+
+            if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = now;
+                entry.Entity.EmailNormalized = entry.Entity.Email.Trim().ToLowerInvariant();
+            }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<SupplierProduct>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                entry.Entity.CreatedAt = now;
+                entry.Entity.UpdatedAt = now;
+            }
+
+            if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = now;
+            }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<SupplierWalletAccount>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = now;
+            }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<SupplierWalletEntry>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                entry.Entity.CreatedAt = now;
+                entry.Entity.UpdatedAt = now;
+            }
+
+            if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = now;
+            }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<PlatformFinancialConfig>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
             {
                 entry.Entity.UpdatedAt = now;
             }

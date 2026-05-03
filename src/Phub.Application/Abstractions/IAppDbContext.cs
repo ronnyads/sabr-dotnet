@@ -41,6 +41,13 @@ public interface IAppDbContext
     DbSet<MarketplaceEventLog> MarketplaceEventLogs { get; }
     DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules { get; }
     DbSet<AiPromptConfig> AiPromptConfigs { get; }
+    DbSet<Supplier> Suppliers { get; }
+    DbSet<SupplierRefreshToken> SupplierRefreshTokens { get; }
+    DbSet<SupplierProduct> SupplierProducts { get; }
+    DbSet<SupplierWalletAccount> SupplierWalletAccounts { get; }
+    DbSet<SupplierWalletEntry> SupplierWalletEntries { get; }
+    DbSet<SupplierWithdrawal> SupplierWithdrawals { get; }
+    DbSet<PlatformFinancialConfig> PlatformFinancialConfigs { get; }
     Task<long> NextClientProtheusCodeAsync(CancellationToken cancellationToken = default);
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

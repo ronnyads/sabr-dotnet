@@ -341,6 +341,7 @@ builder.Services.AddScoped<ClientService>();
 builder.Services.AddScoped<UserService>();
 builder.Services.AddScoped<PlatformUserService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<SupplierAuthService>();
 builder.Services.AddScoped<MercadoLivreOAuthService>();
 builder.Services.AddScoped<MercadoLivreMappingService>();
 builder.Services.AddScoped<MercadoLivreIntegrationService>();
@@ -545,6 +546,7 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseMiddleware<AdminTenantPathMiddleware>();
 app.UseMiddleware<TenantGuardMiddleware>();
+app.UseMiddleware<SupplierGuardMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
