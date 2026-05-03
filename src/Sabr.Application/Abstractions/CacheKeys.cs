@@ -1,4 +1,4 @@
-namespace Sabr.Application.Abstractions;
+namespace Phub.Application.Abstractions;
 
 /// <summary>
 /// Centraliza todas as chaves de cache do sistema.

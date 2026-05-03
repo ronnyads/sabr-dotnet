@@ -2,9 +2,9 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
-using Sabr.Domain.Enums;
+using Phub.Domain.Enums;
 
-namespace Sabr.Api.Tests.TestHost;
+namespace Phub.Api.Tests.TestHost;
 
 public static class TestJwtFactory
 {

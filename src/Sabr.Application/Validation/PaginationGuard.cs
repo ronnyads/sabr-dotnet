@@ -1,4 +1,4 @@
-namespace Sabr.Application.Validation;
+namespace Phub.Application.Validation;
 
 public static class PaginationGuard
 {

@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace Sabr.Application.Options;
+namespace Phub.Application.Options;
 
 public sealed class TikTokShopOptions
 {

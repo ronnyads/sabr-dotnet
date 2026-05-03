@@ -1,4 +1,4 @@
-namespace Sabr.Application.Validation;
+namespace Phub.Application.Validation;
 
 /// <summary>
 /// Resultado de uma operação de serviço.

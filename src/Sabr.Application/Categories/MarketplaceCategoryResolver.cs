@@ -5,13 +5,13 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Application.Categories;
+namespace Phub.Application.Categories;
 
 public enum CategoryResolutionStatus
 {

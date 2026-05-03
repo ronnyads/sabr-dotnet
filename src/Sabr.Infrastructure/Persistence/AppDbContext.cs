@@ -1,14 +1,14 @@
 ﻿using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using System.Data;
-using Sabr.Application.Abstractions;
-using Sabr.Domain.Common;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.Protheus;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Abstractions;
+using Phub.Domain.Common;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.Protheus;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Infrastructure.Persistence;
+namespace Phub.Infrastructure.Persistence;
 
 public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyContext
 {

@@ -1,7 +1,7 @@
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
 
-namespace Sabr.Api.Swagger;
+namespace Phub.Api.Swagger;
 
 public sealed class RoleContextDocumentFilter : IDocumentFilter
 {

@@ -1,4 +1,4 @@
-namespace Sabr.Api.Models;
+namespace Phub.Api.Models;
 
 public sealed class ChangePasswordRequest
 {

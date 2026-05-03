@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Application.Models;
-using Sabr.Application.Validation;
+using Phub.Application.Models;
+using Phub.Application.Validation;
 
-namespace Sabr.Api;
+namespace Phub.Api;
 
 /// <summary>
 /// Extensões para mapear <see cref="ServiceResult{T}"/> em <see cref="IActionResult"/> HTTP.

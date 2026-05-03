@@ -1,10 +1,10 @@
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Validation;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Validation;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class MercadoLivrePublishValidationService
 {

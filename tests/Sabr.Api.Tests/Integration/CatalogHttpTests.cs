@@ -1,11 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
-using Sabr.Api.Tests.TestHost;
-using Sabr.Application.Models;
-using Sabr.Infrastructure.Persistence;
+using Phub.Api.Tests.TestHost;
+using Phub.Application.Models;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Tests.Integration;
+namespace Phub.Api.Tests.Integration;
 
 public sealed class CatalogHttpTests : IClassFixture<TestWebApplicationFactory>
 {

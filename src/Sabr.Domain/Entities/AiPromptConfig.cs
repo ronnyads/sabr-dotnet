@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 /// <summary>
 /// Configuração de prompts de IA para diferentes features e canais de marketplace.

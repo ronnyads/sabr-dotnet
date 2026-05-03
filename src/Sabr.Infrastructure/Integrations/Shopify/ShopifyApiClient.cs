@@ -1,11 +1,11 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Options;
+using Phub.Application.Abstractions;
+using Phub.Application.Options;
 using Microsoft.Extensions.Options;
 
-namespace Sabr.Infrastructure.Integrations.Shopify;
+namespace Phub.Infrastructure.Integrations.Shopify;
 
 public sealed class ShopifyApiClient : IShopifyApiClient
 {

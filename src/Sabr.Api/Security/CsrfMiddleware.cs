@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Http;
 
-namespace Sabr.Api.Security;
+namespace Phub.Api.Security;
 
 /// <summary>
 /// Double-submit CSRF protection for cookie-based auth endpoints (refresh/logout).

@@ -1,3 +1,3 @@
-namespace Sabr.Application.Validation;
+namespace Phub.Application.Validation;
 
 public sealed record ValidationError(string Field, string Message);

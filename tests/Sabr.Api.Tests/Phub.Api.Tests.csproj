@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Sabr.Api\Sabr.Api.csproj" />
+    <ProjectReference Include="..\..\src\Sabr.Api\Phub.Api.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,6 +1,6 @@
-using Sabr.Domain.Protheus;
+using Phub.Domain.Protheus;
 
-namespace Sabr.Domain.Common;
+namespace Phub.Domain.Common;
 
 public abstract class EntityBase
 {

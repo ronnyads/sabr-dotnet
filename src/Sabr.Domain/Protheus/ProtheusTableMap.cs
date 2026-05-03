@@ -1,7 +1,7 @@
-using Sabr.Domain.Common;
-using Sabr.Domain.Entities;
+using Phub.Domain.Common;
+using Phub.Domain.Entities;
 
-namespace Sabr.Domain.Protheus;
+namespace Phub.Domain.Protheus;
 
 /// <summary>
 /// Centraliza o mapeamento Entidade -> Sigla Protheus (tabela).

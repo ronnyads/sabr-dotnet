@@ -1,4 +1,4 @@
-namespace Sabr.Api.Tenant;
+namespace Phub.Api.Tenant;
 
 public interface ITenantResolver
 {

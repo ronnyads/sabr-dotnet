@@ -1,9 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Sabr.Application.Services;
+using Phub.Application.Services;
 
-namespace Sabr.Infrastructure.Services;
+namespace Phub.Infrastructure.Services;
 
 public sealed class MarketplaceWebhookWorker : BackgroundService
 {

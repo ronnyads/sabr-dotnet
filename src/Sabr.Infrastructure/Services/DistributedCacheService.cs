@@ -1,9 +1,9 @@
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging;
-using Sabr.Application.Abstractions;
+using Phub.Application.Abstractions;
 
-namespace Sabr.Infrastructure.Services;
+namespace Phub.Infrastructure.Services;
 
 /// <summary>
 /// Implementação de <see cref="ICacheService"/> usando <see cref="IDistributedCache"/>.

@@ -3,19 +3,19 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using Sabr.Api.Models;
-using Sabr.Api.Security;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
-using Sabr.Application.Services;
-using Sabr.Domain.Enums;
+using Phub.Api.Models;
+using Phub.Api.Security;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Options;
+using Phub.Application.Services;
+using Phub.Domain.Enums;
 using System.Security.Cryptography;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/admin/auth")]

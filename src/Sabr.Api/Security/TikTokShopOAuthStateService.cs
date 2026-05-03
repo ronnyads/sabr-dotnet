@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 
-namespace Sabr.Api.Security;
+namespace Phub.Api.Security;
 
 public sealed class TikTokShopOAuthStateService
 {

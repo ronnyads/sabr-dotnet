@@ -1,6 +1,6 @@
-using Sabr.Domain.Common;
+using Phub.Domain.Common;
 
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class ClientStore : EntityBase
 {

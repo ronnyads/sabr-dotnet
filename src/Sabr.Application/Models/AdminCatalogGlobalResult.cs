@@ -1,4 +1,4 @@
-namespace Sabr.Application.Models;
+namespace Phub.Application.Models;
 
 /// <summary>
 /// Resultado de catálogo para view global (SuperAdmin).

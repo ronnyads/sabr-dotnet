@@ -1,11 +1,11 @@
 using System;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
-using Sabr.Infrastructure.Persistence;
+using Phub.Infrastructure.Persistence;
 
 #nullable disable
 
-namespace Sabr.Infrastructure.Migrations
+namespace Phub.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
     [Migration("20260214130000_ClientOnboarding")]

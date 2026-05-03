@@ -1,6 +1,6 @@
-using Sabr.Infrastructure.Storage;
+using Phub.Infrastructure.Storage;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class StorageOptionsTests
 {

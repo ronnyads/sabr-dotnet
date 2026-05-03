@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using System.Net;
 
-namespace Sabr.Api.Tenant;
+namespace Phub.Api.Tenant;
 
 public sealed class TenantResolutionMiddleware
 {

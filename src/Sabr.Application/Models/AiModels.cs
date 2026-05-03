@@ -1,4 +1,4 @@
-namespace Sabr.Application.Models;
+namespace Phub.Application.Models;
 
 /// <summary>
 /// Request do admin para criar/atualizar um prompt de IA.

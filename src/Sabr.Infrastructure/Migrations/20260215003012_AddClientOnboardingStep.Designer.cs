@@ -5,11 +5,11 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using Sabr.Infrastructure.Persistence;
+using Phub.Infrastructure.Persistence;
 
 #nullable disable
 
-namespace Sabr.Infrastructure.Migrations
+namespace Phub.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
     [Migration("20260215003012_AddClientOnboardingStep")]
@@ -25,7 +25,7 @@ namespace Sabr.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Client", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Client", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -182,7 +182,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("clients", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientDocument", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientDocument", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -258,7 +258,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("client_documents", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientRefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientRefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -309,7 +309,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("client_refresh_tokens", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientStore", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientStore", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -365,7 +365,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("client_stores", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.RefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -416,7 +416,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("refresh_tokens", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Tenant", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Tenant", b =>
                 {
                     b.Property<string>("Id")
                         .HasMaxLength(40)
@@ -446,7 +446,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("tenants", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.User", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -515,9 +515,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("users", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientDocument", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientDocument", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Client", "Client")
+                    b.HasOne("Phub.Domain.Entities.Client", "Client")
                         .WithMany("Documents")
                         .HasForeignKey("ClientId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -526,9 +526,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("Client");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientRefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientRefreshToken", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Client", "Client")
+                    b.HasOne("Phub.Domain.Entities.Client", "Client")
                         .WithMany()
                         .HasForeignKey("ClientId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -537,9 +537,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("Client");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientStore", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientStore", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Client", "Client")
+                    b.HasOne("Phub.Domain.Entities.Client", "Client")
                         .WithMany("Stores")
                         .HasForeignKey("ClientId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -548,9 +548,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("Client");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.RefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.RefreshToken", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.User", "User")
+                    b.HasOne("Phub.Domain.Entities.User", "User")
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -559,7 +559,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Client", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Client", b =>
                 {
                     b.Navigation("Documents");
 

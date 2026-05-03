@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace Sabr.Infrastructure.Migrations
+namespace Phub.Infrastructure.Migrations
 {
     /// <inheritdoc />
     public partial class AddPlatformUsersOutboxWalletFoundation : Migration

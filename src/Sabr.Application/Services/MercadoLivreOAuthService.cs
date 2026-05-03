@@ -1,14 +1,14 @@
 using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
-using Sabr.Application.Validation;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Options;
+using Phub.Application.Validation;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class MercadoLivreOAuthService
 {

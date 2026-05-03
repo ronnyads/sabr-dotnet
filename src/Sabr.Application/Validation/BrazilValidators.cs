@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Text.RegularExpressions;
 using Brazil.Data;
 
-namespace Sabr.Application.Validation;
+namespace Phub.Application.Validation;
 
 public static class BrazilValidators
 {

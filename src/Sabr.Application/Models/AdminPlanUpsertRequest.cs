@@ -1,7 +1,7 @@
-using Sabr.Domain.Enums;
+using Phub.Domain.Enums;
 using System.Text.Json.Serialization;
 
-namespace Sabr.Application.Models;
+namespace Phub.Application.Models;
 
 public sealed class AdminPlanUpsertRequest
 {

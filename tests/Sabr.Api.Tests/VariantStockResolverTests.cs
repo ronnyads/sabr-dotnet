@@ -1,7 +1,7 @@
-using Sabr.Application.Stock;
-using Sabr.Domain.Entities;
+using Phub.Application.Stock;
+using Phub.Domain.Entities;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class VariantStockResolverTests
 {

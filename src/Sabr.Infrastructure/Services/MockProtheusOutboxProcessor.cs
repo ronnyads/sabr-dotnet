@@ -1,6 +1,6 @@
-using Sabr.Domain.Entities;
+using Phub.Domain.Entities;
 
-namespace Sabr.Infrastructure.Services;
+namespace Phub.Infrastructure.Services;
 
 /// <summary>
 /// Mock processor used until real Protheus sync is plugged in.

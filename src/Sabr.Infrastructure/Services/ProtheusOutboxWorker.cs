@@ -5,11 +5,11 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Infrastructure.Persistence;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Infrastructure.Services;
+namespace Phub.Infrastructure.Services;
 
 public sealed class ProtheusOutboxWorker : BackgroundService
 {

@@ -9,13 +9,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Services;
-using Sabr.Domain.Entities;
-using Sabr.Infrastructure.Persistence;
-using Sabr.Infrastructure.Services;
+using Phub.Application.Abstractions;
+using Phub.Application.Services;
+using Phub.Domain.Entities;
+using Phub.Infrastructure.Persistence;
+using Phub.Infrastructure.Services;
 
-namespace Sabr.Api.Tests.TestHost;
+namespace Phub.Api.Tests.TestHost;
 
 public sealed class MercadoLivreTestWebApplicationFactory : WebApplicationFactory<Program>
 {

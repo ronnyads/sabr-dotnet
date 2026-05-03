@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Sabr.Api.Tests.Quality;
+namespace Phub.Api.Tests.Quality;
 
 public sealed class MigrationsConsistencyTests
 {
@@ -13,7 +13,7 @@ public sealed class MigrationsConsistencyTests
     [Fact]
     public void EveryMigrationFile_MustHaveDesignerAndMigrationAttribute()
     {
-        var migrationsDirectory = Path.Combine(FindRepositoryRoot(), "src", "Sabr.Infrastructure", "Migrations");
+        var migrationsDirectory = Path.Combine(FindRepositoryRoot(), "src", "Phub.Infrastructure", "Migrations");
         Assert.True(Directory.Exists(migrationsDirectory), $"Migrations directory not found: {migrationsDirectory}");
 
         var migrationFiles = Directory.GetFiles(migrationsDirectory, "*.cs", SearchOption.TopDirectoryOnly)

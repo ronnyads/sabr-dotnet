@@ -1,6 +1,6 @@
-using Sabr.Domain.ValueObjects;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class SkuTests
 {

@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Services;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Admin,Finance,SuperAdmin")]
@@ -95,9 +95,9 @@ public sealed class ClientStoresController : ControllerBase
         return Ok(new { success = true });
     }
 
-    private static bool IsClientNotFound<T>(Sabr.Application.Validation.ServiceResult<T> result)
+    private static bool IsClientNotFound<T>(Phub.Application.Validation.ServiceResult<T> result)
         => result.Errors.Any(error => string.Equals(error.Field, "clientId", StringComparison.OrdinalIgnoreCase));
 
-    private static bool IsStoreNotFound<T>(Sabr.Application.Validation.ServiceResult<T> result)
+    private static bool IsStoreNotFound<T>(Phub.Application.Validation.ServiceResult<T> result)
         => result.Errors.Any(error => string.Equals(error.Field, "storeId", StringComparison.OrdinalIgnoreCase));
 }

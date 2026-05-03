@@ -2,11 +2,11 @@ using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Validation;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Validation;
 
-namespace Sabr.Infrastructure.Services;
+namespace Phub.Infrastructure.Services;
 
 public sealed class ViaCepLookupService : ICepLookup
 {

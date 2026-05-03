@@ -1,7 +1,7 @@
-using Sabr.Application.Models;
-using Sabr.Application.Validation;
+using Phub.Application.Models;
+using Phub.Application.Validation;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 /// <summary>
 /// Gerencia a estimativa de taxas do Mercado Livre.

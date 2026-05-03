@@ -1,6 +1,6 @@
-using Sabr.Application.Validation;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Models;
+namespace Phub.Api.Models;
 
 public sealed class AdminApiErrorDetails
 {

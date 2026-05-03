@@ -1,9 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Sabr.Application.Abstractions;
-using Sabr.Domain.Entities;
+using Phub.Application.Abstractions;
+using Phub.Domain.Entities;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class StockAvailabilityService
 {

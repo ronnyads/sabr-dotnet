@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Protheus;
+namespace Phub.Domain.Protheus;
 
 public static class ProtheusTag
 {

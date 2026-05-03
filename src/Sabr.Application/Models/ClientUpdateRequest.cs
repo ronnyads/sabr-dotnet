@@ -1,6 +1,6 @@
-using Sabr.Domain.Enums;
+using Phub.Domain.Enums;
 
-namespace Sabr.Application.Models;
+namespace Phub.Application.Models;
 
 public sealed class ClientUpdateRequest
 {

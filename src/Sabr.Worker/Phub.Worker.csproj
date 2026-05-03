@@ -3,13 +3,13 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>Sabr.Worker</RootNamespace>
+    <RootNamespace>Phub.Worker</RootNamespace>
     <UserSecretsId>709ec69a-c858-44b5-badb-2b275592302d</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sabr.Application\Sabr.Application.csproj" />
-    <ProjectReference Include="..\Sabr.Infrastructure\Sabr.Infrastructure.csproj" />
+    <ProjectReference Include="..\Sabr.Application\Phub.Application.csproj" />
+    <ProjectReference Include="..\Sabr.Infrastructure\Phub.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

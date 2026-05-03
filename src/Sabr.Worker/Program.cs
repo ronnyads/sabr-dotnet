@@ -1,14 +1,14 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Categories;
-using Sabr.Application.Options;
-using Sabr.Application.Services;
-using Sabr.Domain.Protheus;
-using Sabr.Infrastructure.Integrations.Mabang;
-using Sabr.Infrastructure.Integrations.MercadoLivre;
-using Sabr.Infrastructure.Persistence;
-using Sabr.Infrastructure.Services;
+using Phub.Application.Abstractions;
+using Phub.Application.Categories;
+using Phub.Application.Options;
+using Phub.Application.Services;
+using Phub.Domain.Protheus;
+using Phub.Infrastructure.Integrations.Mabang;
+using Phub.Infrastructure.Integrations.MercadoLivre;
+using Phub.Infrastructure.Persistence;
+using Phub.Infrastructure.Services;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -124,7 +124,7 @@ try
 }
 catch (Exception ex) when (ex is not OperationCanceledException)
 {
-    Log.Fatal(ex, "Sabr.Worker terminated unexpectedly");
+    Log.Fatal(ex, "Phub.Worker terminated unexpectedly");
 }
 finally
 {

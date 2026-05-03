@@ -1,12 +1,12 @@
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Security;
-using Sabr.Application.Services;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.Protheus;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Security;
+using Phub.Application.Services;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.Protheus;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Infrastructure.Persistence.Seeding;
+namespace Phub.Infrastructure.Persistence.Seeding;
 
 public sealed class StagingFakeSeeder
 {
@@ -167,7 +167,7 @@ public sealed class StagingFakeSeeder
                 {
                     Sku = sku,
                     Name = item.Name,
-                    Brand = "SABR",
+                    Brand = "PHUB",
                     CategoryId = ProductAdminService.UncategorizedSlug,
                     CostPriceCents = item.CostPriceCents,
                     CatalogPriceCents = item.CatalogPriceCents,
@@ -179,7 +179,7 @@ public sealed class StagingFakeSeeder
             }
 
             product.Name = item.Name;
-            product.Brand = string.IsNullOrWhiteSpace(product.Brand) ? "SABR" : product.Brand;
+            product.Brand = string.IsNullOrWhiteSpace(product.Brand) ? "PHUB" : product.Brand;
             product.CategoryId = string.IsNullOrWhiteSpace(product.CategoryId) ? ProductAdminService.UncategorizedSlug : product.CategoryId;
             product.CostPriceCents = item.CostPriceCents;
             product.CatalogPriceCents = item.CatalogPriceCents;

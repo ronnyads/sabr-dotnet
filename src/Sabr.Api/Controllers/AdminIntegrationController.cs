@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Sabr.Domain.Enums;
-using Sabr.Infrastructure.Persistence;
+using Phub.Domain.Enums;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Admin,SuperAdmin")]

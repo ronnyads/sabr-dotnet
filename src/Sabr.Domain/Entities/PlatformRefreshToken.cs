@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class PlatformRefreshToken
 {

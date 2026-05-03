@@ -4,15 +4,15 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Sabr.Api.Tests.TestHost;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.Protheus;
-using Sabr.Infrastructure.Persistence;
+using Phub.Api.Tests.TestHost;
+using Phub.Application.Models;
+using Phub.Application.Services;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.Protheus;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Tests.Integration;
+namespace Phub.Api.Tests.Integration;
 
 public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivreTestWebApplicationFactory>
 {
@@ -1307,7 +1307,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         if (!await db.Tenants.AnyAsync(item => item.Id == tenantId))
         {
-            db.Tenants.Add(new Sabr.Domain.Entities.Tenant
+            db.Tenants.Add(new Phub.Domain.Entities.Tenant
             {
                 Id = tenantId,
                 Name = $"Tenant {tenantSlug}",
@@ -1346,7 +1346,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         if (!await db.Tenants.AnyAsync(item => item.Id == tenantId))
         {
-            db.Tenants.Add(new Sabr.Domain.Entities.Tenant
+            db.Tenants.Add(new Phub.Domain.Entities.Tenant
             {
                 Id = tenantId,
                 Name = $"Tenant {tenantSlug}",

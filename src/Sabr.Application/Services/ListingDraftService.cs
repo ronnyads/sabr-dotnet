@@ -8,17 +8,17 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Categories;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
-using Sabr.Application.Stock;
-using Sabr.Application.Validation;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Abstractions;
+using Phub.Application.Categories;
+using Phub.Application.Models;
+using Phub.Application.Options;
+using Phub.Application.Stock;
+using Phub.Application.Validation;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class ListingDraftService :
     IListingDraftCrudService,
@@ -33,7 +33,7 @@ public sealed class ListingDraftService :
     private const string AxisValidationMetadataSeparator = "::";
     private const string MercadoLivreChannel = "mercadolivre";
     private const int MaxTitleLength = 60;
-    private static readonly Meter PublishMeter = new("Sabr.ListingDraft.Publish", "1.0.0");
+    private static readonly Meter PublishMeter = new("Phub.ListingDraft.Publish", "1.0.0");
     private static readonly Counter<long> MlPublishInputInvalidCounter = PublishMeter.CreateCounter<long>("ml_publish_input_invalid_total");
     private static readonly Counter<long> MlPublishUnavailableCounter = PublishMeter.CreateCounter<long>("ml_publish_unavailable_total");
     private static readonly Counter<long> MlPublishAuthInvalidCounter = PublishMeter.CreateCounter<long>("ml_publish_auth_invalid_total");

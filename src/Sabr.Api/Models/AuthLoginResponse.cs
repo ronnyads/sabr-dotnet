@@ -1,6 +1,6 @@
-using Sabr.Application.Models;
+using Phub.Application.Models;
 
-namespace Sabr.Api.Models;
+namespace Phub.Api.Models;
 
 public sealed class AuthLoginResponse
 {

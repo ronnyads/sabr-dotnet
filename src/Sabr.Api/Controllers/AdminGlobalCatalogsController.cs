@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Api.Models;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
-using Sabr.Application.Validation;
+using Phub.Api.Models;
+using Phub.Application.Models;
+using Phub.Application.Services;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 /// <summary>
 /// Gerencia catálogos globais da plataforma (sem tenant).

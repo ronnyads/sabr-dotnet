@@ -1,6 +1,6 @@
-using Sabr.Domain.Enums;
+using Phub.Domain.Enums;
 
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class IdempotencyKey
 {

@@ -3,10 +3,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Options;
+using Phub.Application.Abstractions;
+using Phub.Application.Options;
 
-namespace Sabr.Infrastructure.Integrations.TikTokShop;
+namespace Phub.Infrastructure.Integrations.TikTokShop;
 
 public sealed class TikTokShopApiClient : ITikTokShopApiClient
 {

@@ -2,14 +2,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Services;
-using Sabr.Application.Validation;
-using Sabr.Domain.Entities;
-using Sabr.Infrastructure.Persistence;
-using Sabr.Infrastructure.Services;
+using Phub.Application.Abstractions;
+using Phub.Application.Services;
+using Phub.Application.Validation;
+using Phub.Domain.Entities;
+using Phub.Infrastructure.Persistence;
+using Phub.Infrastructure.Services;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 /// <summary>
 /// Testes unitários para AdminCategoryService.

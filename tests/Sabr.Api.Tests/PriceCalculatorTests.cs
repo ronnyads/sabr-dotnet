@@ -1,7 +1,7 @@
-using Sabr.Application.Services;
-using Sabr.Domain.Enums;
+using Phub.Application.Services;
+using Phub.Domain.Enums;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class PriceCalculatorTests
 {

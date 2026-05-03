@@ -1,10 +1,10 @@
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Validation;
-using Sabr.Domain.Entities;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Validation;
+using Phub.Domain.Entities;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 /// <summary>
 /// Serviço para gerenciar configurações de prompts de IA.

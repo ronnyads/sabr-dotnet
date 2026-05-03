@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Sabr.Api.Middleware;
+namespace Phub.Api.Middleware;
 
 public sealed class CorrelationIdMiddleware
 {

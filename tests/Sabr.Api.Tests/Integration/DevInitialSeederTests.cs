@@ -1,11 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Sabr.Api.Tests.TestHost;
-using Sabr.Domain.Enums;
-using Sabr.Infrastructure.Persistence;
-using Sabr.Infrastructure.Persistence.Seeding;
+using Phub.Api.Tests.TestHost;
+using Phub.Domain.Enums;
+using Phub.Infrastructure.Persistence;
+using Phub.Infrastructure.Persistence.Seeding;
 
-namespace Sabr.Api.Tests.Integration;
+namespace Phub.Api.Tests.Integration;
 
 public sealed class DevInitialSeederTests : IClassFixture<TestWebApplicationFactory>
 {

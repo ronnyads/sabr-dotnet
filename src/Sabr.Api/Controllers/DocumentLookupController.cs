@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Exceptions;
-using Sabr.Application.Validation;
+using Phub.Application.Abstractions;
+using Phub.Application.Exceptions;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [EnableRateLimiting("document-lookup")]

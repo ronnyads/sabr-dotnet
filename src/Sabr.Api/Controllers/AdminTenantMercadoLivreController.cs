@@ -1,12 +1,12 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
-using Sabr.Application.Validation;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Services;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Admin,SuperAdmin")]

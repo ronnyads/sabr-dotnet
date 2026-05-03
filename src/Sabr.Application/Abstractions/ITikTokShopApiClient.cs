@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Sabr.Application.Abstractions;
+namespace Phub.Application.Abstractions;
 
 public interface ITikTokShopApiClient
 {

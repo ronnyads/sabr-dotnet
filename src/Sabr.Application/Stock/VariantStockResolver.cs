@@ -1,7 +1,7 @@
-using Sabr.Domain.Entities;
-using Sabr.Domain.ValueObjects;
+using Phub.Domain.Entities;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Application.Stock;
+namespace Phub.Application.Stock;
 
 public enum StockSource
 {

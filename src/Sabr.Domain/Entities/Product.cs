@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class Product
 {
@@ -6,7 +6,7 @@ public sealed class Product
     public string Sku
     {
         get => _sku;
-        set => _sku = global::Sabr.Domain.ValueObjects.Sku.Normalize(value);
+        set => _sku = global::Phub.Domain.ValueObjects.Sku.Normalize(value);
     }
     public string Name { get; set; } = string.Empty;
     public string Brand { get; set; } = string.Empty;

@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Http;
-using Sabr.Api.Security;
+using Phub.Api.Security;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class CsrfMiddlewareTests
 {

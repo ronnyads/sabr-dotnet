@@ -1,8 +1,8 @@
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
-using Sabr.Api.Options;
+using Phub.Api.Options;
 
-namespace Sabr.Api.Security;
+namespace Phub.Api.Security;
 
 public sealed class LoginAttemptService
 {

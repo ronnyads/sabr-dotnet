@@ -5,11 +5,11 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using Sabr.Infrastructure.Persistence;
+using Phub.Infrastructure.Persistence;
 
 #nullable disable
 
-namespace Sabr.Infrastructure.Migrations
+namespace Phub.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
     [Migration("20260402222128_MakeCatalogsGlobal")]
@@ -25,7 +25,7 @@ namespace Sabr.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("Sabr.Domain.Entities.AiPromptConfig", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.AiPromptConfig", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -61,7 +61,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("AiPromptConfigs");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.AuditEvent", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.AuditEvent", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -121,7 +121,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("audit_events", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Catalog", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Catalog", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -163,7 +163,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("catalogs", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Category", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Category", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -226,7 +226,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Client", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Client", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -383,7 +383,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("clients", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientDocument", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientDocument", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -467,7 +467,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("client_documents", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientPlanSubscription", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientPlanSubscription", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -525,7 +525,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("client_plan_subscriptions", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientRefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientRefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -576,7 +576,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("client_refresh_tokens", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientStore", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientStore", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -632,7 +632,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("client_stores", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.IdempotencyKey", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.IdempotencyKey", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -691,7 +691,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("idempotency_keys", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ListingDraft", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ListingDraft", b =>
                 {
                     b.Property<Guid>("DraftId")
                         .ValueGeneratedOnAdd()
@@ -844,7 +844,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.MarketplaceEventLog", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.MarketplaceEventLog", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -943,7 +943,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("marketplace_event_logs", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.MarketplaceOrder", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.MarketplaceOrder", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1039,7 +1039,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("marketplace_orders", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.MarketplaceOrderItem", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.MarketplaceOrderItem", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1129,7 +1129,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.MarketplaceShipment", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.MarketplaceShipment", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1252,7 +1252,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("marketplace_shipments", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Plan", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Plan", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1302,7 +1302,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.PlanCatalog", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.PlanCatalog", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1342,7 +1342,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("plan_catalogs", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.PlatformRefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.PlatformRefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1386,7 +1386,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("platform_refresh_tokens", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.PlatformUser", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.PlatformUser", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1452,7 +1452,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("platform_users", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Product", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Product", b =>
                 {
                     b.Property<string>("Sku")
                         .HasMaxLength(64)
@@ -1572,7 +1572,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ProductCatalog", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ProductCatalog", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1608,7 +1608,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ProductImage", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ProductImage", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1667,7 +1667,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ProductMarketplaceCategoryLock", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ProductMarketplaceCategoryLock", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1751,7 +1751,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ProductPriceHistory", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ProductPriceHistory", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1809,7 +1809,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ProductVariant", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ProductVariant", b =>
                 {
                     b.Property<string>("VariantSku")
                         .HasMaxLength(64)
@@ -1888,7 +1888,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ProtheusOutboxEvent", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ProtheusOutboxEvent", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -1967,7 +1967,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("protheus_outbox", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Publication", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Publication", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2071,7 +2071,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.RefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2122,7 +2122,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("refresh_tokens", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.StockReservation", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.StockReservation", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2197,7 +2197,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Tenant", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Tenant", b =>
                 {
                     b.Property<string>("Id")
                         .HasMaxLength(40)
@@ -2227,7 +2227,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("tenants", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.TenantMarketplaceConnection", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.TenantMarketplaceConnection", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2294,7 +2294,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("tenant_marketplace_connections", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.TenantMarketplaceListingMap", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.TenantMarketplaceListingMap", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2372,7 +2372,7 @@ namespace Sabr.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.TenantMarketplaceSlaRule", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.TenantMarketplaceSlaRule", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2427,7 +2427,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("tenant_marketplace_sla_rules", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.User", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2496,7 +2496,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("users", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.WalletAccount", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.WalletAccount", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2528,7 +2528,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("wallet_accounts", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.WalletLedgerEntry", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.WalletLedgerEntry", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -2588,17 +2588,17 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("wallet_ledger", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Category", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Category", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Category", null)
+                    b.HasOne("Phub.Domain.Entities.Category", null)
                         .WithMany()
                         .HasForeignKey("ParentId")
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientDocument", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientDocument", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Client", "Client")
+                    b.HasOne("Phub.Domain.Entities.Client", "Client")
                         .WithMany("Documents")
                         .HasForeignKey("ClientId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -2607,9 +2607,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("Client");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientRefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientRefreshToken", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Client", "Client")
+                    b.HasOne("Phub.Domain.Entities.Client", "Client")
                         .WithMany()
                         .HasForeignKey("ClientId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -2618,9 +2618,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("Client");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ClientStore", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ClientStore", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Client", "Client")
+                    b.HasOne("Phub.Domain.Entities.Client", "Client")
                         .WithMany("Stores")
                         .HasForeignKey("ClientId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -2629,9 +2629,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("Client");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.MarketplaceOrderItem", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.MarketplaceOrderItem", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.MarketplaceOrder", "MarketplaceOrder")
+                    b.HasOne("Phub.Domain.Entities.MarketplaceOrder", "MarketplaceOrder")
                         .WithMany("Items")
                         .HasForeignKey("MarketplaceOrderId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -2640,9 +2640,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("MarketplaceOrder");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.PlatformRefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.PlatformRefreshToken", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.PlatformUser", "PlatformUser")
+                    b.HasOne("Phub.Domain.Entities.PlatformUser", "PlatformUser")
                         .WithMany()
                         .HasForeignKey("PlatformUserId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -2651,18 +2651,18 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("PlatformUser");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.ProductVariant", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.ProductVariant", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Product", null)
+                    b.HasOne("Phub.Domain.Entities.Product", null)
                         .WithMany()
                         .HasForeignKey("BaseSku")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.RefreshToken", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.RefreshToken", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.User", "User")
+                    b.HasOne("Phub.Domain.Entities.User", "User")
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -2671,35 +2671,35 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.StockReservation", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.StockReservation", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.MarketplaceOrder", null)
+                    b.HasOne("Phub.Domain.Entities.MarketplaceOrder", null)
                         .WithMany()
                         .HasForeignKey("MarketplaceOrderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Sabr.Domain.Entities.MarketplaceOrderItem", null)
+                    b.HasOne("Phub.Domain.Entities.MarketplaceOrderItem", null)
                         .WithMany()
                         .HasForeignKey("MarketplaceOrderItemId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Sabr.Domain.Entities.ProductVariant", null)
+                    b.HasOne("Phub.Domain.Entities.ProductVariant", null)
                         .WithMany()
                         .HasForeignKey("SabrVariantSku")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Client", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Client", b =>
                 {
                     b.Navigation("Documents");
 
                     b.Navigation("Stores");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.MarketplaceOrder", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.MarketplaceOrder", b =>
                 {
                     b.Navigation("Items");
                 });

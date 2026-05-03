@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Validation;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/utils")]

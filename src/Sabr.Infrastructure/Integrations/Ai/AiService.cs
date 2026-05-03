@@ -1,9 +1,9 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Infrastructure.Options;
+using Phub.Application.Abstractions;
+using Phub.Infrastructure.Options;
 
-namespace Sabr.Infrastructure.Integrations.Ai;
+namespace Phub.Infrastructure.Integrations.Ai;
 
 /// <summary>
 /// Implementação de IAiService usando Anthropic Claude API via HTTP.

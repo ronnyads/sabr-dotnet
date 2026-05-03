@@ -1,4 +1,4 @@
-namespace Sabr.Application.Exceptions;
+namespace Phub.Application.Exceptions;
 
 public sealed class ExternalServiceUnavailableException : Exception
 {

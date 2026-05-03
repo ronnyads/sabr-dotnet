@@ -4,18 +4,18 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Sabr.Api.Tenant;
-using DomainTenant = Sabr.Domain.Entities.Tenant;
-using Sabr.Infrastructure.Persistence;
+using Phub.Api.Tenant;
+using DomainTenant = Phub.Domain.Entities.Tenant;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class TenantResolverTests
 {
     private sealed class TestHostEnvironment : IWebHostEnvironment
     {
         public string EnvironmentName { get; set; } = Environments.Development;
-        public string ApplicationName { get; set; } = "Sabr.Api.Tests";
+        public string ApplicationName { get; set; } = "Phub.Api.Tests";
         public string WebRootPath { get; set; } = string.Empty;
         public IFileProvider WebRootFileProvider { get; set; } = default!;
         public string ContentRootPath { get; set; } = string.Empty;
@@ -42,7 +42,7 @@ public sealed class TenantResolverTests
     {
         await using var db = CreateDb();
         var tenantId = Guid.NewGuid().ToString("N");
-        db.Tenants.Add(new DomainTenant { Id = tenantId, Slug = "loja", Name = "Loja", Status = Sabr.Domain.Enums.TenantStatus.Active });
+        db.Tenants.Add(new DomainTenant { Id = tenantId, Slug = "loja", Name = "Loja", Status = Phub.Domain.Enums.TenantStatus.Active });
         await db.SaveChangesAsync();
 
         var env = new TestHostEnvironment { EnvironmentName = Environments.Production };
@@ -112,7 +112,7 @@ public sealed class TenantResolverTests
     {
         await using var db = CreateDb();
         var tenantId = Guid.NewGuid().ToString("N");
-        db.Tenants.Add(new DomainTenant { Id = tenantId, Slug = "loja", Name = "Loja", Status = Sabr.Domain.Enums.TenantStatus.Active });
+        db.Tenants.Add(new DomainTenant { Id = tenantId, Slug = "loja", Name = "Loja", Status = Phub.Domain.Enums.TenantStatus.Active });
         await db.SaveChangesAsync();
 
         var env = new TestHostEnvironment { EnvironmentName = Environments.Development };
@@ -134,7 +134,7 @@ public sealed class TenantResolverTests
     {
         await using var db = CreateDb();
         var tenantId = Guid.NewGuid().ToString("N");
-        db.Tenants.Add(new DomainTenant { Id = tenantId, Slug = "loja", Name = "Loja", Status = Sabr.Domain.Enums.TenantStatus.Active });
+        db.Tenants.Add(new DomainTenant { Id = tenantId, Slug = "loja", Name = "Loja", Status = Phub.Domain.Enums.TenantStatus.Active });
         await db.SaveChangesAsync();
 
         var env = new TestHostEnvironment { EnvironmentName = Environments.Development };

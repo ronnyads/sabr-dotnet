@@ -1,12 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Infrastructure.Persistence;
+using Phub.Application.Models;
+using Phub.Application.Services;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class MyProductsServiceTests
 {

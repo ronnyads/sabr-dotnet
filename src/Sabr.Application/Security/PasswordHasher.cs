@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace Sabr.Application.Security;
+namespace Phub.Application.Security;
 
 public static class PasswordHasher
 {

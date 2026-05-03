@@ -2,10 +2,10 @@ using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Sabr.Domain.Enums;
-using Sabr.Infrastructure.Persistence;
+using Phub.Domain.Enums;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Tenant;
+namespace Phub.Api.Tenant;
 
 public sealed class TenantResolver : ITenantResolver
 {

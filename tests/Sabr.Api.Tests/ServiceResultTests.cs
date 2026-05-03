@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Api;
-using Sabr.Application.Validation;
+using Phub.Api;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 /// <summary>
 /// Testes unitários para ServiceResult&lt;T&gt; e ServiceResultExtensions.
@@ -153,7 +153,7 @@ public sealed class ServiceResultTests
         var action = result.ToActionResult(traceId: "trace-xyz");
 
         var obj = Assert.IsType<ObjectResult>(action);
-        var error = Assert.IsType<Sabr.Application.Models.ApiError>(obj.Value);
+        var error = Assert.IsType<Phub.Application.Models.ApiError>(obj.Value);
         Assert.Equal("trace-xyz", error.TraceId);
     }
 }

@@ -1,9 +1,9 @@
 using Microsoft.EntityFrameworkCore;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.Protheus;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.Protheus;
 
-namespace Sabr.Api.Tests.TestHost;
+namespace Phub.Api.Tests.TestHost;
 
 public static class TestDataSeeder
 {
@@ -13,13 +13,13 @@ public static class TestDataSeeder
         string slug,
         CancellationToken cancellationToken = default)
     {
-        var db = (Sabr.Infrastructure.Persistence.AppDbContext)dbContext;
+        var db = (Phub.Infrastructure.Persistence.AppDbContext)dbContext;
         if (await db.Tenants.AnyAsync(t => t.Id == tenantId, cancellationToken))
         {
             return;
         }
 
-        db.Tenants.Add(new Sabr.Domain.Entities.Tenant
+        db.Tenants.Add(new Phub.Domain.Entities.Tenant
         {
             Id = tenantId,
             Name = $"Tenant {slug}",
@@ -38,7 +38,7 @@ public static class TestDataSeeder
         string? blockedSku = null,
         CancellationToken cancellationToken = default)
     {
-        var db = (Sabr.Infrastructure.Persistence.AppDbContext)dbContext;
+        var db = (Phub.Infrastructure.Persistence.AppDbContext)dbContext;
         var now = DateTimeOffset.UtcNow;
 
         if (!await db.Clients.AnyAsync(c => c.Id == clientId, cancellationToken))

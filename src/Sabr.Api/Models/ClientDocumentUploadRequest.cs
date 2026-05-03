@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Http;
-using Sabr.Domain.Enums;
+using Phub.Domain.Enums;
 
-namespace Sabr.Api.Models;
+namespace Phub.Api.Models;
 
 public sealed class ClientDocumentUploadRequest
 {

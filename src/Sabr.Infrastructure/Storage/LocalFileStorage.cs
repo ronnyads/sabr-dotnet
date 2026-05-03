@@ -1,6 +1,6 @@
-using Sabr.Application.Abstractions;
+using Phub.Application.Abstractions;
 
-namespace Sabr.Infrastructure.Storage;
+namespace Phub.Infrastructure.Storage;
 
 public sealed class LocalFileStorage : IFileStorage
 {

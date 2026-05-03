@@ -1,6 +1,6 @@
-using Sabr.Application.Models;
+using Phub.Application.Models;
 
-namespace Sabr.Application.Abstractions;
+namespace Phub.Application.Abstractions;
 
 public interface IMabangApiClient
 {

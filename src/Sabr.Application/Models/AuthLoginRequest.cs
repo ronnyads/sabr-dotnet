@@ -1,4 +1,4 @@
-namespace Sabr.Application.Models;
+namespace Phub.Application.Models;
 
 public sealed class AuthLoginRequest
 {

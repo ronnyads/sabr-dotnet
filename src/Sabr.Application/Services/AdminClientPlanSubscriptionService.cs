@@ -1,13 +1,13 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Validation;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Validation;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class AdminClientPlanSubscriptionService
 {

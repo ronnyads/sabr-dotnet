@@ -2,13 +2,13 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
-using Sabr.Api.Tests.TestHost;
-using Sabr.Application.Models;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Infrastructure.Persistence;
+using Phub.Api.Tests.TestHost;
+using Phub.Application.Models;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Tests.Integration;
+namespace Phub.Api.Tests.Integration;
 
 public sealed class AdminCatalogsHttpTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -187,7 +187,7 @@ public sealed class AdminCatalogsHttpTests : IClassFixture<TestWebApplicationFac
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.Tenants.Add(new Sabr.Domain.Entities.Tenant
+            db.Tenants.Add(new Phub.Domain.Entities.Tenant
             {
                 Id = tenantId,
                 Name = "Tenant Inativo",

@@ -1,10 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Options;
 
-namespace Sabr.Infrastructure.Integrations.Mabang;
+namespace Phub.Infrastructure.Integrations.Mabang;
 
 public sealed class MabangApiClient : IMabangApiClient
 {

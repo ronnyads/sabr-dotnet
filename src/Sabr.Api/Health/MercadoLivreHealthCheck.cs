@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Sabr.Application.Abstractions;
+using Phub.Application.Abstractions;
 
-namespace Sabr.Api.Health;
+namespace Phub.Api.Health;
 
 /// <summary>
 /// Verifica se a API do Mercado Livre está acessível (ping no endpoint de categorias).

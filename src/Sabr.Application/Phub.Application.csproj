@@ -3,11 +3,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>Sabr.Application</RootNamespace>
+    <RootNamespace>Phub.Application</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sabr.Domain\Sabr.Domain.csproj" />
+    <ProjectReference Include="..\Sabr.Domain\Phub.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

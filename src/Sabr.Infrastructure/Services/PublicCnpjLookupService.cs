@@ -3,12 +3,12 @@ using System.Net.Http.Json;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Exceptions;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
+using Phub.Application.Abstractions;
+using Phub.Application.Exceptions;
+using Phub.Application.Models;
+using Phub.Application.Options;
 
-namespace Sabr.Infrastructure.Services;
+namespace Phub.Infrastructure.Services;
 
 public sealed class PublicCnpjLookupService : IDocumentLookup
 {

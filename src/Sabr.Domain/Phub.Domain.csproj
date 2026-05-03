@@ -3,6 +3,6 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>Sabr.Domain</RootNamespace>
+    <RootNamespace>Phub.Domain</RootNamespace>
   </PropertyGroup>
 </Project>

@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore.Migrations;
 
-namespace Sabr.Infrastructure.Migrations
+namespace Phub.Infrastructure.Migrations
 {
     /// <inheritdoc />
     public partial class SeedAiPrompts : Migration

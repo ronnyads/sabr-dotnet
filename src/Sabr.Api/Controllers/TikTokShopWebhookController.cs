@@ -6,13 +6,13 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
-using Sabr.Application.Services;
-using Sabr.Domain.Enums;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Options;
+using Phub.Application.Services;
+using Phub.Domain.Enums;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [AllowAnonymous]

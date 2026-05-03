@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sabr.Infrastructure.Services;
+using Phub.Infrastructure.Services;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 /// <summary>
 /// Testes unitários para DistributedCacheService (usando MemoryDistributedCache).

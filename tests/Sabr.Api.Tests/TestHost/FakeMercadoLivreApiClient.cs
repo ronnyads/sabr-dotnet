@@ -1,7 +1,7 @@
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
 
-namespace Sabr.Api.Tests.TestHost;
+namespace Phub.Api.Tests.TestHost;
 
 public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
 {

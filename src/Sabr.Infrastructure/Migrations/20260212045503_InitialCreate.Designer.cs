@@ -5,11 +5,11 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using Sabr.Infrastructure.Persistence;
+using Phub.Infrastructure.Persistence;
 
 #nullable disable
 
-namespace Sabr.Infrastructure.Migrations
+namespace Phub.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
     [Migration("20260212045503_InitialCreate")]
@@ -25,7 +25,7 @@ namespace Sabr.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Customer", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Customer", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -143,7 +143,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("customers", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Seller", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Seller", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -281,7 +281,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("sellers", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.SellerDocument", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.SellerDocument", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -357,7 +357,7 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("seller_documents", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.User", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -431,9 +431,9 @@ namespace Sabr.Infrastructure.Migrations
                     b.ToTable("users", (string)null);
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.SellerDocument", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.SellerDocument", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Seller", "Seller")
+                    b.HasOne("Phub.Domain.Entities.Seller", "Seller")
                         .WithMany("Documents")
                         .HasForeignKey("SellerId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -442,16 +442,16 @@ namespace Sabr.Infrastructure.Migrations
                     b.Navigation("Seller");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.User", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.User", b =>
                 {
-                    b.HasOne("Sabr.Domain.Entities.Seller", "Seller")
+                    b.HasOne("Phub.Domain.Entities.Seller", "Seller")
                         .WithMany("Users")
                         .HasForeignKey("SellerId");
 
                     b.Navigation("Seller");
                 });
 
-            modelBuilder.Entity("Sabr.Domain.Entities.Seller", b =>
+            modelBuilder.Entity("Phub.Domain.Entities.Seller", b =>
                 {
                     b.Navigation("Documents");
 

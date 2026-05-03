@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class ProductVariant
 {
@@ -6,14 +6,14 @@ public sealed class ProductVariant
     public string VariantSku
     {
         get => _variantSku;
-        set => _variantSku = global::Sabr.Domain.ValueObjects.Sku.Normalize(value);
+        set => _variantSku = global::Phub.Domain.ValueObjects.Sku.Normalize(value);
     }
 
     private string _baseSku = string.Empty;
     public string BaseSku
     {
         get => _baseSku;
-        set => _baseSku = global::Sabr.Domain.ValueObjects.Sku.Normalize(value);
+        set => _baseSku = global::Phub.Domain.ValueObjects.Sku.Normalize(value);
     }
 
     public string Name { get; set; } = string.Empty;

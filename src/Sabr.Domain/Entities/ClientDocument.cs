@@ -1,7 +1,7 @@
-using Sabr.Domain.Common;
-using Sabr.Domain.Enums;
+using Phub.Domain.Common;
+using Phub.Domain.Enums;
 
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class ClientDocument : EntityBase
 {

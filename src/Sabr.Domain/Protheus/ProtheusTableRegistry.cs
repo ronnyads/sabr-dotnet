@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Protheus;
+namespace Phub.Domain.Protheus;
 
 /// <summary>
 /// Central catalogue of mock Protheus tables available in the system.

@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Abstractions;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Abstractions;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class CatalogAuthorizationService
 {

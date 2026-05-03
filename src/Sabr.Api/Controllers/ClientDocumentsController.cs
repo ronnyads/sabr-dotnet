@@ -1,14 +1,14 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Sabr.Api.Models;
-using Sabr.Application.Abstractions;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.Protheus;
-using Sabr.Infrastructure.Storage;
+using Phub.Api.Models;
+using Phub.Application.Abstractions;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.Protheus;
+using Phub.Infrastructure.Storage;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize]

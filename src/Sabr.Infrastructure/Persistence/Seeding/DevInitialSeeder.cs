@@ -1,14 +1,14 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Models;
-using Sabr.Application.Security;
-using Sabr.Application.Services;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.Protheus;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Models;
+using Phub.Application.Security;
+using Phub.Application.Services;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.Protheus;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Infrastructure.Persistence.Seeding;
+namespace Phub.Infrastructure.Persistence.Seeding;
 
 public sealed class DevInitialSeeder
 {
@@ -769,7 +769,7 @@ public sealed class DevInitialSeeder
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private static string FormatErrors(IReadOnlyCollection<Sabr.Application.Validation.ValidationError> errors)
+    private static string FormatErrors(IReadOnlyCollection<Phub.Application.Validation.ValidationError> errors)
     {
         if (errors.Count == 0)
         {
@@ -850,7 +850,7 @@ public sealed class DevInitialSeeder
             new ProductSeed(
                 BaseSku: "SABR-TERMICA-001",
                 Name: "Bolsa Termica Compacta 10L",
-                Brand: "SABR",
+                Brand: "PHUB",
                 Ncm: "42029200",
                 Ean: "7891234567895",
                 Description: "Bolsa Termica compacta para transporte diario de alimentos.",
@@ -869,7 +869,7 @@ public sealed class DevInitialSeeder
             new ProductSeed(
                 BaseSku: "SABR-COOLER-020",
                 Name: "Caixa Termica 20L",
-                Brand: "SABR",
+                Brand: "PHUB",
                 Ncm: "39231090",
                 Ean: "7891234567009",
                 Description: "Caixa Termica para camping e praia com tampa reforcada.",

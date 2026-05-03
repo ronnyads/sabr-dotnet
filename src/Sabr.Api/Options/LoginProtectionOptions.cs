@@ -1,4 +1,4 @@
-namespace Sabr.Api.Options;
+namespace Phub.Api.Options;
 
 public sealed class LoginProtectionOptions
 {

@@ -1,6 +1,6 @@
-using Sabr.Domain.Enums;
+using Phub.Domain.Enums;
 
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class Publication
 {
@@ -11,7 +11,7 @@ public sealed class Publication
     public string ProductSku
     {
         get => _productSku;
-        set => _productSku = global::Sabr.Domain.ValueObjects.Sku.Normalize(value);
+        set => _productSku = global::Phub.Domain.ValueObjects.Sku.Normalize(value);
     }
     public PublicationStatus Status { get; set; } = PublicationStatus.Draft;
     public PricingMode PricingMode { get; set; } = PricingMode.CatalogPrice;

@@ -1,16 +1,16 @@
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using Sabr.Application.Security;
-using Sabr.Application.Validation;
-using Sabr.Domain.Protheus;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
+using Phub.Application.Security;
+using Phub.Application.Validation;
+using Phub.Domain.Protheus;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class AuthService
 {

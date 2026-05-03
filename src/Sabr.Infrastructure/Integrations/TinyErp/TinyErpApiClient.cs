@@ -2,12 +2,12 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Options;
 using Microsoft.Extensions.Options;
 
-namespace Sabr.Infrastructure.Integrations.TinyErp;
+namespace Phub.Infrastructure.Integrations.TinyErp;
 
 public sealed class TinyErpApiClient : ITinyErpApiClient
 {

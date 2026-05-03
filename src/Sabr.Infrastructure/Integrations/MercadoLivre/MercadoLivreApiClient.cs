@@ -5,11 +5,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Options;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Options;
 
-namespace Sabr.Infrastructure.Integrations.MercadoLivre;
+namespace Phub.Infrastructure.Integrations.MercadoLivre;
 
 public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
 {

@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
+using Phub.Application.Models;
+using Phub.Application.Services;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [AllowAnonymous]

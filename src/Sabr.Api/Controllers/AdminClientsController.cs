@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Api.Models;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
-using Sabr.Domain.Enums;
+using Phub.Api.Models;
+using Phub.Application.Models;
+using Phub.Application.Services;
+using Phub.Domain.Enums;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Admin,SuperAdmin")]
@@ -159,6 +159,6 @@ public sealed class AdminClientsController : ControllerBase
         return Ok(result.Data);
     }
 
-    private static bool IsClientNotFound<T>(Sabr.Application.Validation.ServiceResult<T> result)
+    private static bool IsClientNotFound<T>(Phub.Application.Validation.ServiceResult<T> result)
         => result.Errors.Any(error => string.Equals(error.Field, "clientId", StringComparison.OrdinalIgnoreCase));
 }

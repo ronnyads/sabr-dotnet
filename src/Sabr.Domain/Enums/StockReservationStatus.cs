@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Enums;
+namespace Phub.Domain.Enums;
 
 public enum StockReservationStatus
 {

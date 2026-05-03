@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 internal static class MercadoLivreSellerIdParser
 {

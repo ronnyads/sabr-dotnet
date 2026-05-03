@@ -1,7 +1,7 @@
-using Sabr.Api.Models;
-using Sabr.Application.Validation;
+using Phub.Api.Models;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class AdminApiErrorDetailsBuilderTests
 {

@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
-using Sabr.Domain.Enums;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Services;
+using Phub.Domain.Enums;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Admin,SuperAdmin")]
@@ -150,6 +150,6 @@ public sealed class UsersController : ControllerBase
         return Ok(new { success = true });
     }
 
-    private static bool IsUserNotFound<T>(Sabr.Application.Validation.ServiceResult<T> result)
+    private static bool IsUserNotFound<T>(Phub.Application.Validation.ServiceResult<T> result)
         => result.Errors.Any(error => string.Equals(error.Field, "userId", StringComparison.OrdinalIgnoreCase));
 }

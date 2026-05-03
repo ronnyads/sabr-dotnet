@@ -1,4 +1,4 @@
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class ProductPriceHistory
 {
@@ -8,7 +8,7 @@ public sealed class ProductPriceHistory
     public string ProductSku
     {
         get => _productSku;
-        set => _productSku = global::Sabr.Domain.ValueObjects.Sku.Normalize(value);
+        set => _productSku = global::Phub.Domain.ValueObjects.Sku.Normalize(value);
     }
     public long OldCostPriceCents { get; set; }
     public long NewCostPriceCents { get; set; }

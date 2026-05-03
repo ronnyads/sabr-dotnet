@@ -1,4 +1,4 @@
-namespace Sabr.Infrastructure.Options;
+namespace Phub.Infrastructure.Options;
 
 /// <summary>
 /// Configurações para a API Anthropic (Claude).

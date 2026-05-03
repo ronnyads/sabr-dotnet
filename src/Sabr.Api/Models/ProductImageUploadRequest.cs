@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Http;
 
-namespace Sabr.Api.Models;
+namespace Phub.Api.Models;
 
 public sealed class ProductImageUploadRequest
 {

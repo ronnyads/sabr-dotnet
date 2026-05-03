@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Sabr.Infrastructure.Persistence;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Health;
+namespace Phub.Api.Health;
 
 public sealed class DatabaseReadinessHealthCheck : IHealthCheck
 {

@@ -1,4 +1,4 @@
-namespace Sabr.Application.Options;
+namespace Phub.Application.Options;
 
 public static class MercadoLivreFeatureFlagNames
 {

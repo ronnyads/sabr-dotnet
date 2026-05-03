@@ -1,4 +1,4 @@
-namespace Sabr.Application.Abstractions;
+namespace Phub.Application.Abstractions;
 
 /// <summary>
 /// Serviço de cache distribuído (Redis em produção, MemoryCache em dev/testes).

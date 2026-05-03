@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Api.Models;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
-using Sabr.Application.Validation;
+using Phub.Api.Models;
+using Phub.Application.Models;
+using Phub.Application.Services;
+using Phub.Application.Validation;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Admin,SuperAdmin")]
@@ -33,7 +33,7 @@ public sealed class AdminTenantProductsController : ControllerBase
 
         return Ok(new ProductCatalogLinksResult
         {
-            ProductSku = Sabr.Domain.ValueObjects.Sku.Normalize(sku),
+            ProductSku = Phub.Domain.ValueObjects.Sku.Normalize(sku),
             CatalogIds = result.Data
         });
     }

@@ -3,9 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Options;
+using Phub.Application.Options;
 
-namespace Sabr.Api.Security;
+namespace Phub.Api.Security;
 
 // Uses HMAC-SHA256 signed tokens instead of DataProtection to avoid key
 // persistence issues across Fly.io restarts. The JWT secret is stable.

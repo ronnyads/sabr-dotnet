@@ -1,12 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sabr.Api.Tests.TestHost;
-using Sabr.Application.Categories;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Infrastructure.Persistence;
+using Phub.Api.Tests.TestHost;
+using Phub.Application.Categories;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Infrastructure.Persistence;
 
-namespace Sabr.Api.Tests;
+namespace Phub.Api.Tests;
 
 public sealed class MarketplaceCategoryResolverTests
 {
@@ -27,7 +27,7 @@ public sealed class MarketplaceCategoryResolverTests
         await db.SaveChangesAsync();
 
         var fakeClient = new FakeMercadoLivreApiClient();
-        fakeClient.CategoryCapabilityResponse = new Sabr.Application.Models.MercadoLivreCategoryCapabilityResponse
+        fakeClient.CategoryCapabilityResponse = new Phub.Application.Models.MercadoLivreCategoryCapabilityResponse
         {
             CategoryName = "Geladeiras Termicas",
             CategoryPathFromRoot = "Esportes e Fitness > Camping > Geladeiras Termicas",
@@ -68,7 +68,7 @@ public sealed class MarketplaceCategoryResolverTests
         await db.SaveChangesAsync();
 
         var fakeClient = new FakeMercadoLivreApiClient();
-        fakeClient.DomainDiscoverySuggestions = new List<Sabr.Application.Models.MercadoLivreDomainDiscoverySuggestion>
+        fakeClient.DomainDiscoverySuggestions = new List<Phub.Application.Models.MercadoLivreDomainDiscoverySuggestion>
         {
             new()
             {
@@ -77,7 +77,7 @@ public sealed class MarketplaceCategoryResolverTests
                 PathFromRoot = "Esportes e Fitness > Camping > Geladeiras Termicas"
             }
         };
-        fakeClient.CategoryCapabilityResponse = new Sabr.Application.Models.MercadoLivreCategoryCapabilityResponse
+        fakeClient.CategoryCapabilityResponse = new Phub.Application.Models.MercadoLivreCategoryCapabilityResponse
         {
             CategoryName = "Geladeiras Termicas",
             CategoryPathFromRoot = "Esportes e Fitness > Camping > Geladeiras Termicas",
@@ -121,12 +121,12 @@ public sealed class MarketplaceCategoryResolverTests
         await db.SaveChangesAsync();
 
         var fakeClient = new FakeMercadoLivreApiClient();
-        fakeClient.DomainDiscoverySuggestions = new List<Sabr.Application.Models.MercadoLivreDomainDiscoverySuggestion>
+        fakeClient.DomainDiscoverySuggestions = new List<Phub.Application.Models.MercadoLivreDomainDiscoverySuggestion>
         {
             new() { CategoryId = "MLB18272", CategoryName = "Geladeiras Termicas" },
             new() { CategoryId = "MLB277912", CategoryName = "Mascaras Led Faciais" }
         };
-        fakeClient.CategoryCapabilityResponse = new Sabr.Application.Models.MercadoLivreCategoryCapabilityResponse
+        fakeClient.CategoryCapabilityResponse = new Phub.Application.Models.MercadoLivreCategoryCapabilityResponse
         {
             CategoryName = "Categoria",
             CategoryPathFromRoot = "Categoria",
@@ -187,7 +187,7 @@ public sealed class MarketplaceCategoryResolverTests
         await db.SaveChangesAsync();
 
         var fakeClient = new FakeMercadoLivreApiClient();
-        fakeClient.CategoryCapabilityResponse = new Sabr.Application.Models.MercadoLivreCategoryCapabilityResponse
+        fakeClient.CategoryCapabilityResponse = new Phub.Application.Models.MercadoLivreCategoryCapabilityResponse
         {
             CategoryName = "Mascaras Led Faciais",
             CategoryPathFromRoot = "Beleza > Tratamentos de Beleza > Mascaras Led Faciais",
@@ -249,7 +249,7 @@ public sealed class MarketplaceCategoryResolverTests
         await db.SaveChangesAsync();
 
         var fakeClient = new FakeMercadoLivreApiClient();
-        fakeClient.DomainDiscoverySuggestions = new List<Sabr.Application.Models.MercadoLivreDomainDiscoverySuggestion>
+        fakeClient.DomainDiscoverySuggestions = new List<Phub.Application.Models.MercadoLivreDomainDiscoverySuggestion>
         {
             new()
             {
@@ -258,7 +258,7 @@ public sealed class MarketplaceCategoryResolverTests
                 PathFromRoot = "Esportes e Fitness > Camping > Geladeiras Termicas"
             }
         };
-        fakeClient.CategoryCapabilityResponse = new Sabr.Application.Models.MercadoLivreCategoryCapabilityResponse
+        fakeClient.CategoryCapabilityResponse = new Phub.Application.Models.MercadoLivreCategoryCapabilityResponse
         {
             CategoryName = "Geladeiras Termicas",
             CategoryPathFromRoot = "Esportes e Fitness > Camping > Geladeiras Termicas",

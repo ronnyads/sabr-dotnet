@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
-using Sabr.Domain.Entities;
+using Phub.Domain.Entities;
 
-namespace Sabr.Application.Abstractions;
+namespace Phub.Application.Abstractions;
 
 public interface IAppDbContext
 {

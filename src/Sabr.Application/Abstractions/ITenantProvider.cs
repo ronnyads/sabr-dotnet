@@ -1,4 +1,4 @@
-namespace Sabr.Application.Abstractions;
+namespace Phub.Application.Abstractions;
 
 public interface ITenantProvider
 {

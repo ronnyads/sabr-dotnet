@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Sabr.Application.Models;
+namespace Phub.Application.Models;
 
 public sealed class ListingDraftUpsertRequest
 {

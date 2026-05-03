@@ -1,6 +1,6 @@
 using System.Security.Claims;
 
-namespace Sabr.Api.Tenant;
+namespace Phub.Api.Tenant;
 
 public sealed class TenantGuardMiddleware
 {

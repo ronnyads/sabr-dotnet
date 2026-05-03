@@ -3,15 +3,15 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Stock;
-using Sabr.Application.Validation;
-using Sabr.Domain.Entities;
-using Sabr.Domain.Enums;
-using Sabr.Domain.ValueObjects;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Stock;
+using Phub.Application.Validation;
+using Phub.Domain.Entities;
+using Phub.Domain.Enums;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Application.Services;
+namespace Phub.Application.Services;
 
 public sealed class MyProductsService
 {

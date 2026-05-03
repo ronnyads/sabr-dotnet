@@ -1,7 +1,7 @@
-using Sabr.Domain.Enums;
-using Sabr.Domain.ValueObjects;
+using Phub.Domain.Enums;
+using Phub.Domain.ValueObjects;
 
-namespace Sabr.Domain.Entities;
+namespace Phub.Domain.Entities;
 
 public sealed class ProductMarketplaceCategoryLock
 {

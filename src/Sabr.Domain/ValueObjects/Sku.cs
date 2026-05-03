@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Sabr.Domain.ValueObjects;
+namespace Phub.Domain.ValueObjects;
 
 public readonly partial record struct Sku
 {

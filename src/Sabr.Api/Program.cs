@@ -19,28 +19,28 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Categories;
-using Sabr.Application.Options;
-using Sabr.Application.Services;
-using Sabr.Api.Health;
-using Sabr.Api.Middleware;
-using Sabr.Api.Options;
-using Sabr.Api.Security;
-using Sabr.Api.Swagger;
-using Sabr.Api.Tenant;
-using Sabr.Domain.Protheus;
-using Sabr.Infrastructure.Integrations.Mabang;
-using Sabr.Infrastructure.Integrations.MercadoLivre;
-using Sabr.Infrastructure.Integrations.TinyErp;
-using Sabr.Infrastructure.Integrations.Shopify;
-using Sabr.Infrastructure.Integrations.TikTokShop;
-using Sabr.Infrastructure.Integrations.Ai;
-using Sabr.Infrastructure.Options;
-using Sabr.Infrastructure.Persistence;
-using Sabr.Infrastructure.Persistence.Seeding;
-using Sabr.Infrastructure.Storage;
-using Sabr.Infrastructure.Services;
+using Phub.Application.Abstractions;
+using Phub.Application.Categories;
+using Phub.Application.Options;
+using Phub.Application.Services;
+using Phub.Api.Health;
+using Phub.Api.Middleware;
+using Phub.Api.Options;
+using Phub.Api.Security;
+using Phub.Api.Swagger;
+using Phub.Api.Tenant;
+using Phub.Domain.Protheus;
+using Phub.Infrastructure.Integrations.Mabang;
+using Phub.Infrastructure.Integrations.MercadoLivre;
+using Phub.Infrastructure.Integrations.TinyErp;
+using Phub.Infrastructure.Integrations.Shopify;
+using Phub.Infrastructure.Integrations.TikTokShop;
+using Phub.Infrastructure.Integrations.Ai;
+using Phub.Infrastructure.Options;
+using Phub.Infrastructure.Persistence;
+using Phub.Infrastructure.Persistence.Seeding;
+using Phub.Infrastructure.Storage;
+using Phub.Infrastructure.Services;
 using Microsoft.Extensions.Caching.StackExchangeRedis;
 
 Log.Logger = new LoggerConfiguration()
@@ -387,7 +387,7 @@ builder.Services.AddSingleton<LoginAttemptService>();
 builder.Services.AddSingleton<MercadoLivreOAuthStateService>();
 builder.Services.AddSingleton<TikTokShopOAuthStateService>();
 builder.Services.AddScoped<IProtheusOutboxProcessor, MockProtheusOutboxProcessor>();
-// Workers are disabled in the API by default — they run in Sabr.Worker.
+// Workers are disabled in the API by default — they run in Phub.Worker.
 // Set BackgroundWorkers:Enabled=true in appsettings to run both in a single process (dev only).
 if (builder.Configuration.GetValue("BackgroundWorkers:Enabled", false))
 {
@@ -429,11 +429,11 @@ builder.Services.AddHttpClient<IMercadoLivreApiClient, MercadoLivreApiClient>((s
 });
 
 // ── AI Service (Anthropic Claude) ──────────────────────────────────────────────
-builder.Services.AddOptions<Sabr.Infrastructure.Options.AnthropicOptions>()
+builder.Services.AddOptions<Phub.Infrastructure.Options.AnthropicOptions>()
     .Bind(builder.Configuration.GetSection("Anthropic"))
     .ValidateDataAnnotations()
     .ValidateOnStart();
-builder.Services.AddHttpClient<Sabr.Application.Abstractions.IAiService, Sabr.Infrastructure.Integrations.Ai.AiService>();
+builder.Services.AddHttpClient<Phub.Application.Abstractions.IAiService, Phub.Infrastructure.Integrations.Ai.AiService>();
 
 builder.Services.AddHttpClient<IMabangApiClient, MabangApiClient>((sp, client) =>
 {

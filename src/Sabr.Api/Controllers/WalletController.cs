@@ -1,11 +1,11 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Sabr.Application.Abstractions;
-using Sabr.Application.Models;
-using Sabr.Application.Services;
+using Phub.Application.Abstractions;
+using Phub.Application.Models;
+using Phub.Application.Services;
 
-namespace Sabr.Api.Controllers;
+namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize]
@@ -91,7 +91,7 @@ public sealed class WalletController : ControllerBase
         return MapResult(result);
     }
 
-    private IActionResult MapResult(Sabr.Application.Validation.ServiceResult<WalletOperationResult> result)
+    private IActionResult MapResult(Phub.Application.Validation.ServiceResult<WalletOperationResult> result)
     {
         if (result.Succeeded && result.Data != null)
         {

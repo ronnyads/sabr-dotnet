@@ -1,4 +1,4 @@
-namespace Sabr.Application.Abstractions;
+namespace Phub.Application.Abstractions;
 
 /// <summary>
 /// Serviço para execução de prompts de IA via API Anthropic (Claude).

@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Routing;
 
-namespace Sabr.Api.Tenant;
+namespace Phub.Api.Tenant;
 
 /// <summary>
 /// For admin routes that carry tenantId in the path, populate TenantId in context while keeping IsPlatform=true.
