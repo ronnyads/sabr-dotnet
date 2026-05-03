@@ -2,19 +2,19 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.8.34330.188
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Api", "src\Sabr.Api\Phub.Api.csproj", "{4018803C-D5E4-41BB-82CD-08C057CE0D2A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Api", "src\Phub.Api\Phub.Api.csproj", "{4018803C-D5E4-41BB-82CD-08C057CE0D2A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Application", "src\Sabr.Application\Phub.Application.csproj", "{1B5FA9D2-2F66-42E9-A7DE-FCCFFC4E0C8F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Application", "src\Phub.Application\Phub.Application.csproj", "{1B5FA9D2-2F66-42E9-A7DE-FCCFFC4E0C8F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Domain", "src\Sabr.Domain\Phub.Domain.csproj", "{49383F65-380E-4F32-96EA-F7ABAFBB6D91}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Domain", "src\Phub.Domain\Phub.Domain.csproj", "{49383F65-380E-4F32-96EA-F7ABAFBB6D91}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Infrastructure", "src\Sabr.Infrastructure\Phub.Infrastructure.csproj", "{6BA47F59-4B0F-4A35-BB0C-31DFAA6D06BF}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Infrastructure", "src\Phub.Infrastructure\Phub.Infrastructure.csproj", "{6BA47F59-4B0F-4A35-BB0C-31DFAA6D06BF}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Phub.Api.Tests", "tests\Sabr.Api.Tests\Phub.Api.Tests.csproj", "{8712DA9E-D909-4B6B-B24C-1AFDC282D5AE}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Phub.Api.Tests", "tests\Phub.Api.Tests\Phub.Api.Tests.csproj", "{8712DA9E-D909-4B6B-B24C-1AFDC282D5AE}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2967FE7E-6900-47C5-A63F-0D2F7A08761F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Worker", "src\Sabr.Worker\Phub.Worker.csproj", "{7EECFCE8-3812-4510-B9F8-07F887AADAAF}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Phub.Worker", "src\Phub.Worker\Phub.Worker.csproj", "{7EECFCE8-3812-4510-B9F8-07F887AADAAF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

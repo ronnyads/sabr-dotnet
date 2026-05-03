@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sabr.Application\Phub.Application.csproj" />
-    <ProjectReference Include="..\Sabr.Infrastructure\Phub.Infrastructure.csproj" />
+    <ProjectReference Include="..\Phub.Application\Phub.Application.csproj" />
+    <ProjectReference Include="..\Phub.Infrastructure\Phub.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

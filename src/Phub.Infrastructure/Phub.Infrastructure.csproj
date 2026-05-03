@@ -7,8 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sabr.Domain\Phub.Domain.csproj" />
-    <ProjectReference Include="..\Sabr.Application\Phub.Application.csproj" />
+    <ProjectReference Include="..\Phub.Domain\Phub.Domain.csproj" />
+    <ProjectReference Include="..\Phub.Application\Phub.Application.csproj" />
   </ItemGroup>
 
   <ItemGroup>
