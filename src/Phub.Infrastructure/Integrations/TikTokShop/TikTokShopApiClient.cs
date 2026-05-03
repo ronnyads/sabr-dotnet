@@ -37,7 +37,12 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
             },
             cancellationToken);
 
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"TikTok token exchange failed: {(int)response.StatusCode} {response.StatusCode} — URL={tokenUrl} — Body={body}");
+        }
         return await response.Content.ReadFromJsonAsync<TikTokShopTokenEnvelope>(cancellationToken: cancellationToken)
                ?? new TikTokShopTokenEnvelope { Message = "Empty TikTok Shop response." };
     }
