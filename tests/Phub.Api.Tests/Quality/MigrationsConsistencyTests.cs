@@ -52,7 +52,8 @@ public sealed class MigrationsConsistencyTests
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current != null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "SabrHub.sln")))
+            if (File.Exists(Path.Combine(current.FullName, "PhubHub.sln")) ||
+                File.Exists(Path.Combine(current.FullName, "SabrHub.sln")))
             {
                 return current.FullName;
             }
