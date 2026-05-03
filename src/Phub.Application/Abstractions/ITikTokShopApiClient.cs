@@ -22,6 +22,7 @@ public interface ITikTokShopApiClient
         string appSecret,
         DateTimeOffset from,
         DateTimeOffset to,
+        string? shopCipher = null,
         string? pageToken = null,
         CancellationToken cancellationToken = default);
 
@@ -30,6 +31,7 @@ public interface ITikTokShopApiClient
         string appKey,
         string appSecret,
         string[] orderIds,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default);
 
     Task PingAsync(
@@ -43,6 +45,7 @@ public interface ITikTokShopApiClient
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default);
 
     Task<TikTokShopApiResponse<TikTokShopCreateProductData>> CreateProductAsync(
@@ -50,12 +53,14 @@ public interface ITikTokShopApiClient
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default);
 
     Task<TikTokShopApiResponse<TikTokShopProductListData>> GetProductsAsync(
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         int pageSize = 20,
         string? pageToken = null,
         CancellationToken cancellationToken = default);
@@ -64,6 +69,7 @@ public interface ITikTokShopApiClient
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default);
 }
 

@@ -2614,6 +2614,11 @@ namespace Phub.Infrastructure.Migrations
                         .HasColumnType("character varying(40)")
                         .HasColumnName("tenant_id");
 
+                    b.Property<string>("ShopCipher")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("shop_cipher");
+
                     b.Property<DateTimeOffset>("TokenExpiresAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("token_expires_at");

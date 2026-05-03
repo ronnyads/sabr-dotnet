@@ -76,6 +76,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string appSecret,
         DateTimeOffset from,
         DateTimeOffset to,
+        string? shopCipher = null,
         string? pageToken = null,
         CancellationToken cancellationToken = default)
     {
@@ -94,7 +95,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         }
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        var queryParams = BuildBaseQueryParams(appKey, timestamp);
+        var queryParams = BuildBaseQueryParams(appKey, timestamp, shopCipher);
         var sign = ComputeSign(appSecret, path, queryParams, body);
         queryParams["sign"] = sign;
 
@@ -116,12 +117,13 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string appKey,
         string appSecret,
         string[] orderIds,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default)
     {
         const string path = "/order/202309/orders";
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        var queryParams = BuildBaseQueryParams(appKey, timestamp);
+        var queryParams = BuildBaseQueryParams(appKey, timestamp, shopCipher);
         queryParams["ids"] = string.Join(",", orderIds);
         var sign = ComputeSign(appSecret, path, queryParams, null);
         queryParams["sign"] = sign;
@@ -164,6 +166,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default)
     {
         const string path = "/product/202309/images/upload";
@@ -174,7 +177,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         };
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        var queryParams = BuildBaseQueryParams(appKey, timestamp);
+        var queryParams = BuildBaseQueryParams(appKey, timestamp, shopCipher);
         var sign = ComputeSign(appSecret, path, queryParams, body);
         queryParams["sign"] = sign;
 
@@ -196,6 +199,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default)
     {
         const string path = "/product/202309/products";
@@ -204,7 +208,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         var bodyDict = JsonSerializer.Deserialize<Dictionary<string, object>>(bodyJson) ?? [];
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        var queryParams = BuildBaseQueryParams(appKey, timestamp);
+        var queryParams = BuildBaseQueryParams(appKey, timestamp, shopCipher);
         var sign = ComputeSign(appSecret, path, queryParams, bodyDict);
         queryParams["sign"] = sign;
 
@@ -225,6 +229,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         int pageSize = 20,
         string? pageToken = null,
         CancellationToken cancellationToken = default)
@@ -242,7 +247,7 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         }
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        var queryParams = BuildBaseQueryParams(appKey, timestamp);
+        var queryParams = BuildBaseQueryParams(appKey, timestamp, shopCipher);
         var sign = ComputeSign(appSecret, path, queryParams, body);
         queryParams["sign"] = sign;
 
@@ -263,12 +268,13 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string accessToken,
         string appKey,
         string appSecret,
+        string? shopCipher = null,
         CancellationToken cancellationToken = default)
     {
         const string path = "/product/202309/categories";
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        var queryParams = BuildBaseQueryParams(appKey, timestamp);
+        var queryParams = BuildBaseQueryParams(appKey, timestamp, shopCipher);
         queryParams["locale"] = "pt-BR";
         var sign = ComputeSign(appSecret, path, queryParams, null);
         queryParams["sign"] = sign;
@@ -317,13 +323,16 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         return Convert.ToHexString(hashBytes).ToUpperInvariant();
     }
 
-    private static Dictionary<string, string> BuildBaseQueryParams(string appKey, string timestamp)
+    private static Dictionary<string, string> BuildBaseQueryParams(string appKey, string timestamp, string? shopCipher = null)
     {
-        return new Dictionary<string, string>
+        var d = new Dictionary<string, string>
         {
             ["app_key"] = appKey,
             ["timestamp"] = timestamp
         };
+        if (!string.IsNullOrWhiteSpace(shopCipher))
+            d["shop_cipher"] = shopCipher;
+        return d;
     }
 
     private string BuildUrl(string path, Dictionary<string, string> queryParams)

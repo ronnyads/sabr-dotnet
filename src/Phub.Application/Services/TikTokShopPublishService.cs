@@ -288,7 +288,7 @@ public sealed class TikTokShopPublishService
                 foreach (var imageUrl in imageUrls.Take(9))
                 {
                     var uploadResult = await _apiClient.UploadImageFromUrlAsync(
-                        imageUrl, accessToken, _options.AppKey, _options.AppSecret, cancellationToken);
+                        imageUrl, accessToken, _options.AppKey, _options.AppSecret, connection.ShopCipher, cancellationToken);
 
                     if (uploadResult.IsSuccess && !string.IsNullOrWhiteSpace(uploadResult.Data?.ImgId))
                     {
@@ -341,7 +341,7 @@ public sealed class TikTokShopPublishService
                 };
 
                 var createResponse = await _apiClient.CreateProductAsync(
-                    createRequest, accessToken, _options.AppKey, _options.AppSecret, cancellationToken);
+                    createRequest, accessToken, _options.AppKey, _options.AppSecret, connection.ShopCipher, cancellationToken);
 
                 if (!createResponse.IsSuccess || createResponse.Data == null)
                 {
@@ -421,8 +421,12 @@ public sealed class TikTokShopPublishService
             return ServiceResult<List<TikTokShopCategoryItem>>.Failure(tokenResult.Errors);
         }
 
+        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(
+            c => c.TenantId == tenantId && c.ClientId == clientId && c.Provider == MarketplaceProvider.TikTokShop,
+            cancellationToken);
+
         var response = await _apiClient.GetCategoriesAsync(
-            tokenResult.Data, _options.AppKey, _options.AppSecret, cancellationToken);
+            tokenResult.Data, _options.AppKey, _options.AppSecret, connection?.ShopCipher, cancellationToken);
 
         if (!response.IsSuccess || response.Data == null)
         {

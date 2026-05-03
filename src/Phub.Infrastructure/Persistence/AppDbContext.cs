@@ -1121,6 +1121,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.AccessToken).HasColumnName("access_token").HasMaxLength(4000).IsRequired();
             entity.Property(e => e.RefreshToken).HasColumnName("refresh_token").HasMaxLength(4000).IsRequired();
             entity.Property(e => e.TokenExpiresAt).HasColumnName("token_expires_at").IsRequired();
+            entity.Property(e => e.ShopCipher).HasColumnName("shop_cipher").HasMaxLength(500);
             entity.Property(e => e.LastSyncAt).HasColumnName("last_sync_at");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();

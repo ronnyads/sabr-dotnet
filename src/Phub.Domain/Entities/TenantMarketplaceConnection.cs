@@ -13,6 +13,7 @@ public sealed class TenantMarketplaceConnection
     public string AccessToken { get; set; } = string.Empty;
     public string RefreshToken { get; set; } = string.Empty;
     public DateTimeOffset TokenExpiresAt { get; set; }
+    public string? ShopCipher { get; set; }
     public DateTimeOffset? LastSyncAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

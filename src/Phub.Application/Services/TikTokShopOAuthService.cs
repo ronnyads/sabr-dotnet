@@ -133,6 +133,7 @@ public sealed class TikTokShopOAuthService
                 Provider = MarketplaceProvider.TikTokShop,
                 SellerId = sellerId,
                 Nickname = displayName,
+                ShopCipher = tokenData.ShopCipher,
                 AccessToken = tokenData.AccessToken,
                 RefreshToken = tokenData.RefreshToken ?? string.Empty,
                 TokenExpiresAt = expiresAt
@@ -143,6 +144,7 @@ public sealed class TikTokShopOAuthService
         {
             connection.SellerId = sellerId;
             connection.Nickname = displayName;
+            connection.ShopCipher = tokenData.ShopCipher ?? connection.ShopCipher;
             connection.AccessToken = tokenData.AccessToken;
             connection.RefreshToken = tokenData.RefreshToken ?? connection.RefreshToken;
             connection.TokenExpiresAt = expiresAt;

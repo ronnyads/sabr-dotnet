@@ -63,7 +63,7 @@ public sealed class TikTokShopSyncService
             "TikTok Shop sync started. tenantId={TenantId} clientId={ClientId} from={From} to={To}",
             tenantId, clientId, from, to);
 
-        var summaries = await FetchAllOrderSummariesAsync(accessToken, from, to, cancellationToken);
+        var summaries = await FetchAllOrderSummariesAsync(accessToken, connection.ShopCipher, from, to, cancellationToken);
 
         if (summaries.Count == 0)
         {
@@ -73,7 +73,7 @@ public sealed class TikTokShopSyncService
         }
 
         // Fetch details in batches of 50
-        var details = await FetchOrderDetailsInBatchesAsync(accessToken, summaries.Select(s => s.OrderId).ToArray(), cancellationToken);
+        var details = await FetchOrderDetailsInBatchesAsync(accessToken, connection.ShopCipher, summaries.Select(s => s.OrderId).ToArray(), cancellationToken);
 
         // Load existing mappings for fast lookup
         var mappings = await _dbContext.TenantMarketplaceListingMaps
@@ -206,6 +206,7 @@ public sealed class TikTokShopSyncService
 
     private async Task<List<TikTokShopOrderSummary>> FetchAllOrderSummariesAsync(
         string accessToken,
+        string? shopCipher,
         DateTimeOffset from,
         DateTimeOffset to,
         CancellationToken cancellationToken)
@@ -216,7 +217,7 @@ public sealed class TikTokShopSyncService
         do
         {
             var response = await _apiClient.SearchOrdersAsync(
-                accessToken, _options.AppKey, _options.AppSecret, from, to, pageToken, cancellationToken);
+                accessToken, _options.AppKey, _options.AppSecret, from, to, shopCipher, pageToken, cancellationToken);
 
             if (!response.IsSuccess || response.Data?.Orders == null)
             {
@@ -234,6 +235,7 @@ public sealed class TikTokShopSyncService
 
     private async Task<List<TikTokShopOrderDetail>> FetchOrderDetailsInBatchesAsync(
         string accessToken,
+        string? shopCipher,
         string[] orderIds,
         CancellationToken cancellationToken)
     {
@@ -242,7 +244,7 @@ public sealed class TikTokShopSyncService
         foreach (var batch in orderIds.Chunk(50))
         {
             var response = await _apiClient.GetOrderDetailAsync(
-                accessToken, _options.AppKey, _options.AppSecret, batch, cancellationToken);
+                accessToken, _options.AppKey, _options.AppSecret, batch, shopCipher, cancellationToken);
 
             if (response.IsSuccess && response.Data?.Orders != null)
             {
