@@ -135,10 +135,10 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
     private ContentResult TopLevelRedirect(string url)
     {
         var safe = System.Text.Encodings.Web.HtmlEncoder.Default.Encode(url);
-        return Content($"""
+        return Content($$"""
             <!DOCTYPE html>
-            <html><head><meta http-equiv="refresh" content="0;url={safe}"></head>
-            <body><script>try{{window.top.location.href="{safe}"}}catch(_){{window.location.href="{safe}"}}</script></body>
+            <html><head><meta http-equiv="refresh" content="0;url={{safe}}"></head>
+            <body><script>try{window.top.location.href="{{safe}}"}catch(_){window.location.href="{{safe}}"}</script></body>
             </html>
             """, "text/html");
     }
