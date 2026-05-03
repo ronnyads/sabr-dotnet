@@ -25,8 +25,9 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string authCode,
         CancellationToken cancellationToken = default)
     {
+        var tokenUrl = $"{_options.AuthBaseUrl.TrimEnd('/')}{_options.TokenPath}";
         var response = await _httpClient.PostAsJsonAsync(
-            _options.TokenPath,
+            tokenUrl,
             new
             {
                 app_key = appKey,
@@ -47,8 +48,9 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string refreshToken,
         CancellationToken cancellationToken = default)
     {
+        var refreshUrl = $"{_options.AuthBaseUrl.TrimEnd('/')}{_options.RefreshTokenPath}";
         var response = await _httpClient.PostAsJsonAsync(
-            _options.RefreshTokenPath,
+            refreshUrl,
             new
             {
                 app_key = appKey,
