@@ -388,7 +388,8 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
 
     private string BuildClientRedirectTarget(string targetPathOrUrl)
     {
-        if (Uri.TryCreate(targetPathOrUrl, UriKind.Absolute, out var absoluteTarget))
+        if (Uri.TryCreate(targetPathOrUrl, UriKind.Absolute, out var absoluteTarget) &&
+            (absoluteTarget.Scheme == Uri.UriSchemeHttp || absoluteTarget.Scheme == Uri.UriSchemeHttps))
         {
             return absoluteTarget.ToString();
         }
