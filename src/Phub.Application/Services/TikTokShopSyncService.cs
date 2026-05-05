@@ -665,6 +665,158 @@ public sealed class TikTokShopSyncService
         return long.TryParse(rawShopId, out var parsed) ? parsed : 0L;
     }
 
+    public async Task<ServiceResult<TikTokShopShipmentHydrationResult>> EnsureOrderShipmentsAsync(
+        Guid orderId,
+        string tenantId,
+        Guid clientId,
+        CancellationToken cancellationToken = default)
+    {
+        var order = await _dbContext.MarketplaceOrders.FirstOrDefaultAsync(
+            item => item.Id == orderId
+                    && item.TenantId == tenantId
+                    && item.ClientId == clientId
+                    && item.Provider == MarketplaceProvider.TikTokShop,
+            cancellationToken);
+        if (order == null)
+        {
+            return ServiceResult<TikTokShopShipmentHydrationResult>.NotFound("orderId", "TikTok order not found.");
+        }
+
+        var tokenResult = await _oauthService.GetValidAccessTokenAsync(tenantId, clientId, cancellationToken);
+        if (!tokenResult.Succeeded || string.IsNullOrWhiteSpace(tokenResult.Data))
+        {
+            return ServiceResult<TikTokShopShipmentHydrationResult>.Failure(tokenResult.ErrorCode ?? ServiceErrorCodes.ValidationError, tokenResult.Errors);
+        }
+
+        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(
+            item => item.TenantId == tenantId
+                    && item.ClientId == clientId
+                    && item.Provider == MarketplaceProvider.TikTokShop,
+            cancellationToken);
+        if (connection == null)
+        {
+            return ServiceResult<TikTokShopShipmentHydrationResult>.Failure(
+                ServiceErrorCodes.TikTokShopNotConnected,
+                "connection",
+                "TikTok Shop nao esta conectado");
+        }
+
+        if (string.IsNullOrWhiteSpace(connection.ShopCipher))
+        {
+            await TryHydrateConnectionMetadataAsync(connection, tokenResult.Data, cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(connection.ShopCipher))
+        {
+            return ServiceResult<TikTokShopShipmentHydrationResult>.Failure(
+                ServiceErrorCodes.TikTokShopReconnectRequired,
+                "connection",
+                "A sessao TikTok Shop nao possui shop cipher para consultar pacotes.");
+        }
+
+        var from = order.ImportedAt <= DateTimeOffset.UtcNow
+            ? order.ImportedAt
+            : DateTimeOffset.UtcNow.AddDays(-7);
+        var to = DateTimeOffset.UtcNow;
+        try
+        {
+            var packageSummaries = await FetchPackagesInWindowsAsync(
+                tokenResult.Data,
+                connection.ShopCipher,
+                from,
+                to,
+                windowSize: TimeSpan.FromDays(7),
+                cancellationToken);
+            if (packageSummaries.Count == 0)
+            {
+                return ServiceResult<TikTokShopShipmentHydrationResult>.Success(new TikTokShopShipmentHydrationResult());
+            }
+
+            var packageIds = packageSummaries
+                .Select(item => item.PackageId)
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var packageDetails = await FetchPackageDetailsAsync(
+                tokenResult.Data,
+                connection.ShopCipher,
+                packageIds,
+                cancellationToken);
+            var matchedDetails = packageDetails
+                .Where(item => item.OrderInfoList.Any(info => string.Equals(info.OrderId, order.MlOrderId, StringComparison.Ordinal)))
+                .ToList();
+
+            if (matchedDetails.Count == 0)
+            {
+                return ServiceResult<TikTokShopShipmentHydrationResult>.Success(new TikTokShopShipmentHydrationResult());
+            }
+
+            var orderLookup = new Dictionary<string, MarketplaceOrder>(StringComparer.Ordinal)
+            {
+                [order.MlOrderId] = order
+            };
+            var hydrated = await UpsertShipmentsAsync(
+                tenantId,
+                clientId,
+                connection,
+                tokenResult.Data,
+                matchedDetails,
+                orderLookup,
+                cancellationToken);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            var hydratedPackageIds = matchedDetails
+                .Select(item => item.PackageId)
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var labelsReleased = await _dbContext.MarketplaceShipments
+                .AsNoTracking()
+                .CountAsync(
+                    item => item.TenantId == tenantId
+                            && item.ClientId == clientId
+                            && item.Provider == MarketplaceProvider.TikTokShop
+                            && hydratedPackageIds.Contains(item.ShipmentId)
+                            && !string.IsNullOrWhiteSpace(item.LabelSourceUrl),
+                    cancellationToken);
+
+            return ServiceResult<TikTokShopShipmentHydrationResult>.Success(new TikTokShopShipmentHydrationResult
+            {
+                ShipmentsUpserted = hydrated,
+                LabelsReleased = labelsReleased
+            });
+        }
+        catch (TikTokShopApiException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "TikTok Shop forced shipment hydration failed upstream. tenantId={TenantId} clientId={ClientId} sellerId={SellerId} statusCode={StatusCode} requestId={RequestId} operation={Operation}",
+                tenantId,
+                clientId,
+                connection.SellerId,
+                ex.StatusCode,
+                ex.RequestId,
+                ex.Operation ?? "packages");
+            return ServiceResult<TikTokShopShipmentHydrationResult>.Failure(
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "connection",
+                "TikTok Shop indisponivel ao buscar pacotes do pedido.");
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "TikTok Shop forced shipment hydration failed via HTTP exception. tenantId={TenantId} clientId={ClientId} sellerId={SellerId} statusCode={StatusCode}",
+                tenantId,
+                clientId,
+                connection.SellerId,
+                ex.StatusCode);
+            return ServiceResult<TikTokShopShipmentHydrationResult>.Failure(
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "connection",
+                "TikTok Shop indisponivel ao buscar pacotes do pedido.");
+        }
+    }
+
     private async Task<List<TikTokShopOrderSummary>> FetchAllOrderSummariesAsync(
         string accessToken,
         string? shopCipher,
@@ -743,108 +895,24 @@ public sealed class TikTokShopSyncService
                 .Where(item => !string.IsNullOrWhiteSpace(item))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-
-            var packageDetails = new List<TikTokShopPackageDetail>();
-            foreach (var packageId in packageIds)
-            {
-                var response = await _apiClient.GetPackageDetailAsync(
-                    accessToken,
-                    _options.AppKey,
-                    _options.AppSecret,
-                    packageId,
-                    connection.ShopCipher,
-                    cancellationToken);
-
-                if (response.IsSuccess && response.Data != null && !string.IsNullOrWhiteSpace(response.Data.PackageId))
-                {
-                    packageDetails.Add(response.Data);
-                }
-            }
+            var packageDetails = await FetchPackageDetailsAsync(
+                accessToken,
+                connection.ShopCipher,
+                packageIds,
+                cancellationToken);
 
             if (packageDetails.Count == 0)
             {
                 return;
             }
-
-            var existingShipments = await _dbContext.MarketplaceShipments
-                .Where(item => item.TenantId == tenantId
-                               && item.ClientId == clientId
-                               && item.Provider == MarketplaceProvider.TikTokShop
-                               && packageIds.Contains(item.ShipmentId))
-                .ToDictionaryAsync(item => item.ShipmentId, StringComparer.Ordinal, cancellationToken);
-
-            foreach (var packageDetail in packageDetails)
-            {
-                if (!existingShipments.TryGetValue(packageDetail.PackageId, out var shipment))
-                {
-                    shipment = new MarketplaceShipment
-                    {
-                        TenantId = tenantId,
-                        ClientId = clientId,
-                        Provider = MarketplaceProvider.TikTokShop,
-                        SellerId = connection.SellerId,
-                        ShipmentId = packageDetail.PackageId,
-                        CreatedAt = DateTimeOffset.UtcNow,
-                        UpdatedAt = DateTimeOffset.UtcNow
-                    };
-                    existingShipments[shipment.ShipmentId] = shipment;
-                    _dbContext.MarketplaceShipments.Add(shipment);
-                }
-
-                shipment.SellerId = connection.SellerId;
-                shipment.MlOrderId = packageDetail.OrderInfoList.FirstOrDefault(item => !string.IsNullOrWhiteSpace(item.OrderId))?.OrderId;
-                shipment.Status = FormatPackageStatus(packageDetail.PackageStatus);
-                shipment.Substatus = packageDetail.PackageFreezeStatus > 0 ? $"freeze_{packageDetail.PackageFreezeStatus}" : null;
-                shipment.ShippingMode = FormatDeliveryOption(packageDetail.DeliveryOption);
-                shipment.LogisticType = NormalizeNullable(packageDetail.ShippingProvider)
-                    ?? (packageDetail.PickUpType > 0 ? $"pickup_{packageDetail.PickUpType}" : null);
-                shipment.TrackingNumber = NormalizeNullable(packageDetail.TrackingNumber);
-                shipment.TrackingMethod = NormalizeNullable(packageDetail.ShippingProvider);
-                shipment.TrackingUrl = null;
-                shipment.ShipByDeadlineAt = FromUnixTimeSeconds(packageDetail.PickUpEndTime);
-                shipment.ShippedAt = InferShippedAt(packageDetail);
-                shipment.ShipmentScanCode = string.IsNullOrWhiteSpace(shipment.ShipmentScanCode)
-                    && !string.IsNullOrWhiteSpace(shipment.MlOrderId)
-                    && orderLookup.TryGetValue(shipment.MlOrderId, out var scanOrder)
-                        ? MarketplaceOrderWorkflow.BuildShipmentScanCode(scanOrder, shipment)
-                        : shipment.ShipmentScanCode;
-                shipment.UpdatedAt = DateTimeOffset.UtcNow;
-
-                try
-                {
-                    var documentResponse = await _apiClient.GetPackageShippingDocumentAsync(
-                        accessToken,
-                        _options.AppKey,
-                        _options.AppSecret,
-                        packageDetail.PackageId,
-                        connection.ShopCipher,
-                        cancellationToken: cancellationToken);
-
-                    if (documentResponse.IsSuccess && !string.IsNullOrWhiteSpace(documentResponse.Data?.DocUrl))
-                    {
-                        shipment.LabelSourceUrl = documentResponse.Data.DocUrl;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(
-                        ex,
-                        "TikTok Shop package shipping document probe failed. tenantId={TenantId} clientId={ClientId} packageId={PackageId}",
-                        tenantId,
-                        clientId,
-                        packageDetail.PackageId);
-                }
-
-                if (!string.IsNullOrWhiteSpace(shipment.MlOrderId)
-                    && orderLookup.TryGetValue(shipment.MlOrderId, out var order))
-                {
-                    order.ShipmentId ??= shipment.ShipmentId;
-                    order.ShippingMode ??= shipment.ShippingMode;
-                    order.LogisticType ??= shipment.LogisticType;
-                    order.ShipByDeadlineAt ??= shipment.ShipByDeadlineAt;
-                    order.UpdatedAt = DateTimeOffset.UtcNow;
-                }
-            }
+            await UpsertShipmentsAsync(
+                tenantId,
+                clientId,
+                connection,
+                accessToken,
+                packageDetails,
+                orderLookup,
+                cancellationToken);
         }
         catch (TikTokShopApiException ex)
         {
@@ -867,6 +935,161 @@ public sealed class TikTokShopSyncService
                 clientId,
                 connection.SellerId,
                 ex.StatusCode);
+        }
+    }
+
+    private async Task<List<TikTokShopPackageDetail>> FetchPackageDetailsAsync(
+        string accessToken,
+        string? shopCipher,
+        IReadOnlyCollection<string> packageIds,
+        CancellationToken cancellationToken)
+    {
+        var packageDetails = new List<TikTokShopPackageDetail>();
+        foreach (var packageId in packageIds)
+        {
+            var response = await _apiClient.GetPackageDetailAsync(
+                accessToken,
+                _options.AppKey,
+                _options.AppSecret,
+                packageId,
+                shopCipher,
+                cancellationToken);
+
+            if (response.IsSuccess && response.Data != null && !string.IsNullOrWhiteSpace(response.Data.PackageId))
+            {
+                packageDetails.Add(response.Data);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "TikTok Shop GetPackageDetail returned non-success. packageId={PackageId} code={Code} message={Message}",
+                    packageId,
+                    response.Code,
+                    response.Message);
+            }
+        }
+
+        return packageDetails;
+    }
+
+    private async Task<int> UpsertShipmentsAsync(
+        string tenantId,
+        Guid clientId,
+        TenantMarketplaceConnection connection,
+        string accessToken,
+        IReadOnlyCollection<TikTokShopPackageDetail> packageDetails,
+        IReadOnlyDictionary<string, MarketplaceOrder> orderLookup,
+        CancellationToken cancellationToken)
+    {
+        var packageIds = packageDetails
+            .Select(item => item.PackageId)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var existingShipments = await _dbContext.MarketplaceShipments
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == MarketplaceProvider.TikTokShop
+                           && packageIds.Contains(item.ShipmentId))
+            .ToDictionaryAsync(item => item.ShipmentId, StringComparer.Ordinal, cancellationToken);
+
+        var upserted = 0;
+        foreach (var packageDetail in packageDetails)
+        {
+            if (!existingShipments.TryGetValue(packageDetail.PackageId, out var shipment))
+            {
+                shipment = new MarketplaceShipment
+                {
+                    TenantId = tenantId,
+                    ClientId = clientId,
+                    Provider = MarketplaceProvider.TikTokShop,
+                    SellerId = connection.SellerId,
+                    ShipmentId = packageDetail.PackageId,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+                existingShipments[shipment.ShipmentId] = shipment;
+                _dbContext.MarketplaceShipments.Add(shipment);
+            }
+
+            shipment.SellerId = connection.SellerId;
+            shipment.MlOrderId = packageDetail.OrderInfoList.FirstOrDefault(item => !string.IsNullOrWhiteSpace(item.OrderId))?.OrderId;
+            shipment.Status = FormatPackageStatus(packageDetail.PackageStatus);
+            shipment.Substatus = packageDetail.PackageFreezeStatus > 0 ? $"freeze_{packageDetail.PackageFreezeStatus}" : null;
+            shipment.ShippingMode = FormatDeliveryOption(packageDetail.DeliveryOption);
+            shipment.LogisticType = NormalizeNullable(packageDetail.ShippingProvider)
+                ?? (packageDetail.PickUpType > 0 ? $"pickup_{packageDetail.PickUpType}" : null);
+            shipment.TrackingNumber = NormalizeNullable(packageDetail.TrackingNumber);
+            shipment.TrackingMethod = NormalizeNullable(packageDetail.ShippingProvider);
+            shipment.TrackingUrl = null;
+            shipment.ShipByDeadlineAt = FromUnixTimeSeconds(packageDetail.PickUpEndTime);
+            shipment.ShippedAt = InferShippedAt(packageDetail);
+            shipment.ShipmentScanCode = string.IsNullOrWhiteSpace(shipment.ShipmentScanCode)
+                && !string.IsNullOrWhiteSpace(shipment.MlOrderId)
+                && orderLookup.TryGetValue(shipment.MlOrderId, out var scanOrder)
+                    ? MarketplaceOrderWorkflow.BuildShipmentScanCode(scanOrder, shipment)
+                    : shipment.ShipmentScanCode;
+            shipment.UpdatedAt = DateTimeOffset.UtcNow;
+
+            await TryHydrateShippingDocumentAsync(tenantId, clientId, connection, accessToken, packageDetail, shipment, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(shipment.MlOrderId)
+                && orderLookup.TryGetValue(shipment.MlOrderId, out var order))
+            {
+                order.ShipmentId ??= shipment.ShipmentId;
+                order.ShippingMode ??= shipment.ShippingMode;
+                order.LogisticType ??= shipment.LogisticType;
+                order.ShipByDeadlineAt ??= shipment.ShipByDeadlineAt;
+                order.UpdatedAt = DateTimeOffset.UtcNow;
+            }
+
+            upserted++;
+        }
+
+        return upserted;
+    }
+
+    private async Task TryHydrateShippingDocumentAsync(
+        string tenantId,
+        Guid clientId,
+        TenantMarketplaceConnection connection,
+        string accessToken,
+        TikTokShopPackageDetail packageDetail,
+        MarketplaceShipment shipment,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var documentResponse = await _apiClient.GetPackageShippingDocumentAsync(
+                accessToken,
+                _options.AppKey,
+                _options.AppSecret,
+                packageDetail.PackageId,
+                connection.ShopCipher,
+                cancellationToken: cancellationToken);
+
+            if (documentResponse.IsSuccess && !string.IsNullOrWhiteSpace(documentResponse.Data?.DocUrl))
+            {
+                shipment.LabelSourceUrl = documentResponse.Data.DocUrl;
+                return;
+            }
+
+            _logger.LogInformation(
+                "TikTok Shop shipping document still unavailable during shipment hydration. tenantId={TenantId} clientId={ClientId} packageId={PackageId} code={Code} message={Message}",
+                tenantId,
+                clientId,
+                packageDetail.PackageId,
+                documentResponse.Code,
+                documentResponse.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "TikTok Shop package shipping document probe failed. tenantId={TenantId} clientId={ClientId} packageId={PackageId}",
+                tenantId,
+                clientId,
+                packageDetail.PackageId);
         }
     }
 
@@ -903,6 +1126,35 @@ public sealed class TikTokShopSyncService
         while (!string.IsNullOrWhiteSpace(cursor));
 
         return all;
+    }
+
+    private async Task<List<TikTokShopPackageSummary>> FetchPackagesInWindowsAsync(
+        string accessToken,
+        string? shopCipher,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        TimeSpan windowSize,
+        CancellationToken cancellationToken)
+    {
+        var all = new List<TikTokShopPackageSummary>();
+        var cursor = from;
+        while (cursor < to)
+        {
+            var windowEnd = cursor.Add(windowSize);
+            if (windowEnd > to)
+            {
+                windowEnd = to;
+            }
+
+            var batch = await FetchAllPackagesAsync(accessToken, shopCipher, cursor, windowEnd, cancellationToken);
+            all.AddRange(batch);
+            cursor = windowEnd;
+        }
+
+        return all
+            .GroupBy(item => item.PackageId, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
     }
 
     private async Task<bool> TryHydrateConnectionMetadataAsync(
@@ -1048,4 +1300,10 @@ public sealed class TikTokShopSyncResult
 {
     public int OrdersUpserted { get; set; }
     public int ItemsUpserted { get; set; }
+}
+
+public sealed class TikTokShopShipmentHydrationResult
+{
+    public int ShipmentsUpserted { get; set; }
+    public int LabelsReleased { get; set; }
 }

@@ -641,6 +641,201 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
     }
 
     [Fact]
+    public async Task ClientCatalogVariants_ReturnsOnlyAuthorizedVariants()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-tts-variants";
+        const string tenantSlug = "ttsvariants";
+        var clientId = Guid.NewGuid();
+        await SeedClientAsync(tenantId, tenantSlug, clientId);
+        await SeedProductVariantAndAuthorizationAsync(tenantId, clientId, "BASE-AUTH", "VAR-AUTH", "Produto Autorizado");
+        await SeedProductVariantAsync("BASE-OTHER", "VAR-OTHER", "Produto Fora");
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.GetAsync("/api/v1/client/catalog/variants");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<PagedResult<CatalogVariantDto>>();
+        Assert.NotNull(payload);
+        var item = Assert.Single(payload!.Items);
+        Assert.Equal("VAR-AUTH", item.VariantSku);
+        Assert.Equal("BASE-AUTH", item.BaseSku);
+        Assert.Equal("Produto Autorizado", item.ProductName);
+    }
+
+    [Fact]
+    public async Task UnmappedItems_ReturnsGroupedTikTokPairs()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-tts-unmapped";
+        const string tenantSlug = "ttsunmapped";
+        var clientId = Guid.NewGuid();
+        await SeedClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, shopCipher: "cipher-unmapped", sellerId: 1979655640);
+        await SeedTikTokOrderAsync(tenantId, clientId, "tts-unmapped-1", 1979655640, "product-1", "sku-1", 1, "Produto 1", "Cor Azul");
+        await SeedTikTokOrderAsync(tenantId, clientId, "tts-unmapped-2", 1979655640, "product-1", "sku-1", 2, "Produto 1", "Cor Azul");
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.GetAsync("/api/v1/client/integrations/tiktokshop/unmapped-items");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<List<TikTokShopUnmappedItemResult>>();
+        Assert.NotNull(payload);
+        var item = Assert.Single(payload!);
+        Assert.Equal("product-1", item.TikTokItemId);
+        Assert.Equal("sku-1", item.TikTokSkuId);
+        Assert.Equal("Produto 1", item.ProductName);
+        Assert.Equal("Cor Azul", item.VariantName);
+        Assert.Equal(2, item.OrdersAffected);
+        Assert.Equal(3, item.TotalUnits);
+    }
+
+    [Fact]
+    public async Task CreateMapping_UpsertsAndReconcilesReservations_WhenVariantChanges()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-tts-map";
+        const string tenantSlug = "ttsmap";
+        var clientId = Guid.NewGuid();
+        await SeedClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, shopCipher: "cipher-map", sellerId: 1979655640);
+        await SeedProductVariantAndAuthorizationAsync(tenantId, clientId, "BASE-MAP", "VAR-ONE", "Produto Mapeado");
+        await SeedProductVariantAsync("BASE-MAP", "VAR-TWO", "Produto Mapeado");
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var order = await SeedTikTokOrderAsync(db, tenantId, clientId, "tts-map-order", 1979655640, "product-map", "sku-map", 2, "Produto Map", "Padrao");
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var createResponse = await client.PostAsJsonAsync(
+            "/api/v1/client/integrations/tiktokshop/mappings",
+            new TikTokShopCreateMappingRequest
+            {
+                TikTokItemId = "product-map",
+                TikTokSkuId = "sku-map",
+                SabrVariantSku = "VAR-ONE"
+            });
+
+        Assert.Equal(HttpStatusCode.OK, createResponse.StatusCode);
+        var created = await createResponse.Content.ReadFromJsonAsync<TikTokShopMappingResult>();
+        Assert.NotNull(created);
+        Assert.Equal("created", created!.Action);
+        Assert.Equal(1, created.OrdersAffected);
+
+        var remapResponse = await client.PostAsJsonAsync(
+            "/api/v1/client/integrations/tiktokshop/mappings",
+            new TikTokShopCreateMappingRequest
+            {
+                TikTokItemId = "product-map",
+                TikTokSkuId = "sku-map",
+                SabrVariantSku = "VAR-TWO"
+            });
+
+        Assert.Equal(HttpStatusCode.OK, remapResponse.StatusCode);
+        var remapped = await remapResponse.Content.ReadFromJsonAsync<TikTokShopMappingResult>();
+        Assert.NotNull(remapped);
+        Assert.Equal("updated", remapped!.Action);
+
+        using var verificationScope = _factory.Services.CreateScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var refreshedOrder = await verificationDb.MarketplaceOrders.Include(item => item.Items).SingleAsync(item => item.Id == order.Id);
+        var refreshedItem = Assert.Single(refreshedOrder.Items);
+        Assert.Equal("VAR-TWO", refreshedItem.SabrVariantSku);
+        Assert.Equal(2, refreshedItem.ReservedQuantity);
+
+        var reservations = await verificationDb.StockReservations
+            .Where(item => item.MarketplaceOrderId == order.Id)
+            .OrderBy(item => item.CreatedAt)
+            .ToListAsync();
+        Assert.Equal(2, reservations.Count);
+        Assert.Equal(StockReservationStatus.Released, reservations[0].Status);
+        Assert.Equal(0, reservations[0].Quantity);
+        Assert.Equal("VAR-ONE", reservations[0].SabrVariantSku);
+        Assert.Equal(StockReservationStatus.Reserved, reservations[1].Status);
+        Assert.Equal(2, reservations[1].Quantity);
+        Assert.Equal("VAR-TWO", reservations[1].SabrVariantSku);
+    }
+
+    [Fact]
+    public async Task PullLabel_WhenShipmentMissing_HydratesShipmentAndReturnsPendingLabel()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-tts-pull";
+        const string tenantSlug = "ttspull";
+        var clientId = Guid.NewGuid();
+        await SeedClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, shopCipher: "cipher-pull", sellerId: 1979655640);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var order = await SeedTikTokOrderAsync(db, tenantId, clientId, "tts-pull-order", 1979655640, "product-pull", "sku-pull", 1, "Produto Pull", "Padrao");
+
+        _factory.FakeTikTokShopApiClient.PackageSearchResponse = new TikTokShopApiResponse<TikTokShopPackageSearchData>
+        {
+            Code = 0,
+            Message = "ok",
+            Data = new TikTokShopPackageSearchData
+            {
+                PackageList =
+                [
+                    new TikTokShopPackageSummary
+                    {
+                        PackageId = "pkg-pull-1",
+                        PackageStatus = 110,
+                        CreateTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                        UpdateTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    }
+                ]
+            }
+        };
+        _factory.FakeTikTokShopApiClient.PackageDetailResponse = new TikTokShopApiResponse<TikTokShopPackageDetail>
+        {
+            Code = 0,
+            Message = "ok",
+            Data = new TikTokShopPackageDetail
+            {
+                PackageId = "pkg-pull-1",
+                PackageStatus = 110,
+                DeliveryOption = 1,
+                ShippingProvider = "TikTok Shipping",
+                TrackingNumber = "BR123PULL",
+                OrderInfoList =
+                [
+                    new TikTokShopPackageOrderInfo
+                    {
+                        OrderId = "tts-pull-order"
+                    }
+                ]
+            }
+        };
+        _factory.FakeTikTokShopApiClient.ShippingDocumentResponse = new TikTokShopApiResponse<TikTokShopShippingDocumentData>
+        {
+            Code = 0,
+            Message = "pending",
+            Data = new TikTokShopShippingDocumentData()
+        };
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsync($"/api/v1/client/orders/marketplace/{order.Id}/labels/pull", JsonContent.Create(new { }));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<MarketplacePullShipmentLabelResult>();
+        Assert.NotNull(payload);
+        Assert.False(payload!.Succeeded);
+        Assert.Equal("pkg-pull-1", payload.ShipmentId);
+        Assert.Equal(MarketplacePullLabelReasonCodes.LabelNotReleased, payload.ReasonCode);
+
+        var shipment = await db.MarketplaceShipments.SingleAsync(item => item.MlOrderId == "tts-pull-order");
+        Assert.Equal("pkg-pull-1", shipment.ShipmentId);
+        Assert.Equal("BR123PULL", shipment.TrackingNumber);
+        Assert.True(string.IsNullOrWhiteSpace(shipment.LabelSourceUrl));
+    }
+
+    [Fact]
     public async Task GetCategories_WhenTikTokReturnsUnauthorized_Returns409ReconnectRequired()
     {
         await _factory.ResetDatabaseAsync();
@@ -792,6 +987,40 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+        await SeedProductVariantAsync(db, baseSku, variantSku, $"Variant {variantSku}");
+    }
+
+    private async Task SeedProductVariantAndAuthorizationAsync(string tenantId, Guid clientId, string baseSku, string variantSku, string productName)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await SeedProductVariantAsync(db, baseSku, variantSku, productName);
+        await SeedCatalogAuthorizationAsync(db, tenantId, clientId, baseSku);
+    }
+
+    private async Task SeedProductVariantAsync(string baseSku, string variantSku, string productName)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await SeedProductVariantAsync(db, baseSku, variantSku, productName);
+    }
+
+    private static async Task SeedProductVariantAsync(AppDbContext db, string baseSku, string variantSku, string productName)
+    {
+        if (!await db.Products.AnyAsync(item => item.Sku == baseSku))
+        {
+            db.Products.Add(new Product
+            {
+                Sku = baseSku,
+                Name = productName,
+                Brand = "Marca Teste",
+                ThumbnailUrl = "https://example.test/thumb.png",
+                CatalogPriceCents = 1000,
+                CostPriceCents = 500,
+                IsActive = true
+            });
+        }
+
         if (!await db.ProductVariants.AnyAsync(item => item.VariantSku == variantSku))
         {
             db.ProductVariants.Add(new ProductVariant
@@ -806,8 +1035,110 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
                 ReservedStock = 0,
                 IsActive = true
             });
-            await db.SaveChangesAsync();
         }
+
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedCatalogAuthorizationAsync(string tenantId, Guid clientId, string productSku)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await SeedCatalogAuthorizationAsync(db, tenantId, clientId, productSku);
+    }
+
+    private static async Task SeedCatalogAuthorizationAsync(AppDbContext db, string tenantId, Guid clientId, string productSku)
+    {
+        var plan = new Plan { Name = $"Plan {productSku}" };
+        var catalog = new Catalog { Name = $"Catalog {productSku}" };
+        db.Plans.Add(plan);
+        db.Catalogs.Add(catalog);
+        db.PlanCatalogs.Add(new PlanCatalog
+        {
+            PlanId = plan.Id,
+            CatalogId = catalog.Id
+        });
+        db.ProductCatalogs.Add(new ProductCatalog
+        {
+            CatalogId = catalog.Id,
+            ProductSku = productSku
+        });
+        db.ClientPlanSubscriptions.Add(new ClientPlanSubscription
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            PlanId = plan.Id,
+            IsActive = true,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-1),
+            EndsAt = DateTimeOffset.UtcNow.AddDays(30)
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<MarketplaceOrder> SeedTikTokOrderAsync(
+        string tenantId,
+        Guid clientId,
+        string mlOrderId,
+        long sellerId,
+        string tikTokItemId,
+        string tikTokSkuId,
+        int quantity,
+        string productName,
+        string skuName)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await SeedTikTokOrderAsync(db, tenantId, clientId, mlOrderId, sellerId, tikTokItemId, tikTokSkuId, quantity, productName, skuName);
+    }
+
+    private static async Task<MarketplaceOrder> SeedTikTokOrderAsync(
+        AppDbContext db,
+        string tenantId,
+        Guid clientId,
+        string mlOrderId,
+        long sellerId,
+        string tikTokItemId,
+        string tikTokSkuId,
+        int quantity,
+        string productName,
+        string skuName)
+    {
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            Provider = MarketplaceProvider.TikTokShop,
+            SellerId = sellerId,
+            MlOrderId = mlOrderId,
+            Status = "AWAITING_SHIPMENT",
+            ImportedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            RawJson = "{}"
+        };
+        await scopeEnsureOrderNumberAsync(db, order);
+        order.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            Provider = MarketplaceProvider.TikTokShop,
+            SellerId = sellerId,
+            MlItemId = tikTokItemId,
+            MlVariationId = tikTokSkuId,
+            Quantity = quantity,
+            MappingState = MarketplaceMappingStates.Unmapped,
+            RawJson = $$"""
+                {"product_name":"{{productName}}","sku_name":"{{skuName}}"}
+                """
+        });
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+        return order;
+    }
+
+    private static async Task scopeEnsureOrderNumberAsync(AppDbContext db, MarketplaceOrder order)
+    {
+        var service = new MarketplaceOrderNumberService(db);
+        await service.EnsureOrderNumberAsync(order, CancellationToken.None);
     }
 
     private static string? ExtractQueryParam(string url, string key)

@@ -241,6 +241,18 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         return Ok(result.Data);
     }
 
+    [HttpGet("unmapped-items")]
+    public async Task<IActionResult> ListUnmappedItems(CancellationToken cancellationToken)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+        {
+            return error!;
+        }
+
+        var result = await _mappingService.ListUnmappedItemsAsync(tenantId!, clientId, cancellationToken);
+        return Ok(result.Data);
+    }
+
     [HttpPost("mappings")]
     public async Task<IActionResult> CreateMapping(
         [FromBody] TikTokShopCreateMappingRequest request,
@@ -257,7 +269,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
             return MapValidationError(result.ErrorCode, result.Errors);
         }
 
-        return StatusCode(StatusCodes.Status201Created, result.Data);
+        return Ok(result.Data);
     }
 
     [HttpDelete("mappings/{id:guid}")]
@@ -450,6 +462,15 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
                 CreateApiError(
                     resolvedCode,
                     string.IsNullOrWhiteSpace(firstMessage) ? "TikTok Shop upstream request failed" : firstMessage,
+                    errors));
+        }
+
+        if (string.Equals(resolvedCode, ServiceErrorCodes.SkuNotAuthorized, StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                CreateApiError(
+                    resolvedCode,
+                    string.IsNullOrWhiteSpace(firstMessage) ? "SKU is not authorized for this client" : firstMessage,
                     errors));
         }
 

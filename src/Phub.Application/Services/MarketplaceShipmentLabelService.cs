@@ -1,5 +1,6 @@
 using System.Net.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
@@ -22,6 +23,7 @@ public sealed class MarketplaceShipmentLabelService
     private readonly MarketplaceMabangDispatchService _mabangDispatchService;
     private readonly MercadoLivreOptions _options;
     private readonly TikTokShopOptions _tikTokShopOptions;
+    private readonly ILogger<MarketplaceShipmentLabelService> _logger;
 
     public MarketplaceShipmentLabelService(
         IAppDbContext dbContext,
@@ -32,7 +34,8 @@ public sealed class MarketplaceShipmentLabelService
         MarketplaceAuditLogService auditLogService,
         MarketplaceMabangDispatchService mabangDispatchService,
         IOptions<MercadoLivreOptions> options,
-        IOptions<TikTokShopOptions> tikTokShopOptions)
+        IOptions<TikTokShopOptions> tikTokShopOptions,
+        ILogger<MarketplaceShipmentLabelService> logger)
     {
         _dbContext = dbContext;
         _mercadoLivreApiClient = mercadoLivreApiClient;
@@ -43,6 +46,7 @@ public sealed class MarketplaceShipmentLabelService
         _mabangDispatchService = mabangDispatchService;
         _options = options.Value;
         _tikTokShopOptions = tikTokShopOptions.Value;
+        _logger = logger;
     }
 
     public async Task<ServiceResult<MarketplaceShipmentLabelDownloadResult>> GetOrFetchAsync(
@@ -194,6 +198,15 @@ public sealed class MarketplaceShipmentLabelService
             cancellationToken: cancellationToken);
         if (!documentResponse.IsSuccess || string.IsNullOrWhiteSpace(documentResponse.Data?.DocUrl))
         {
+            _logger.LogWarning(
+                "TikTok Shop shipping document not available yet. tenantId={TenantId} clientId={ClientId} shipmentId={ShipmentId} sellerId={SellerId} code={Code} message={Message} hasDocUrl={HasDocUrl}",
+                shipment.TenantId,
+                shipment.ClientId,
+                shipment.ShipmentId,
+                shipment.SellerId,
+                documentResponse.Code,
+                documentResponse.Message,
+                !string.IsNullOrWhiteSpace(documentResponse.Data?.DocUrl));
             return ServiceResult<MarketplaceShipmentLabelDownloadResult>.Failure(new[]
             {
                 new ValidationError("label", "Shipment label not available in TikTok Shop")

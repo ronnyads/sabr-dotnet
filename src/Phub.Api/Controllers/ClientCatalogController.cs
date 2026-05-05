@@ -14,14 +14,47 @@ namespace Phub.Api.Controllers;
 public sealed class ClientCatalogController : ControllerBase
 {
     private readonly ITenantProvider _tenantProvider;
+    private readonly CatalogService _catalogService;
     private readonly CatalogSnapshotService _catalogSnapshotService;
 
     public ClientCatalogController(
         ITenantProvider tenantProvider,
+        CatalogService catalogService,
         CatalogSnapshotService catalogSnapshotService)
     {
         _tenantProvider = tenantProvider;
+        _catalogService = catalogService;
         _catalogSnapshotService = catalogSnapshotService;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> ListVariants(
+        [FromQuery] int skip = 0,
+        [FromQuery] int limit = 20,
+        [FromQuery] string? search = null,
+        [FromQuery] string? productSku = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out _, out var error))
+        {
+            return error!;
+        }
+
+        var paginationErrors = PaginationGuard.ValidateOrError(skip, limit);
+        if (paginationErrors.Count > 0)
+        {
+            return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid pagination query", paginationErrors));
+        }
+
+        var result = await _catalogService.GetVariantsAsync(
+            tenantId!,
+            clientId,
+            skip,
+            limit,
+            search,
+            productSku,
+            cancellationToken);
+        return Ok(result);
     }
 
     [HttpPost("snapshot")]

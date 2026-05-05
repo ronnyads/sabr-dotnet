@@ -423,7 +423,7 @@ public sealed class OrderFulfillmentService
                 || (!string.IsNullOrWhiteSpace(resolvedShipmentId)
                     && shipments.All(item => !string.Equals(item.Shipment.ShipmentId, resolvedShipmentId, StringComparison.Ordinal)))))
         {
-            await _tikTokShopSyncService.SyncOrdersAsync(order.TenantId, order.ClientId, cancellationToken);
+            await _tikTokShopSyncService.EnsureOrderShipmentsAsync(order.Id, order.TenantId, order.ClientId, cancellationToken);
             shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
             shipments = GetOrderShipments(order, shipmentLookup);
             resolvedShipmentId ??= ResolveDefaultShipmentId(order, shipments);
@@ -431,23 +431,42 @@ public sealed class OrderFulfillmentService
 
         if (string.IsNullOrWhiteSpace(resolvedShipmentId))
         {
-            return ServiceResult<MarketplacePullShipmentLabelResult>.Failure([
-                new ValidationError("shipmentId", "SHIPMENT_NOT_AVAILABLE")
-            ]);
+            return ServiceResult<MarketplacePullShipmentLabelResult>.Success(new MarketplacePullShipmentLabelResult
+            {
+                OrderId = order.Id,
+                Succeeded = false,
+                CachedNow = false,
+                HasLabel = false,
+                LabelAvailability = MarketplaceLabelAvailabilities.Pending,
+                ReasonCode = MarketplacePullLabelReasonCodes.ShipmentMissing,
+                Message = "Nenhum pacote operacional foi localizado para este pedido."
+            });
         }
 
         var shipment = shipments.FirstOrDefault(item => string.Equals(item.Shipment.ShipmentId, resolvedShipmentId, StringComparison.Ordinal))?.Shipment;
         if (shipment == null)
         {
-            return ServiceResult<MarketplacePullShipmentLabelResult>.Failure([
-                new ValidationError("shipmentId", "SHIPMENT_NOT_FOUND")
-            ]);
+            return ServiceResult<MarketplacePullShipmentLabelResult>.Success(new MarketplacePullShipmentLabelResult
+            {
+                OrderId = order.Id,
+                ShipmentId = resolvedShipmentId,
+                Succeeded = false,
+                CachedNow = false,
+                HasLabel = false,
+                LabelAvailability = MarketplaceLabelAvailabilities.Pending,
+                ReasonCode = MarketplacePullLabelReasonCodes.ShipmentMissing,
+                Message = "O pacote solicitado ainda nao foi encontrado para este pedido."
+            });
         }
 
         var before = MarketplaceOrderWorkflow.ResolveLabelAvailability(shipment);
         if (order.Provider == MarketplaceProvider.TikTokShop && before == MarketplaceLabelAvailabilities.Pending)
         {
-            await _tikTokShopSyncService.SyncOrdersAsync(order.TenantId, order.ClientId, cancellationToken);
+            await _tikTokShopSyncService.EnsureOrderShipmentsAsync(order.Id, order.TenantId, order.ClientId, cancellationToken);
+            shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
+            shipments = GetOrderShipments(order, shipmentLookup);
+            shipment = shipments.FirstOrDefault(item => string.Equals(item.Shipment.ShipmentId, resolvedShipmentId, StringComparison.Ordinal))?.Shipment ?? shipment;
+            before = MarketplaceOrderWorkflow.ResolveLabelAvailability(shipment);
         }
         var labelResult = await _labelService.GetOrFetchAsync(order.TenantId, order.ClientId, order.Provider, resolvedShipmentId, cancellationToken);
         if (!labelResult.Succeeded)

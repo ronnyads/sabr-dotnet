@@ -127,6 +127,46 @@ public sealed class MarketplaceOrderInventoryService
             reservationsByItemId.TryGetValue(item.Id, out var currentReservations);
             currentReservations ??= [];
 
+            if (currentReservations.Count > 0)
+            {
+                var normalizedItemSku = string.IsNullOrWhiteSpace(item.SabrVariantSku)
+                    ? null
+                    : item.SabrVariantSku.Trim();
+                var skuChanged = currentReservations.Any(reservation =>
+                    !string.Equals(reservation.SabrVariantSku, normalizedItemSku, StringComparison.Ordinal));
+
+                if (skuChanged)
+                {
+                    foreach (var reservation in currentReservations)
+                    {
+                        if (!string.IsNullOrWhiteSpace(reservation.SabrVariantSku)
+                            && !variants.TryGetValue(reservation.SabrVariantSku, out var reservedVariant))
+                        {
+                            reservedVariant = await _dbContext.ProductVariants.FirstOrDefaultAsync(
+                                variant => variant.VariantSku == reservation.SabrVariantSku,
+                                cancellationToken);
+                            if (reservedVariant != null)
+                            {
+                                variants[reservedVariant.VariantSku] = reservedVariant;
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(reservation.SabrVariantSku)
+                            && variants.TryGetValue(reservation.SabrVariantSku, out var variantToRelease))
+                        {
+                            variantToRelease.ReservedStock = Math.Max(0, variantToRelease.ReservedStock - reservation.Quantity);
+                            variantToRelease.AvailableStock = StockAvailabilityService.ComputeAvailable(variantToRelease);
+                        }
+
+                        reservation.Status = StockReservationStatus.Released;
+                        reservation.Quantity = 0;
+                        reservation.UpdatedAt = nowUtc;
+                    }
+
+                    currentReservations = [];
+                }
+            }
+
             var desiredReservation = string.Equals(item.MappingState, MarketplaceMappingStates.Mapped, StringComparison.Ordinal)
                                      && !string.IsNullOrWhiteSpace(item.SabrVariantSku)
                 ? Math.Max(0, item.Quantity)
