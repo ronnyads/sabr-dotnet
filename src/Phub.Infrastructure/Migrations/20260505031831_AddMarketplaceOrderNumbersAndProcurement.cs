@@ -82,7 +82,10 @@ namespace Phub.Infrastructure.Migrations
                     COALESCE(mo.internal_order_number, mo.ml_order_id, '')
                 ) FROM 1 FOR 12))
                 FROM marketplace_orders AS mo
-                WHERE mo.id = ms.marketplace_order_id
+                WHERE mo.tenant_id = ms.tenant_id
+                  AND mo.client_id = ms.client_id
+                  AND mo.provider = ms.provider
+                  AND mo.ml_order_id = ms.ml_order_id
                   AND ms.shipment_scan_code IS NULL;
                 """);
 
