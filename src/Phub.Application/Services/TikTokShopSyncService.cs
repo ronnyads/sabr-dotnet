@@ -21,6 +21,7 @@ public sealed class TikTokShopSyncService
     private readonly TikTokShopOAuthService _oauthService;
     private readonly MarketplaceOrderNumberService _orderNumberService;
     private readonly MarketplaceOrderInventoryService _inventoryService;
+    private readonly MarketplaceOrderMappingService _mappingService;
     private readonly TikTokShopOptions _options;
     private readonly ILogger<TikTokShopSyncService> _logger;
 
@@ -30,6 +31,7 @@ public sealed class TikTokShopSyncService
         TikTokShopOAuthService oauthService,
         MarketplaceOrderNumberService orderNumberService,
         MarketplaceOrderInventoryService inventoryService,
+        MarketplaceOrderMappingService mappingService,
         IOptions<TikTokShopOptions> options,
         ILogger<TikTokShopSyncService> logger)
     {
@@ -38,6 +40,7 @@ public sealed class TikTokShopSyncService
         _oauthService = oauthService;
         _orderNumberService = orderNumberService;
         _inventoryService = inventoryService;
+        _mappingService = mappingService;
         _options = options.Value;
         _logger = logger;
     }
@@ -303,8 +306,6 @@ public sealed class TikTokShopSyncService
                 "TikTok Shop indisponivel ao carregar detalhes dos pedidos. Tente novamente.");
         }
 
-        var autoMappedSkuLookup = await BuildSellerSkuLookupAsync(details, cancellationToken);
-
         if (connection.SellerId <= 0)
         {
             var resolvedSellerId = details
@@ -316,15 +317,6 @@ public sealed class TikTokShopSyncService
                 connection.UpdatedAt = DateTimeOffset.UtcNow;
             }
         }
-
-        // Load existing mappings for fast lookup
-        var mappings = await _dbContext.TenantMarketplaceListingMaps
-            .Where(m => m.TenantId == tenantId && m.ClientId == clientId && m.Provider == MarketplaceProvider.TikTokShop)
-            .ToListAsync(cancellationToken);
-
-        var mappingLookup = mappings.ToDictionary(
-            m => $"{m.MlItemId}|{m.MlVariationId ?? ""}",
-            m => m.SabrVariantSku);
 
         // Load existing orders for upsert
         var orderIds = details.Select(d => d.OrderId).ToList();
@@ -339,7 +331,6 @@ public sealed class TikTokShopSyncService
 
         int ordersUpserted = 0;
         int itemsUpserted = 0;
-        int mappingsCreated = 0;
         int pendingPersistedOrders = 0;
 
         foreach (var detail in details)
@@ -363,16 +354,13 @@ public sealed class TikTokShopSyncService
                         existingOrder.PaidAt = DateTimeOffset.FromUnixTimeSeconds(detail.PaidTime.Value);
                     }
 
-                    UpsertOrderItems(
+                    itemsUpserted += await UpsertOrderItemsAsync(
                         existingOrder,
                         detail,
                         tenantId,
                         clientId,
                         connection.SellerId,
-                        mappingLookup,
-                        autoMappedSkuLookup,
-                        ref itemsUpserted,
-                        ref mappingsCreated);
+                        cancellationToken);
                 }
                 else
                 {
@@ -394,16 +382,13 @@ public sealed class TikTokShopSyncService
                         order.PaidAt = DateTimeOffset.FromUnixTimeSeconds(detail.PaidTime.Value);
                     }
 
-                    UpsertOrderItems(
+                    itemsUpserted += await UpsertOrderItemsAsync(
                         order,
                         detail,
                         tenantId,
                         clientId,
                         connection.SellerId,
-                        mappingLookup,
-                        autoMappedSkuLookup,
-                        ref itemsUpserted,
-                        ref mappingsCreated);
+                        cancellationToken);
                     _dbContext.MarketplaceOrders.Add(order);
                     existingOrderMap[order.MlOrderId] = order;
                     ordersUpserted++;
@@ -446,7 +431,7 @@ public sealed class TikTokShopSyncService
 
         _logger.LogInformation(
             "TikTok Shop sync completed. tenantId={TenantId} clientId={ClientId} ordersUpserted={Orders} itemsUpserted={Items} mappingsCreated={MappingsCreated} sellerId={SellerId}",
-            tenantId, clientId, ordersUpserted, itemsUpserted, mappingsCreated, connection.SellerId);
+            tenantId, clientId, ordersUpserted, itemsUpserted, 0, connection.SellerId);
 
         return ServiceResult<TikTokShopSyncResult>.Success(new TikTokShopSyncResult
         {
@@ -520,17 +505,15 @@ public sealed class TikTokShopSyncService
         }
     }
 
-    private void UpsertOrderItems(
+    private async Task<int> UpsertOrderItemsAsync(
         MarketplaceOrder order,
         TikTokShopOrderDetail detail,
         string tenantId,
         Guid clientId,
         long sellerId,
-        Dictionary<string, string> mappingLookup,
-        IReadOnlyDictionary<string, string> sellerSkuLookup,
-        ref int itemsUpserted,
-        ref int mappingsCreated)
+        CancellationToken cancellationToken)
     {
+        var itemsUpserted = 0;
         foreach (var lineItem in detail.LineItems)
         {
             if (lineItem.Quantity <= 0)
@@ -547,36 +530,24 @@ public sealed class TikTokShopSyncService
 
             var productId = lineItem.ProductId ?? string.Empty;
             var skuId = lineItem.SkuId ?? string.Empty;
-            var mapKey = $"{productId}|{skuId}";
-            mappingLookup.TryGetValue(mapKey, out var sabrSku);
-
-            if (string.IsNullOrWhiteSpace(sabrSku))
-            {
-                var normalizedSellerSku = NormalizeSellerSku(lineItem.SellerSku);
-                if (normalizedSellerSku != null &&
-                    sellerSkuLookup.TryGetValue(normalizedSellerSku, out var autoMappedSku))
-                {
-                    sabrSku = autoMappedSku;
-                    if (!string.IsNullOrWhiteSpace(productId))
-                    {
-                        EnsureAutoMapping(
-                            tenantId,
-                            clientId,
-                            productId,
-                            skuId,
-                            sabrSku,
-                            mappingLookup,
-                            ref mappingsCreated);
-                    }
-                }
-            }
+            var resolution = await _mappingService.ResolveImportedItemAsync(
+                tenantId,
+                clientId,
+                MarketplaceProvider.TikTokShop,
+                sellerId,
+                null,
+                productId,
+                string.IsNullOrWhiteSpace(skuId) ? null : skuId,
+                lineItem.SellerSku,
+                cancellationToken);
 
             var existing = order.Items.FirstOrDefault(i => i.MlItemId == productId && i.MlVariationId == skuId);
             if (existing != null)
             {
                 existing.Quantity = lineItem.Quantity;
-                existing.SabrVariantSku = sabrSku;
-                existing.MappingState = sabrSku != null ? MarketplaceMappingStates.Mapped : MarketplaceMappingStates.Unmapped;
+                existing.SabrVariantSku = resolution.SabrVariantSku;
+                existing.MappingState = resolution.MappingState;
+                existing.RawJson = JsonSerializer.Serialize(lineItem);
                 existing.UpdatedAt = DateTimeOffset.UtcNow;
             }
             else
@@ -589,75 +560,16 @@ public sealed class TikTokShopSyncService
                     SellerId = sellerId,
                     MlItemId = productId,
                     MlVariationId = skuId,
-                    SabrVariantSku = sabrSku,
+                    SabrVariantSku = resolution.SabrVariantSku,
                     Quantity = lineItem.Quantity,
-                    MappingState = sabrSku != null ? MarketplaceMappingStates.Mapped : MarketplaceMappingStates.Unmapped,
+                    MappingState = resolution.MappingState,
                     RawJson = JsonSerializer.Serialize(lineItem)
                 });
                 itemsUpserted++;
             }
         }
-    }
 
-    private void EnsureAutoMapping(
-        string tenantId,
-        Guid clientId,
-        string tikTokItemId,
-        string? tikTokSkuId,
-        string sabrVariantSku,
-        Dictionary<string, string> mappingLookup,
-        ref int mappingsCreated)
-    {
-        var mapKey = $"{tikTokItemId}|{tikTokSkuId ?? string.Empty}";
-        if (mappingLookup.ContainsKey(mapKey))
-        {
-            return;
-        }
-
-        _dbContext.TenantMarketplaceListingMaps.Add(new TenantMarketplaceListingMap
-        {
-            TenantId = tenantId,
-            ClientId = clientId,
-            Provider = MarketplaceProvider.TikTokShop,
-            MlItemId = tikTokItemId,
-            MlVariationId = string.IsNullOrWhiteSpace(tikTokSkuId) ? null : tikTokSkuId,
-            SabrVariantSku = sabrVariantSku
-        });
-
-        mappingLookup[mapKey] = sabrVariantSku;
-        mappingsCreated++;
-    }
-
-    private async Task<IReadOnlyDictionary<string, string>> BuildSellerSkuLookupAsync(
-        IReadOnlyCollection<TikTokShopOrderDetail> details,
-        CancellationToken cancellationToken)
-    {
-        var sellerSkus = details
-            .SelectMany(detail => detail.LineItems)
-            .Select(item => NormalizeSellerSku(item.SellerSku))
-            .Where(value => value != null)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        if (sellerSkus.Count == 0)
-        {
-            return new Dictionary<string, string>(StringComparer.Ordinal);
-        }
-
-        var variants = await _dbContext.ProductVariants
-            .AsNoTracking()
-            .Where(variant => sellerSkus.Contains(variant.VariantSku))
-            .Select(variant => variant.VariantSku)
-            .ToListAsync(cancellationToken);
-
-        return variants.ToDictionary(value => value, value => value, StringComparer.Ordinal);
-    }
-
-    private static string? NormalizeSellerSku(string? sellerSku)
-    {
-        return string.IsNullOrWhiteSpace(sellerSku)
-            ? null
-            : Phub.Domain.ValueObjects.Sku.Normalize(sellerSku);
+        return itemsUpserted;
     }
 
     private static long TryParseSellerId(string? rawShopId)

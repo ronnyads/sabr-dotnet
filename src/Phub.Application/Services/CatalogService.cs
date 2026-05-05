@@ -74,8 +74,7 @@ public sealed class CatalogService
     {
         var now = DateTimeOffset.UtcNow;
         var allowedSkuQuery = _catalogAuthorization.GetAllowedSkuQuery(tenantId, clientId, now);
-
-        var query =
+        var variantsQuery =
             from variant in _dbContext.ProductVariants.AsNoTracking()
             join product in _dbContext.Products.AsNoTracking() on variant.BaseSku equals product.Sku
             where variant.IsActive
@@ -86,26 +85,20 @@ public sealed class CatalogService
         if (!string.IsNullOrWhiteSpace(productSku))
         {
             var normalizedProductSku = Phub.Domain.ValueObjects.Sku.Normalize(productSku);
-            query = query.Where(item => item.variant.BaseSku == normalizedProductSku);
+            variantsQuery = variantsQuery.Where(item => item.variant.BaseSku == normalizedProductSku);
         }
 
         if (!string.IsNullOrWhiteSpace(search))
         {
             var term = search.Trim().ToUpperInvariant();
-            query = query.Where(item =>
+            variantsQuery = variantsQuery.Where(item =>
                 item.variant.VariantSku.ToUpper().Contains(term) ||
                 item.variant.BaseSku.ToUpper().Contains(term) ||
                 item.variant.Name.ToUpper().Contains(term) ||
                 item.product.Name.ToUpper().Contains(term));
         }
 
-        var total = await query.CountAsync(cancellationToken);
-        var items = await query
-            .OrderBy(item => item.product.Name)
-            .ThenBy(item => item.variant.Name)
-            .ThenBy(item => item.variant.VariantSku)
-            .Skip(skip)
-            .Take(limit)
+        var variantItems = await variantsQuery
             .Select(item => new CatalogVariantDto
             {
                 VariantSku = item.variant.VariantSku,
@@ -113,14 +106,55 @@ public sealed class CatalogService
                 ProductName = item.product.Name,
                 VariantName = item.variant.Name,
                 AvailableStock = item.variant.AvailableStock,
-                ThumbnailUrl = item.product.ThumbnailUrl
+                ThumbnailUrl = item.product.ThumbnailUrl,
+                IsDefaultVariant = item.variant.VariantSku == item.variant.BaseSku
             })
             .ToListAsync(cancellationToken);
 
+        var productsWithoutVariantsQuery = _dbContext.Products
+            .AsNoTracking()
+            .Where(product => product.IsActive && allowedSkuQuery.Contains(product.Sku))
+            .Where(product => !_dbContext.ProductVariants.Any(variant => variant.BaseSku == product.Sku && variant.IsActive));
+
+        if (!string.IsNullOrWhiteSpace(productSku))
+        {
+            var normalizedProductSku = Phub.Domain.ValueObjects.Sku.Normalize(productSku);
+            productsWithoutVariantsQuery = productsWithoutVariantsQuery.Where(product => product.Sku == normalizedProductSku);
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToUpperInvariant();
+            productsWithoutVariantsQuery = productsWithoutVariantsQuery.Where(product =>
+                product.Sku.ToUpper().Contains(term) ||
+                product.Name.ToUpper().Contains(term));
+        }
+
+        var productFallbackItems = await productsWithoutVariantsQuery
+            .Select(product => new CatalogVariantDto
+            {
+                VariantSku = product.Sku,
+                BaseSku = product.Sku,
+                ProductName = product.Name,
+                VariantName = product.Name,
+                AvailableStock = 0,
+                ThumbnailUrl = product.ThumbnailUrl,
+                IsDefaultVariant = true
+            })
+            .ToListAsync(cancellationToken);
+
+        var allItems = variantItems
+            .Concat(productFallbackItems)
+            .OrderBy(item => item.ProductName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.IsDefaultVariant ? 0 : 1)
+            .ThenBy(item => item.VariantName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.VariantSku, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         return new PagedResult<CatalogVariantDto>
         {
-            Items = items,
-            Total = total,
+            Items = allItems.Skip(skip).Take(limit).ToList(),
+            Total = allItems.Count,
             Skip = skip,
             Limit = limit
         };

@@ -369,6 +369,7 @@ builder.Services.AddScoped<MarketplaceAuditLogService>();
 builder.Services.AddScoped<MarketplaceMabangDispatchService>();
 builder.Services.AddScoped<StockAvailabilityService>();
 builder.Services.AddScoped<MarketplaceOrderNumberService>();
+builder.Services.AddScoped<MarketplaceOrderMappingService>();
 builder.Services.AddScoped<MarketplaceOrderInventoryService>();
 builder.Services.AddScoped<MarketplaceOrderPaymentService>();
 builder.Services.AddScoped<MarketplaceShipmentLabelService>();

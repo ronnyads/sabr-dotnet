@@ -8,4 +8,5 @@ public sealed class CatalogVariantDto
     public string VariantName { get; set; } = string.Empty;
     public int AvailableStock { get; set; }
     public string? ThumbnailUrl { get; set; }
+    public bool IsDefaultVariant { get; set; }
 }

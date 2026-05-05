@@ -91,7 +91,7 @@ public sealed class TikTokShopMappingService
             .Where(item => item.TenantId == tenantId
                            && item.ClientId == clientId
                            && item.Provider == MarketplaceProvider.TikTokShop
-                           && item.MappingState == MarketplaceMappingStates.Unmapped)
+                           && (item.SabrVariantSku == null || item.SabrVariantSku == string.Empty))
             .Join(
                 _dbContext.MarketplaceOrders.AsNoTracking(),
                 item => item.MarketplaceOrderId,
@@ -233,7 +233,7 @@ public sealed class TikTokShopMappingService
         foreach (var item in matchedItems)
         {
             item.SabrVariantSku = normalizedVariantSku;
-            item.MappingState = MarketplaceMappingStates.Mapped;
+            item.MappingState = MarketplaceMappingStates.MappedByListingMap;
             item.UpdatedAt = DateTimeOffset.UtcNow;
         }
 

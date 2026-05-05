@@ -149,6 +149,25 @@ public static class MarketplaceMappingStates
 {
     public const string Mapped = "MAPPED";
     public const string Unmapped = "UNMAPPED";
+    public const string MappedByExactSku = "MAPPED_BY_EXACT_SKU";
+    public const string MappedByListingMap = "MAPPED_BY_LISTING_MAP";
+    public const string UnmappedMissingChannelSku = "UNMAPPED_MISSING_CHANNEL_SKU";
+    public const string UnmappedUnknownChannelSku = "UNMAPPED_UNKNOWN_CHANNEL_SKU";
+    public const string UnmappedSkuNotAuthorized = "UNMAPPED_SKU_NOT_AUTHORIZED";
+    public const string UnmappedMappingNotAuthorized = "UNMAPPED_MAPPING_NOT_AUTHORIZED";
+
+    public static bool IsMapped(string? value)
+        => string.Equals(value, Mapped, StringComparison.Ordinal)
+           || string.Equals(value, MappedByExactSku, StringComparison.Ordinal)
+           || string.Equals(value, MappedByListingMap, StringComparison.Ordinal);
+
+    public static bool IsUnmapped(string? value)
+        => string.IsNullOrWhiteSpace(value)
+           || string.Equals(value, Unmapped, StringComparison.Ordinal)
+           || string.Equals(value, UnmappedMissingChannelSku, StringComparison.Ordinal)
+           || string.Equals(value, UnmappedUnknownChannelSku, StringComparison.Ordinal)
+           || string.Equals(value, UnmappedSkuNotAuthorized, StringComparison.Ordinal)
+           || string.Equals(value, UnmappedMappingNotAuthorized, StringComparison.Ordinal);
 }
 
 public sealed class MercadoLivreTokenResponse
@@ -382,6 +401,7 @@ public sealed class MarketplaceOrderItemDetailResult
     public Guid Id { get; set; }
     public string MlItemId { get; set; } = string.Empty;
     public string? MlVariationId { get; set; }
+    public string? ChannelSku { get; set; }
     public string? SabrVariantSku { get; set; }
     public string? ProductName { get; set; }
     public int Quantity { get; set; }
@@ -390,6 +410,7 @@ public sealed class MarketplaceOrderItemDetailResult
     public int? AvailableStock { get; set; }
     public string StockStatus { get; set; } = MarketplaceOrderItemStockStatuses.Unmapped;
     public string MappingState { get; set; } = string.Empty;
+    public string? MappingReason { get; set; }
 }
 
 public sealed class MarketplaceShipmentResult
@@ -551,6 +572,7 @@ public static class MarketplaceLabelAvailabilities
 public static class MarketplaceOrderInventoryStatuses
 {
     public const string Unmapped = "unmapped";
+    public const string NoImportedItems = "no_imported_items";
     public const string MappedInStock = "mapped_in_stock";
     public const string MappedPartialStock = "mapped_partial_stock";
     public const string OutOfStock = "out_of_stock";
@@ -566,6 +588,7 @@ public static class MarketplaceOrderItemStockStatuses
 
 public static class MarketplaceOrderPaymentBlockers
 {
+    public const string NoImportedItems = "no_imported_items";
     public const string UnmappedItem = "unmapped_item";
     public const string OutOfStock = "out_of_stock";
     public const string LabelMissing = "label_missing";

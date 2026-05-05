@@ -14,6 +14,8 @@ public sealed class TinyIntegrationService
     private readonly ITinyErpApiClient _tinyApiClient;
     private readonly TinyOAuthService _tinyOAuthService;
     private readonly MarketplaceOrderNumberService _orderNumberService;
+    private readonly MarketplaceOrderInventoryService _inventoryService;
+    private readonly MarketplaceOrderMappingService _mappingService;
     private readonly ILogger<TinyIntegrationService> _logger;
 
     public TinyIntegrationService(
@@ -21,12 +23,16 @@ public sealed class TinyIntegrationService
         ITinyErpApiClient tinyApiClient,
         TinyOAuthService tinyOAuthService,
         MarketplaceOrderNumberService orderNumberService,
+        MarketplaceOrderInventoryService inventoryService,
+        MarketplaceOrderMappingService mappingService,
         ILogger<TinyIntegrationService> logger)
     {
         _dbContext = dbContext;
         _tinyApiClient = tinyApiClient;
         _tinyOAuthService = tinyOAuthService;
         _orderNumberService = orderNumberService;
+        _inventoryService = inventoryService;
+        _mappingService = mappingService;
         _logger = logger;
     }
 
@@ -272,81 +278,82 @@ public sealed class TinyIntegrationService
                      && o.MlOrderId == mlOrderId,
                 cancellationToken);
 
-        if (existing != null)
+        var order = existing;
+        if (order != null)
         {
-            if (string.IsNullOrWhiteSpace(existing.InternalOrderNumber))
+            if (string.IsNullOrWhiteSpace(order.InternalOrderNumber))
             {
-                await _orderNumberService.EnsureOrderNumberAsync(existing, cancellationToken);
+                await _orderNumberService.EnsureOrderNumberAsync(order, cancellationToken);
             }
 
-            existing.Status = tinyOrder.Situacao;
-            existing.UpdatedAt = nowUtc;
             syncResult.Updated++;
-            return;
         }
-
-        // New order
-        var order = new MarketplaceOrder
+        else
         {
-            TenantId = tenantId,
-            ClientId = clientId,
-            Provider = MarketplaceProvider.TinyErp,
-            SellerId = sellerId,
-            MlOrderId = mlOrderId,
-            Status = tinyOrder.Situacao,
-            PaidAt = tinyOrder.DataPedido.HasValue ? new DateTimeOffset(tinyOrder.DataPedido.Value, TimeSpan.Zero) : null
-        };
-        await _orderNumberService.EnsureOrderNumberAsync(order, cancellationToken);
-        _dbContext.MarketplaceOrders.Add(order);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        foreach (var tinyItem in tinyOrder.Itens)
-        {
-            var sku = tinyItem.Codigo?.Trim().ToUpperInvariant();
-            var variant = string.IsNullOrWhiteSpace(sku)
-                ? null
-                : await _dbContext.ProductVariants
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(v => v.VariantSku == sku, cancellationToken);
-
-            var mappingState = variant != null
-                ? MarketplaceMappingStates.Mapped
-                : MarketplaceMappingStates.Unmapped;
-
-            var orderItem = new MarketplaceOrderItem
+            order = new MarketplaceOrder
             {
-                MarketplaceOrderId = order.Id,
                 TenantId = tenantId,
                 ClientId = clientId,
                 Provider = MarketplaceProvider.TinyErp,
                 SellerId = sellerId,
-                MlItemId = tinyItem.Id.ToString(),
-                SabrVariantSku = variant?.VariantSku,
-                Quantity = (int)tinyItem.Quantidade,
-                ReservedQuantity = variant != null ? (int)tinyItem.Quantidade : 0,
-                MappingState = mappingState
+                MlOrderId = mlOrderId,
+                Status = tinyOrder.Situacao,
+                PaidAt = tinyOrder.DataPedido.HasValue ? new DateTimeOffset(tinyOrder.DataPedido.Value, TimeSpan.Zero) : null
             };
-            _dbContext.MarketplaceOrderItems.Add(orderItem);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-
-            if (variant != null)
-            {
-                var reservation = new StockReservation
-                {
-                    TenantId = tenantId,
-                    ClientId = clientId,
-                    SabrVariantSku = variant.VariantSku,
-                    MarketplaceOrderId = order.Id,
-                    MarketplaceOrderItemId = orderItem.Id,
-                    Quantity = (int)tinyItem.Quantidade,
-                    Status = StockReservationStatus.Reserved
-                };
-                _dbContext.StockReservations.Add(reservation);
-                await _dbContext.SaveChangesAsync(cancellationToken);
-            }
+            await _orderNumberService.EnsureOrderNumberAsync(order, cancellationToken);
+            _dbContext.MarketplaceOrders.Add(order);
+            syncResult.Imported++;
         }
 
-        syncResult.Imported++;
+        order.Status = tinyOrder.Situacao;
+        order.SellerId = sellerId;
+        order.PaidAt = tinyOrder.DataPedido.HasValue ? new DateTimeOffset(tinyOrder.DataPedido.Value, TimeSpan.Zero) : null;
+        order.RawJson = System.Text.Json.JsonSerializer.Serialize(tinyOrder);
+        order.UpdatedAt = nowUtc;
+
+        foreach (var tinyItem in tinyOrder.Itens)
+        {
+            var itemId = tinyItem.Id.ToString();
+            var resolution = await _mappingService.ResolveImportedItemAsync(
+                tenantId,
+                clientId,
+                MarketplaceProvider.TinyErp,
+                sellerId,
+                null,
+                itemId,
+                null,
+                tinyItem.Codigo,
+                cancellationToken);
+
+            var orderItem = order.Items.FirstOrDefault(item => item.MlItemId == itemId);
+            if (orderItem == null)
+            {
+                orderItem = new MarketplaceOrderItem
+                {
+                    MarketplaceOrderId = order.Id,
+                    TenantId = tenantId,
+                    ClientId = clientId,
+                    Provider = MarketplaceProvider.TinyErp,
+                    SellerId = sellerId,
+                    MlItemId = itemId,
+                    CreatedAt = nowUtc
+                };
+                order.Items.Add(orderItem);
+            }
+
+            orderItem.SellerId = sellerId;
+            orderItem.SabrVariantSku = resolution.SabrVariantSku;
+            orderItem.Quantity = (int)tinyItem.Quantidade;
+            orderItem.MappingState = resolution.MappingState;
+            orderItem.RawJson = System.Text.Json.JsonSerializer.Serialize(tinyItem);
+            orderItem.UpdatedAt = nowUtc;
+        }
+
+        await _inventoryService.ReconcileReservationsAsync(
+            order,
+            sellerId,
+            reservationTtlHours: 24,
+            cancellationToken);
     }
 
     // ── Labels ────────────────────────────────────────────────────────────────

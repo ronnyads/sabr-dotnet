@@ -55,7 +55,7 @@ public sealed class MercadoLivreIntegrationService
             .CountAsync(item => item.TenantId == tenantId
                                 && item.ClientId == clientId
                                 && item.Provider == MarketplaceProvider.MercadoLivre
-                                && item.MappingState == MarketplaceMappingStates.Unmapped,
+                                && (item.SabrVariantSku == null || item.SabrVariantSku == string.Empty),
                 cancellationToken);
 
         return new MercadoLivreIntegrationStatusResult
@@ -281,7 +281,7 @@ public sealed class MercadoLivreIntegrationService
                 OrderId = group.Key,
                 Total = group.Count(),
                 Reserved = group.Sum(i => i.ReservedQuantity),
-                Unmapped = group.Any(i => i.MappingState == MarketplaceMappingStates.Unmapped)
+                Unmapped = group.Any(i => i.SabrVariantSku == null || i.SabrVariantSku == string.Empty)
             })
             .ToListAsync(cancellationToken);
         var groupByOrder = itemGroups.ToDictionary(item => item.OrderId);

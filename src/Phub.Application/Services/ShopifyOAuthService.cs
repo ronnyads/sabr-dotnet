@@ -15,17 +15,23 @@ public sealed class ShopifyOAuthService
     private readonly IAppDbContext _dbContext;
     private readonly IShopifyApiClient _shopifyApiClient;
     private readonly MarketplaceOrderNumberService _orderNumberService;
+    private readonly MarketplaceOrderInventoryService _inventoryService;
+    private readonly MarketplaceOrderMappingService _mappingService;
     private readonly ShopifyOptions _options;
 
     public ShopifyOAuthService(
         IAppDbContext dbContext,
         IShopifyApiClient shopifyApiClient,
         MarketplaceOrderNumberService orderNumberService,
+        MarketplaceOrderInventoryService inventoryService,
+        MarketplaceOrderMappingService mappingService,
         IOptions<ShopifyOptions> options)
     {
         _dbContext = dbContext;
         _shopifyApiClient = shopifyApiClient;
         _orderNumberService = orderNumberService;
+        _inventoryService = inventoryService;
+        _mappingService = mappingService;
         _options = options.Value;
     }
 
@@ -253,7 +259,7 @@ public sealed class ShopifyOAuthService
         foreach (var order in orders)
         {
             var orderId = order.Id.ToString();
-            var existing = await _dbContext.MarketplaceOrders
+            var marketplaceOrder = await _dbContext.MarketplaceOrders
                 .Include(o => o.Items)
                 .FirstOrDefaultAsync(
                     o => o.TenantId == tenantId
@@ -261,13 +267,14 @@ public sealed class ShopifyOAuthService
                          && o.MlOrderId == orderId,
                     cancellationToken);
 
-            if (existing == null)
+            if (marketplaceOrder == null)
             {
-                var marketplaceOrder = new MarketplaceOrder
+                marketplaceOrder = new MarketplaceOrder
                 {
                     TenantId = tenantId,
                     ClientId = clientId,
                     Provider = MarketplaceProvider.Shopify,
+                    SellerId = connection.SellerId,
                     MlOrderId = orderId,
                     Status = order.FinancialStatus,
                     PaidAt = order.FinancialStatus == "paid" ? order.CreatedAt : null,
@@ -277,38 +284,69 @@ public sealed class ShopifyOAuthService
                     UpdatedAt = nowUtc
                 };
                 await _orderNumberService.EnsureOrderNumberAsync(marketplaceOrder, cancellationToken);
-
-                foreach (var line in order.LineItems)
-                {
-                    marketplaceOrder.Items.Add(new MarketplaceOrderItem
-                    {
-                        TenantId = tenantId,
-                        ClientId = clientId,
-                        Provider = MarketplaceProvider.Shopify,
-                        MlItemId = line.Id.ToString(),
-                        MlVariationId = line.VariantId?.ToString(),
-                        SabrVariantSku = string.IsNullOrWhiteSpace(line.Sku) ? null : line.Sku,
-                        Quantity = line.Quantity,
-                        MappingState = string.IsNullOrWhiteSpace(line.Sku) ? "UNMAPPED" : "MAPPED_BY_SKU",
-                        RawJson = JsonSerializer.Serialize(line),
-                        CreatedAt = nowUtc,
-                        UpdatedAt = nowUtc
-                    });
-                }
-
                 _dbContext.MarketplaceOrders.Add(marketplaceOrder);
             }
             else
             {
-                if (string.IsNullOrWhiteSpace(existing.InternalOrderNumber))
+                if (string.IsNullOrWhiteSpace(marketplaceOrder.InternalOrderNumber))
                 {
-                    await _orderNumberService.EnsureOrderNumberAsync(existing, cancellationToken);
+                    await _orderNumberService.EnsureOrderNumberAsync(marketplaceOrder, cancellationToken);
+                }
+            }
+
+            marketplaceOrder.SellerId = connection.SellerId;
+            marketplaceOrder.Status = order.FinancialStatus;
+            marketplaceOrder.PaidAt = order.FinancialStatus == "paid" ? order.CreatedAt : null;
+            marketplaceOrder.RawJson = JsonSerializer.Serialize(order);
+            marketplaceOrder.UpdatedAt = nowUtc;
+
+            foreach (var line in order.LineItems)
+            {
+                var lineItemId = line.Id.ToString();
+                var variationId = line.VariantId?.ToString();
+                var resolution = await _mappingService.ResolveImportedItemAsync(
+                    tenantId,
+                    clientId,
+                    MarketplaceProvider.Shopify,
+                    connection.SellerId,
+                    connection.Id,
+                    lineItemId,
+                    variationId,
+                    line.Sku,
+                    cancellationToken);
+
+                var existingItem = marketplaceOrder.Items.FirstOrDefault(item =>
+                    item.MlItemId == lineItemId
+                    && item.MlVariationId == variationId);
+
+                if (existingItem == null)
+                {
+                    existingItem = new MarketplaceOrderItem
+                    {
+                        TenantId = tenantId,
+                        ClientId = clientId,
+                        Provider = MarketplaceProvider.Shopify,
+                        SellerId = connection.SellerId,
+                        MlItemId = lineItemId,
+                        MlVariationId = variationId,
+                        CreatedAt = nowUtc
+                    };
+                    marketplaceOrder.Items.Add(existingItem);
                 }
 
-                existing.Status = order.FinancialStatus;
-                existing.RawJson = JsonSerializer.Serialize(order);
-                existing.UpdatedAt = nowUtc;
+                existingItem.SellerId = connection.SellerId;
+                existingItem.SabrVariantSku = resolution.SabrVariantSku;
+                existingItem.Quantity = line.Quantity;
+                existingItem.MappingState = resolution.MappingState;
+                existingItem.RawJson = JsonSerializer.Serialize(line);
+                existingItem.UpdatedAt = nowUtc;
             }
+
+            await _inventoryService.ReconcileReservationsAsync(
+                marketplaceOrder,
+                connection.SellerId,
+                reservationTtlHours: 24,
+                cancellationToken);
         }
 
         connection.LastSyncAt = nowUtc;

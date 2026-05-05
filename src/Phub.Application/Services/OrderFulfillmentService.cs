@@ -141,6 +141,7 @@ public sealed class OrderFulfillmentService
                 Id = i.Id,
                 MlItemId = i.MlItemId,
                 MlVariationId = i.MlVariationId,
+                ChannelSku = MarketplaceOrderMappingService.FindChannelSku(order.Provider, i.RawJson),
                 SabrVariantSku = i.SabrVariantSku,
                 ProductName = i.SabrVariantSku != null ? products.GetValueOrDefault(i.SabrVariantSku) : null,
                 Quantity = i.Quantity,
@@ -148,7 +149,12 @@ public sealed class OrderFulfillmentService
                 MissingQuantity = inventory?.MissingQuantity ?? 0,
                 AvailableStock = inventory?.AvailableStock,
                 StockStatus = inventory?.StockStatus ?? MarketplaceOrderItemStockStatuses.Unmapped,
-                MappingState = i.MappingState
+                MappingState = i.MappingState,
+                MappingReason = MarketplaceOrderMappingService.FindMappingReason(
+                    order.Provider,
+                    i.RawJson,
+                    i.MappingState,
+                    !string.IsNullOrWhiteSpace(i.SabrVariantSku))
             };
         }).ToList());
 
@@ -285,7 +291,7 @@ public sealed class OrderFulfillmentService
             ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? order.ShippingMode,
             LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? order.LogisticType,
             ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? order.ShipByDeadlineAt,
-            HasUnmappedItems = order.Items.Any(i => i.MappingState == MarketplaceMappingStates.Unmapped),
+            HasUnmappedItems = order.Items.Any(i => MarketplaceMappingStates.IsUnmapped(i.MappingState)),
             TotalItems = order.Items.Count,
             HasLabel = view.HasLabel,
             LabelAvailability = view.LabelAvailability,
@@ -1492,7 +1498,7 @@ public sealed class OrderFulfillmentService
             ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? view.Order.ShippingMode,
             LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? view.Order.LogisticType,
             ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? view.Order.ShipByDeadlineAt,
-            HasUnmappedItems = view.Order.Items.Any(item => item.MappingState == MarketplaceMappingStates.Unmapped),
+            HasUnmappedItems = view.Order.Items.Any(item => MarketplaceMappingStates.IsUnmapped(item.MappingState)),
             TotalItems = view.Order.Items.Count,
             ReservedItems = view.Order.Items.Sum(item => item.ReservedQuantity),
             HasLabel = view.HasLabel,
@@ -1573,7 +1579,7 @@ public sealed class OrderFulfillmentService
             ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? view.Order.ShippingMode,
             LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? view.Order.LogisticType,
             ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? view.Order.ShipByDeadlineAt,
-            HasUnmappedItems = view.Order.Items.Any(i => i.MappingState == MarketplaceMappingStates.Unmapped),
+            HasUnmappedItems = view.Order.Items.Any(i => MarketplaceMappingStates.IsUnmapped(i.MappingState)),
             TotalItems = view.Order.Items.Count,
             HasLabel = view.HasLabel,
             LabelAvailability = view.LabelAvailability,

@@ -18,6 +18,7 @@ public sealed class MercadoLivreSyncService
     private readonly StockAvailabilityService _stockAvailabilityService;
     private readonly MarketplaceOrderNumberService _orderNumberService;
     private readonly MarketplaceAuditLogService _auditLogService;
+    private readonly MarketplaceOrderMappingService _mappingService;
     private readonly MercadoLivreOptions _options;
     private readonly ILogger<MercadoLivreSyncService> _logger;
 
@@ -28,6 +29,7 @@ public sealed class MercadoLivreSyncService
         StockAvailabilityService stockAvailabilityService,
         MarketplaceOrderNumberService orderNumberService,
         MarketplaceAuditLogService auditLogService,
+        MarketplaceOrderMappingService mappingService,
         IOptions<MercadoLivreOptions> options,
         ILogger<MercadoLivreSyncService> logger)
     {
@@ -37,6 +39,7 @@ public sealed class MercadoLivreSyncService
         _stockAvailabilityService = stockAvailabilityService;
         _orderNumberService = orderNumberService;
         _auditLogService = auditLogService;
+        _mappingService = mappingService;
         _options = options.Value;
         _logger = logger;
     }
@@ -347,19 +350,24 @@ public sealed class MercadoLivreSyncService
                 existingByKey[itemKey] = orderItem;
             }
 
-            var mapping = ResolveMapping(
-                mappingByIntegrationExactKey,
-                fallbackMappingByExactKey,
+            var resolution = await _mappingService.ResolveImportedItemAsync(
+                connection.TenantId,
+                connection.ClientId,
+                MarketplaceProvider.MercadoLivre,
+                connection.SellerId,
+                connection.Id,
                 incomingItem.MlItemId,
-                incomingItem.MlVariationId);
+                incomingItem.MlVariationId,
+                channelSku: null,
+                cancellationToken);
             orderItem.Quantity = incomingItem.Quantity;
-            orderItem.MappingState = mapping == null ? MarketplaceMappingStates.Unmapped : MarketplaceMappingStates.Mapped;
-            orderItem.SabrVariantSku = mapping?.SabrVariantSku;
+            orderItem.MappingState = resolution.MappingState;
+            orderItem.SabrVariantSku = resolution.SabrVariantSku;
             orderItem.RawJson = incomingItem.RawJson;
             orderItem.UpdatedAt = nowUtc;
             itemsTouched++;
 
-            if (mapping == null)
+            if (string.IsNullOrWhiteSpace(resolution.SabrVariantSku))
             {
                 continue;
             }
@@ -373,7 +381,7 @@ public sealed class MercadoLivreSyncService
                 {
                     TenantId = connection.TenantId,
                     ClientId = connection.ClientId,
-                    SabrVariantSku = mapping.SabrVariantSku,
+                    SabrVariantSku = resolution.SabrVariantSku,
                     MarketplaceOrderId = order.Id,
                     MarketplaceOrderItemId = orderItem.Id,
                     Quantity = delta,
@@ -386,7 +394,7 @@ public sealed class MercadoLivreSyncService
                 orderItem.ReservedQuantity = currentReservation + delta;
 
                 var variant = await _dbContext.ProductVariants.FirstOrDefaultAsync(
-                    item => item.VariantSku == mapping.SabrVariantSku,
+                    item => item.VariantSku == resolution.SabrVariantSku,
                     cancellationToken);
                 if (variant != null)
                 {

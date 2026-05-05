@@ -52,7 +52,12 @@ public sealed class MarketplaceOrderInventoryService
         IReadOnlyCollection<MarketplaceOrderItemInventorySummary> itemSummaries)
     {
         var blockers = new HashSet<string>(StringComparer.Ordinal);
-        if (itemSummaries.Any(item => item.MappingState == MarketplaceMappingStates.Unmapped))
+        if (itemSummaries.Count == 0)
+        {
+            blockers.Add(MarketplaceOrderPaymentBlockers.NoImportedItems);
+        }
+
+        if (itemSummaries.Any(item => MarketplaceMappingStates.IsUnmapped(item.MappingState)))
         {
             blockers.Add(MarketplaceOrderPaymentBlockers.UnmappedItem);
         }
@@ -167,7 +172,7 @@ public sealed class MarketplaceOrderInventoryService
                 }
             }
 
-            var desiredReservation = string.Equals(item.MappingState, MarketplaceMappingStates.Mapped, StringComparison.Ordinal)
+            var desiredReservation = MarketplaceMappingStates.IsMapped(item.MappingState)
                                      && !string.IsNullOrWhiteSpace(item.SabrVariantSku)
                 ? Math.Max(0, item.Quantity)
                 : 0;
@@ -239,7 +244,7 @@ public sealed class MarketplaceOrderInventoryService
 
     private static MarketplaceOrderItemInventorySummary BuildItemSummary(MarketplaceOrderItem item, ProductVariant? variant)
     {
-        if (!string.Equals(item.MappingState, MarketplaceMappingStates.Mapped, StringComparison.Ordinal)
+        if (!MarketplaceMappingStates.IsMapped(item.MappingState)
             || string.IsNullOrWhiteSpace(item.SabrVariantSku))
         {
             return new MarketplaceOrderItemInventorySummary(
@@ -283,7 +288,7 @@ public sealed class MarketplaceOrderInventoryService
     {
         if (itemSummaries.Count == 0)
         {
-            return MarketplaceOrderInventoryStatuses.Unmapped;
+            return MarketplaceOrderInventoryStatuses.NoImportedItems;
         }
 
         if (itemSummaries.Any(item => item.StockStatus == MarketplaceOrderItemStockStatuses.Unmapped))
