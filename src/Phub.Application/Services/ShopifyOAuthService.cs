@@ -14,15 +14,18 @@ public sealed class ShopifyOAuthService
 {
     private readonly IAppDbContext _dbContext;
     private readonly IShopifyApiClient _shopifyApiClient;
+    private readonly MarketplaceOrderNumberService _orderNumberService;
     private readonly ShopifyOptions _options;
 
     public ShopifyOAuthService(
         IAppDbContext dbContext,
         IShopifyApiClient shopifyApiClient,
+        MarketplaceOrderNumberService orderNumberService,
         IOptions<ShopifyOptions> options)
     {
         _dbContext = dbContext;
         _shopifyApiClient = shopifyApiClient;
+        _orderNumberService = orderNumberService;
         _options = options.Value;
     }
 
@@ -273,6 +276,7 @@ public sealed class ShopifyOAuthService
                     CreatedAt = nowUtc,
                     UpdatedAt = nowUtc
                 };
+                await _orderNumberService.EnsureOrderNumberAsync(marketplaceOrder, cancellationToken);
 
                 foreach (var line in order.LineItems)
                 {
@@ -296,6 +300,11 @@ public sealed class ShopifyOAuthService
             }
             else
             {
+                if (string.IsNullOrWhiteSpace(existing.InternalOrderNumber))
+                {
+                    await _orderNumberService.EnsureOrderNumberAsync(existing, cancellationToken);
+                }
+
                 existing.Status = order.FinancialStatus;
                 existing.RawJson = JsonSerializer.Serialize(order);
                 existing.UpdatedAt = nowUtc;

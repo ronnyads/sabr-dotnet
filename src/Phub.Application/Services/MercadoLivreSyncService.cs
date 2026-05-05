@@ -16,6 +16,7 @@ public sealed class MercadoLivreSyncService
     private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
     private readonly MercadoLivreOAuthService _oauthService;
     private readonly StockAvailabilityService _stockAvailabilityService;
+    private readonly MarketplaceOrderNumberService _orderNumberService;
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly MercadoLivreOptions _options;
     private readonly ILogger<MercadoLivreSyncService> _logger;
@@ -25,6 +26,7 @@ public sealed class MercadoLivreSyncService
         IMercadoLivreApiClient mercadoLivreApiClient,
         MercadoLivreOAuthService oauthService,
         StockAvailabilityService stockAvailabilityService,
+        MarketplaceOrderNumberService orderNumberService,
         MarketplaceAuditLogService auditLogService,
         IOptions<MercadoLivreOptions> options,
         ILogger<MercadoLivreSyncService> logger)
@@ -33,6 +35,7 @@ public sealed class MercadoLivreSyncService
         _mercadoLivreApiClient = mercadoLivreApiClient;
         _oauthService = oauthService;
         _stockAvailabilityService = stockAvailabilityService;
+        _orderNumberService = orderNumberService;
         _auditLogService = auditLogService;
         _options = options.Value;
         _logger = logger;
@@ -297,8 +300,13 @@ public sealed class MercadoLivreSyncService
                 MlOrderId = details.MlOrderId,
                 ImportedAt = nowUtc
             };
+            await _orderNumberService.EnsureOrderNumberAsync(order, cancellationToken);
             _dbContext.MarketplaceOrders.Add(order);
             createdOrder = true;
+        }
+        else if (string.IsNullOrWhiteSpace(order.InternalOrderNumber))
+        {
+            await _orderNumberService.EnsureOrderNumberAsync(order, cancellationToken);
         }
 
         order.Status = details.Status;

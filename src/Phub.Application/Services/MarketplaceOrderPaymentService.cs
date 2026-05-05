@@ -14,6 +14,7 @@ public sealed class MarketplaceOrderPaymentService
 {
     private readonly IAppDbContext _dbContext;
     private readonly StockAvailabilityService _stockAvailabilityService;
+    private readonly MarketplaceOrderInventoryService _inventoryService;
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly MercadoLivreOptions _options;
     private readonly TinyIntegrationService _tinyIntegrationService;
@@ -21,12 +22,14 @@ public sealed class MarketplaceOrderPaymentService
     public MarketplaceOrderPaymentService(
         IAppDbContext dbContext,
         StockAvailabilityService stockAvailabilityService,
+        MarketplaceOrderInventoryService inventoryService,
         MarketplaceAuditLogService auditLogService,
         IOptions<MercadoLivreOptions> options,
         TinyIntegrationService tinyIntegrationService)
     {
         _dbContext = dbContext;
         _stockAvailabilityService = stockAvailabilityService;
+        _inventoryService = inventoryService;
         _auditLogService = auditLogService;
         _options = options.Value;
         _tinyIntegrationService = tinyIntegrationService;
@@ -78,7 +81,20 @@ public sealed class MarketplaceOrderPaymentService
         var orderItems = await _dbContext.MarketplaceOrderItems
             .Where(item => item.MarketplaceOrderId == order.Id)
             .ToListAsync(cancellationToken);
-        if (orderItems.Any(item => !string.Equals(item.MappingState, MarketplaceMappingStates.Mapped, StringComparison.Ordinal)))
+        var shipments = await _dbContext.MarketplaceShipments
+            .AsNoTracking()
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == order.Provider
+                           && item.MlOrderId == order.MlOrderId)
+            .ToListAsync(cancellationToken);
+
+        var inventorySummary = MarketplaceOrderInventoryService.BuildSummary(
+            order,
+            shipments,
+            await _inventoryService.BuildItemSummariesAsync(orderItems, cancellationToken));
+
+        if (inventorySummary.PaymentBlockers.Contains(MarketplaceOrderPaymentBlockers.UnmappedItem, StringComparer.Ordinal))
         {
             return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
             {
@@ -86,23 +102,28 @@ public sealed class MarketplaceOrderPaymentService
             });
         }
 
-        if (MarketplaceOrderWorkflow.RequiresLabelForPayment(order.Provider))
+        if (inventorySummary.PaymentBlockers.Contains(MarketplaceOrderPaymentBlockers.OutOfStock, StringComparer.Ordinal))
         {
-            var shipments = await _dbContext.MarketplaceShipments
-                .AsNoTracking()
-                .Where(item => item.TenantId == tenantId
-                               && item.ClientId == clientId
-                               && item.Provider == order.Provider
-                               && item.MlOrderId == order.MlOrderId)
-                .ToListAsync(cancellationToken);
-
-            if (!MarketplaceOrderWorkflow.CanMarkPaid(order, shipments))
+            return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
             {
-                return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
-                {
-                    new ValidationError("label", "LABEL_REQUIRED_BEFORE_PAYMENT")
-                });
-            }
+                new ValidationError("stock", "OUT_OF_STOCK_FOR_PAYMENT")
+            });
+        }
+
+        if (inventorySummary.PaymentBlockers.Contains(MarketplaceOrderPaymentBlockers.CancellationPending, StringComparer.Ordinal))
+        {
+            return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
+            {
+                new ValidationError("cancellation", "CANCELLATION_PENDING")
+            });
+        }
+
+        if (inventorySummary.PaymentBlockers.Contains(MarketplaceOrderPaymentBlockers.LabelMissing, StringComparer.Ordinal))
+        {
+            return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
+            {
+                new ValidationError("label", "LABEL_REQUIRED_BEFORE_PAYMENT")
+            });
         }
 
         var nowUtc = DateTimeOffset.UtcNow;

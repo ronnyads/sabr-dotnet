@@ -101,6 +101,8 @@ try
     builder.Services.AddScoped<MercadoLivreIntegrationService>();
     builder.Services.AddScoped<MarketplaceMabangDispatchService>();
     builder.Services.AddScoped<MarketplaceAuditLogService>();
+    builder.Services.AddScoped<MarketplaceOrderNumberService>();
+    builder.Services.AddScoped<MarketplaceOrderInventoryService>();
     builder.Services.AddScoped<MarketplaceOrderPaymentService>();
     builder.Services.AddScoped<MarketplaceShipmentLabelService>();
     builder.Services.AddScoped<StockAvailabilityService>();

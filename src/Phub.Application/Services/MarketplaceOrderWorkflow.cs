@@ -1,6 +1,8 @@
 using Phub.Application.Models;
 using Phub.Domain.Entities;
 using Phub.Domain.Enums;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Phub.Application.Services;
 
@@ -131,5 +133,12 @@ internal static class MarketplaceOrderWorkflow
             "COMPLETED" => "Concluído",
             var value => value.Replace('_', ' ')
         };
+    }
+
+    public static string BuildShipmentScanCode(MarketplaceOrder order, MarketplaceShipment shipment)
+    {
+        var payload = $"{order.Id:N}|{shipment.Id:N}|{shipment.ShipmentId}|{order.InternalOrderNumber ?? order.MlOrderId}";
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..12];
+        return $"PHUB-SCAN-{hash}";
     }
 }

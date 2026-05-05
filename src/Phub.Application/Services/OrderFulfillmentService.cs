@@ -11,19 +11,25 @@ public sealed class OrderFulfillmentService
 {
     private readonly IAppDbContext _dbContext;
     private readonly MarketplaceShipmentLabelService _labelService;
+    private readonly MarketplaceOrderInventoryService _inventoryService;
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly TinyIntegrationService _tinyIntegrationService;
+    private readonly TikTokShopSyncService _tikTokShopSyncService;
 
     public OrderFulfillmentService(
         IAppDbContext dbContext,
         MarketplaceShipmentLabelService labelService,
+        MarketplaceOrderInventoryService inventoryService,
         MarketplaceAuditLogService auditLogService,
-        TinyIntegrationService tinyIntegrationService)
+        TinyIntegrationService tinyIntegrationService,
+        TikTokShopSyncService tikTokShopSyncService)
     {
         _dbContext = dbContext;
         _labelService = labelService;
+        _inventoryService = inventoryService;
         _auditLogService = auditLogService;
         _tinyIntegrationService = tinyIntegrationService;
+        _tikTokShopSyncService = tikTokShopSyncService;
     }
 
     /// <summary>
@@ -66,8 +72,8 @@ public sealed class OrderFulfillmentService
 
         var normalizedChannelStatus = NormalizeFilter(channelStatus) ?? NormalizeFilter(legacyStatus);
         var normalizedInternalStatus = NormalizeFilter(internalStatus);
-        var filtered = orders
-            .Select(order => BuildOrderView(order, GetOrderShipments(order, shipmentLookup)))
+        var views = await BuildOrderViewsAsync(orders, shipmentLookup, cancellationToken);
+        var filtered = views
             .Where(view => MatchesInternalStatus(view, normalizedInternalStatus)
                            && MatchesChannelStatus(view, normalizedChannelStatus))
             .ToList();
@@ -123,20 +129,27 @@ public sealed class OrderFulfillmentService
             .ToDictionaryAsync(v => v.VariantSku, v => v.Name, cancellationToken);
 
         var shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
-        var shipments = GetOrderShipments(order, shipmentLookup)
-            .Select(MapShipmentResult)
-            .ToList();
-
-        var view = BuildOrderView(order, GetOrderShipments(order, shipmentLookup));
-        var result = MapClientOrderDetail(view, shipments, order.Items.Select(i => new MarketplaceOrderItemDetailResult
+        var orderShipments = GetOrderShipments(order, shipmentLookup);
+        var view = await BuildOrderViewAsync(order, orderShipments, cancellationToken);
+        var shipments = orderShipments.Select(MapShipmentResult).ToList();
+        var inventoryByItemId = view.InventorySummary.Items.ToDictionary(item => item.OrderItemId);
+        var result = MapClientOrderDetail(view, shipments, order.Items.Select(i =>
         {
-            Id = i.Id,
-            MlItemId = i.MlItemId,
-            MlVariationId = i.MlVariationId,
-            SabrVariantSku = i.SabrVariantSku,
-            ProductName = i.SabrVariantSku != null ? products.GetValueOrDefault(i.SabrVariantSku) : null,
-            Quantity = i.Quantity,
-            MappingState = i.MappingState
+            inventoryByItemId.TryGetValue(i.Id, out var inventory);
+            return new MarketplaceOrderItemDetailResult
+            {
+                Id = i.Id,
+                MlItemId = i.MlItemId,
+                MlVariationId = i.MlVariationId,
+                SabrVariantSku = i.SabrVariantSku,
+                ProductName = i.SabrVariantSku != null ? products.GetValueOrDefault(i.SabrVariantSku) : null,
+                Quantity = i.Quantity,
+                ReservedQuantity = i.ReservedQuantity,
+                MissingQuantity = inventory?.MissingQuantity ?? 0,
+                AvailableStock = inventory?.AvailableStock,
+                StockStatus = inventory?.StockStatus ?? MarketplaceOrderItemStockStatuses.Unmapped,
+                MappingState = i.MappingState
+            };
         }).ToList());
 
         return ServiceResult<MarketplaceOrderDetailResult>.Success(result);
@@ -197,8 +210,8 @@ public sealed class OrderFulfillmentService
         var normalizedChannelStatus = NormalizeFilter(channelStatus) ?? NormalizeFilter(status);
         var normalizedInternalStatus = NormalizeFilter(internalStatus);
 
-        var filtered = orders
-            .Select(order => BuildOrderView(order, GetOrderShipments(order, shipmentLookup)))
+        var views = await BuildOrderViewsAsync(orders, shipmentLookup, cancellationToken);
+        var filtered = views
             .Where(view => MatchesInternalStatus(view, normalizedInternalStatus)
                            && MatchesChannelStatus(view, normalizedChannelStatus))
             .ToList();
@@ -241,7 +254,7 @@ public sealed class OrderFulfillmentService
             .FirstOrDefaultAsync(cancellationToken);
 
         var shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
-        var view = BuildOrderView(order, GetOrderShipments(order, shipmentLookup));
+        var view = await BuildOrderViewAsync(order, GetOrderShipments(order, shipmentLookup), cancellationToken);
 
         var variantSkus = order.Items
             .Where(i => !string.IsNullOrWhiteSpace(i.SabrVariantSku))
@@ -254,9 +267,11 @@ public sealed class OrderFulfillmentService
             .Select(v => new { v.VariantSku, v.Name })
             .ToDictionaryAsync(v => v.VariantSku, v => v.Name, cancellationToken);
 
+        var inventoryByItemId = view.InventorySummary.Items.ToDictionary(item => item.OrderItemId);
         var result = new AdminOrderDetailResult
         {
             Id = order.Id,
+            InternalOrderNumber = order.InternalOrderNumber,
             TenantId = order.TenantId,
             ClientId = order.ClientId,
             ClientName = clientName,
@@ -276,6 +291,9 @@ public sealed class OrderFulfillmentService
             LabelAvailability = view.LabelAvailability,
             RequiresLabelForPayment = view.RequiresLabelForPayment,
             CanMarkPaid = view.CanMarkPaid,
+            InventoryStatus = view.InventoryStatus,
+            PaymentBlockers = view.PaymentBlockers,
+            CanEnterFulfillment = view.CanEnterFulfillment,
             CurrentInternalStage = view.CurrentInternalStage,
             ChannelStatus = view.ChannelStatus,
             CancellationRequest = view.CancellationRequest,
@@ -291,6 +309,9 @@ public sealed class OrderFulfillmentService
                 ProductName = i.SabrVariantSku != null ? products.GetValueOrDefault(i.SabrVariantSku) : null,
                 Quantity = i.Quantity,
                 ReservedQuantity = i.ReservedQuantity,
+                MissingQuantity = inventoryByItemId.GetValueOrDefault(i.Id)?.MissingQuantity ?? 0,
+                AvailableStock = inventoryByItemId.GetValueOrDefault(i.Id)?.AvailableStock,
+                StockStatus = inventoryByItemId.GetValueOrDefault(i.Id)?.StockStatus ?? MarketplaceOrderItemStockStatuses.Unmapped,
                 MappingState = i.MappingState
             }).ToList()
         };
@@ -397,6 +418,17 @@ public sealed class OrderFulfillmentService
             ? shipmentId.Trim()
             : ResolveDefaultShipmentId(order, shipments);
 
+        if (order.Provider == MarketplaceProvider.TikTokShop
+            && (shipments.Count == 0
+                || (!string.IsNullOrWhiteSpace(resolvedShipmentId)
+                    && shipments.All(item => !string.Equals(item.Shipment.ShipmentId, resolvedShipmentId, StringComparison.Ordinal)))))
+        {
+            await _tikTokShopSyncService.SyncOrdersAsync(order.TenantId, order.ClientId, cancellationToken);
+            shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
+            shipments = GetOrderShipments(order, shipmentLookup);
+            resolvedShipmentId ??= ResolveDefaultShipmentId(order, shipments);
+        }
+
         if (string.IsNullOrWhiteSpace(resolvedShipmentId))
         {
             return ServiceResult<MarketplacePullShipmentLabelResult>.Failure([
@@ -413,6 +445,10 @@ public sealed class OrderFulfillmentService
         }
 
         var before = MarketplaceOrderWorkflow.ResolveLabelAvailability(shipment);
+        if (order.Provider == MarketplaceProvider.TikTokShop && before == MarketplaceLabelAvailabilities.Pending)
+        {
+            await _tikTokShopSyncService.SyncOrdersAsync(order.TenantId, order.ClientId, cancellationToken);
+        }
         var labelResult = await _labelService.GetOrFetchAsync(order.TenantId, order.ClientId, order.Provider, resolvedShipmentId, cancellationToken);
         if (!labelResult.Succeeded)
         {
@@ -424,6 +460,9 @@ public sealed class OrderFulfillmentService
                 CachedNow = false,
                 HasLabel = before != MarketplaceLabelAvailabilities.Pending,
                 LabelAvailability = before,
+                ReasonCode = before == MarketplaceLabelAvailabilities.Pending
+                    ? MarketplacePullLabelReasonCodes.LabelNotReleased
+                    : MarketplacePullLabelReasonCodes.UpstreamError,
                 Message = labelResult.Errors.FirstOrDefault()?.Message ?? "Etiqueta ainda não foi liberada pelo canal."
             });
         }
@@ -447,6 +486,11 @@ public sealed class OrderFulfillmentService
             CachedNow = availability == MarketplaceLabelAvailabilities.AvailableCached,
             HasLabel = availability != MarketplaceLabelAvailabilities.Pending,
             LabelAvailability = availability,
+            ReasonCode = before == MarketplaceLabelAvailabilities.AvailableCached
+                ? MarketplacePullLabelReasonCodes.AlreadyCached
+                : availability == MarketplaceLabelAvailabilities.AvailableCached
+                    ? MarketplacePullLabelReasonCodes.CachedNow
+                    : null,
             Message = availability == MarketplaceLabelAvailabilities.AvailableCached
                 ? "Etiqueta puxada e cacheada com sucesso."
                 : "Etiqueta localizada no canal."
@@ -477,6 +521,7 @@ public sealed class OrderFulfillmentService
                     CachedNow = false,
                     HasLabel = false,
                     LabelAvailability = MarketplaceLabelAvailabilities.Pending,
+                    ReasonCode = MarketplacePullLabelReasonCodes.ShipmentMissing,
                     Message = orderResult.Errors.FirstOrDefault()?.Message ?? "Pedido não encontrado."
                 });
                 continue;
@@ -507,6 +552,7 @@ public sealed class OrderFulfillmentService
                         CachedNow = false,
                         HasLabel = false,
                         LabelAvailability = MarketplaceLabelAvailabilities.Pending,
+                        ReasonCode = MarketplacePullLabelReasonCodes.UpstreamError,
                         Message = result.Errors.FirstOrDefault()?.Message ?? "Falha ao puxar etiqueta."
                     });
                 }
@@ -705,16 +751,18 @@ public sealed class OrderFulfillmentService
             .ToDictionaryAsync(c => c.Id, c => c.AccountName, cancellationToken);
 
         var shipmentLookup = await BuildShipmentLookupAsync(orders, cancellationToken);
+        var views = await BuildOrderViewsAsync(orders, shipmentLookup, cancellationToken);
 
-        var allItems = orders
-            .Select(order => BuildOrderView(order, GetOrderShipments(order, shipmentLookup)))
-            .Where(view => view.CurrentInternalStage != MarketplaceInternalStages.Dispatched)
+        var allItems = views
+            .Where(view => view.CurrentInternalStage != MarketplaceInternalStages.Dispatched
+                           && view.CanEnterFulfillment)
             .OrderBy(view => view.Order.ShipByDeadlineAt.HasValue ? 0 : 1)
             .ThenBy(view => view.Order.ShipByDeadlineAt)
             .ThenBy(view => view.Order.SabrPaymentConfirmedAt)
             .Select(view => new AdminFulfillmentOrderResult
             {
                 Id = view.Order.Id,
+                InternalOrderNumber = view.Order.InternalOrderNumber,
                 TenantId = view.Order.TenantId,
                 ClientId = view.Order.ClientId,
                 ClientName = clients.GetValueOrDefault(view.Order.ClientId),
@@ -730,6 +778,23 @@ public sealed class OrderFulfillmentService
                 LabelAvailability = view.LabelAvailability,
                 TotalItems = view.Order.Items.Count,
                 SabrPaymentConfirmedAt = view.Order.SabrPaymentConfirmedAt ?? view.Order.CreatedAt,
+                InventoryStatus = view.InventoryStatus,
+                PaymentBlockers = view.PaymentBlockers,
+                Items = view.Order.Items.Select(item =>
+                {
+                    var inventory = view.InventorySummary.Items.FirstOrDefault(entry => entry.OrderItemId == item.Id);
+                    return new AdminFulfillmentOrderItemResult
+                    {
+                        Id = item.Id,
+                        SabrVariantSku = item.SabrVariantSku,
+                        ProductName = view.ProductNames.GetValueOrDefault(item.SabrVariantSku ?? string.Empty),
+                        Quantity = item.Quantity,
+                        ReservedQuantity = item.ReservedQuantity,
+                        MissingQuantity = inventory?.MissingQuantity ?? 0,
+                        AvailableStock = inventory?.AvailableStock,
+                        StockStatus = inventory?.StockStatus ?? MarketplaceOrderItemStockStatuses.Unmapped
+                    };
+                }).ToList(),
                 Shipments = view.Shipments.Select(MapShipmentResult).ToList(),
                 ChannelStatus = view.ChannelStatus,
                 CancellationRequest = view.CancellationRequest,
@@ -747,6 +812,238 @@ public sealed class OrderFulfillmentService
             Skip  = skip,
             Limit = limit
         };
+    }
+
+    public async Task<PagedResult<AdminProcurementOrderResult>> ListProcurementAsync(
+        int skip,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var safeSkip = Math.Max(0, skip);
+        var safeLimit = Math.Min(200, Math.Max(1, limit));
+
+        var orders = await _dbContext.MarketplaceOrders
+            .AsNoTracking()
+            .Include(item => item.Items)
+            .Where(item => item.Status != MarketplaceOrderStatuses.Cancelled
+                           && item.Status != MarketplaceOrderStatuses.Refunded
+                           && item.Status != MarketplaceOrderStatuses.Delivered)
+            .OrderByDescending(item => item.ImportedAt)
+            .ToListAsync(cancellationToken);
+
+        var clientIds = orders.Select(item => item.ClientId).Distinct().ToList();
+        var clients = await _dbContext.Clients
+            .AsNoTracking()
+            .Where(item => clientIds.Contains(item.Id))
+            .Select(item => new { item.Id, item.AccountName })
+            .ToDictionaryAsync(item => item.Id, item => item.AccountName, cancellationToken);
+
+        var shipmentLookup = await BuildShipmentLookupAsync(orders, cancellationToken);
+        var views = await BuildOrderViewsAsync(orders, shipmentLookup, cancellationToken);
+        var results = views
+            .Where(view => view.InventoryStatus is MarketplaceOrderInventoryStatuses.MappedPartialStock
+                or MarketplaceOrderInventoryStatuses.OutOfStock
+                or MarketplaceOrderInventoryStatuses.Unmapped)
+            .Select(view => new AdminProcurementOrderResult
+            {
+                OrderId = view.Order.Id,
+                InternalOrderNumber = view.Order.InternalOrderNumber,
+                TenantId = view.Order.TenantId,
+                ClientId = view.Order.ClientId,
+                ClientName = clients.GetValueOrDefault(view.Order.ClientId),
+                Provider = view.Order.Provider,
+                MlOrderId = view.Order.MlOrderId,
+                InventoryStatus = view.InventoryStatus,
+                ImportedAt = view.Order.ImportedAt,
+                Items = view.Order.Items.Select(item =>
+                {
+                    var inventory = view.InventorySummary.Items.FirstOrDefault(entry => entry.OrderItemId == item.Id);
+                    return new AdminProcurementOrderItemResult
+                    {
+                        OrderItemId = item.Id,
+                        SabrVariantSku = item.SabrVariantSku,
+                        ProductName = view.ProductNames.GetValueOrDefault(item.SabrVariantSku ?? string.Empty),
+                        Quantity = item.Quantity,
+                        ReservedQuantity = item.ReservedQuantity,
+                        MissingQuantity = inventory?.MissingQuantity ?? 0,
+                        AvailableStock = inventory?.AvailableStock,
+                        StockStatus = inventory?.StockStatus ?? MarketplaceOrderItemStockStatuses.Unmapped
+                    };
+                })
+                .Where(item => item.MissingQuantity > 0 || item.StockStatus == MarketplaceOrderItemStockStatuses.Unmapped)
+                .ToList()
+            })
+            .Where(item => item.Items.Count > 0)
+            .ToList();
+
+        return new PagedResult<AdminProcurementOrderResult>
+        {
+            Items = results.Skip(safeSkip).Take(safeLimit).ToList(),
+            Total = results.Count,
+            Skip = safeSkip,
+            Limit = safeLimit
+        };
+    }
+
+    public async Task<ServiceResult<MarketplaceShipmentScanResult>> ScanShipmentAsync(
+        string value,
+        string scannedByAdminId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeNullable(value);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return ServiceResult<MarketplaceShipmentScanResult>.Failure([
+                new ValidationError("value", "SCAN_VALUE_REQUIRED")
+            ]);
+        }
+
+        var trackingMatches = await _dbContext.MarketplaceShipments
+            .Where(item => item.TrackingNumber != null && item.TrackingNumber == normalized)
+            .ToListAsync(cancellationToken);
+
+        MarketplaceShipment? shipment = trackingMatches.Count == 1 ? trackingMatches[0] : null;
+        var scanType = shipment != null ? "tracking" : string.Empty;
+        if (shipment == null)
+        {
+            shipment = await _dbContext.MarketplaceShipments
+                .FirstOrDefaultAsync(item => item.ShipmentScanCode == normalized, cancellationToken);
+            if (shipment == null)
+            {
+                return ServiceResult<MarketplaceShipmentScanResult>.Failure([
+                    new ValidationError("value", trackingMatches.Count > 1 ? "TRACKING_NOT_UNIQUE" : "SHIPMENT_SCAN_NOT_FOUND")
+                ]);
+            }
+
+            scanType = "phub";
+        }
+
+        var order = await _dbContext.MarketplaceOrders
+            .Include(item => item.Items)
+            .FirstOrDefaultAsync(item => item.TenantId == shipment.TenantId
+                                         && item.ClientId == shipment.ClientId
+                                         && item.Provider == shipment.Provider
+                                         && item.MlOrderId == shipment.MlOrderId,
+                cancellationToken);
+        if (order == null)
+        {
+            return ServiceResult<MarketplaceShipmentScanResult>.Failure([
+                new ValidationError("orderId", "ORDER_NOT_FOUND")
+            ]);
+        }
+
+        var actionResult = await MarkSingleShipmentDispatchedAsync(order, shipment.ShipmentId, scannedByAdminId, cancellationToken);
+        if (!actionResult.Succeeded || actionResult.Data == null)
+        {
+            return ServiceResult<MarketplaceShipmentScanResult>.Failure(actionResult.Errors);
+        }
+
+        return ServiceResult<MarketplaceShipmentScanResult>.Success(new MarketplaceShipmentScanResult
+        {
+            OrderId = order.Id,
+            InternalOrderNumber = order.InternalOrderNumber,
+            ShipmentId = shipment.ShipmentId,
+            ScanType = scanType,
+            UpdatedAt = actionResult.Data.UpdatedAt,
+            Message = scanType == "tracking"
+                ? "Shipment marcado como enviado via tracking."
+                : "Shipment marcado como enviado via codigo PHUB."
+        });
+    }
+
+    public async Task<ServiceResult<MarketplacePackingLabelDownloadResult>> GetPackingLabelAsync(
+        Guid orderId,
+        string shipmentId,
+        CancellationToken cancellationToken = default)
+    {
+        var order = await _dbContext.MarketplaceOrders
+            .AsNoTracking()
+            .Include(item => item.Items)
+            .FirstOrDefaultAsync(item => item.Id == orderId, cancellationToken);
+        if (order == null)
+        {
+            return ServiceResult<MarketplacePackingLabelDownloadResult>.Failure([
+                new ValidationError("orderId", "ORDER_NOT_FOUND")
+            ]);
+        }
+
+        var shipment = await _dbContext.MarketplaceShipments
+            .FirstOrDefaultAsync(item => item.TenantId == order.TenantId
+                                         && item.ClientId == order.ClientId
+                                         && item.Provider == order.Provider
+                                         && item.ShipmentId == shipmentId,
+                cancellationToken);
+        if (shipment == null)
+        {
+            return ServiceResult<MarketplacePackingLabelDownloadResult>.Failure([
+                new ValidationError("shipmentId", "SHIPMENT_NOT_FOUND")
+            ]);
+        }
+
+        var variantSkus = order.Items
+            .Where(item => !string.IsNullOrWhiteSpace(item.SabrVariantSku))
+            .Select(item => item.SabrVariantSku!)
+            .Distinct()
+            .ToList();
+        var products = await _dbContext.ProductVariants
+            .AsNoTracking()
+            .Where(item => variantSkus.Contains(item.VariantSku))
+            .Select(item => new { item.VariantSku, item.Name })
+            .ToDictionaryAsync(item => item.VariantSku, item => item.Name, cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(shipment.ShipmentScanCode))
+        {
+            shipment.ShipmentScanCode = MarketplaceOrderWorkflow.BuildShipmentScanCode(order, shipment);
+            shipment.UpdatedAt = DateTimeOffset.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        var itemsHtml = string.Join("", order.Items.Select(item =>
+            $"<li><strong>{System.Net.WebUtility.HtmlEncode(item.SabrVariantSku ?? "SEM-SKU")}</strong> - {System.Net.WebUtility.HtmlEncode(products.GetValueOrDefault(item.SabrVariantSku ?? string.Empty) ?? "Item")} x {item.Quantity}</li>"));
+
+        var html = $@"
+<!DOCTYPE html>
+<html lang=""pt-BR"">
+<head>
+  <meta charset=""utf-8"" />
+  <title>Packing Label {System.Net.WebUtility.HtmlEncode(order.InternalOrderNumber ?? order.MlOrderId)}</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; padding: 24px; color: #111827; }}
+    .sheet {{ border: 2px solid #111827; padding: 20px; max-width: 760px; }}
+    h1 {{ margin: 0 0 8px; font-size: 28px; }}
+    .meta {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin: 16px 0; }}
+    .code {{ font-family: 'Courier New', monospace; font-size: 24px; padding: 12px; border: 1px dashed #111827; margin: 12px 0; word-break: break-all; }}
+    .tracking {{ font-family: 'Courier New', monospace; font-size: 20px; padding: 12px; border: 1px solid #2563eb; margin: 12px 0; }}
+    ul {{ margin: 12px 0 0; padding-left: 20px; }}
+    .hint {{ color: #4b5563; font-size: 12px; margin-top: 12px; }}
+  </style>
+</head>
+<body>
+  <div class=""sheet"">
+    <h1>{System.Net.WebUtility.HtmlEncode(order.InternalOrderNumber ?? order.MlOrderId)}</h1>
+    <div>Pedido marketplace: <strong>{System.Net.WebUtility.HtmlEncode(order.MlOrderId)}</strong></div>
+    <div>Shipment: <strong>{System.Net.WebUtility.HtmlEncode(shipment.ShipmentId)}</strong></div>
+    <div class=""meta"">
+      <div>Canal: {System.Net.WebUtility.HtmlEncode(order.Provider.ToString())}</div>
+      <div>Cliente: {System.Net.WebUtility.HtmlEncode(order.TenantId)}</div>
+      <div>Status hub: Pedido enviado por scan/expedicao</div>
+      <div>Gerado em: {DateTimeOffset.UtcNow:dd/MM/yyyy HH:mm}</div>
+    </div>
+    <div class=""tracking"">Tracking para bipa: {System.Net.WebUtility.HtmlEncode(shipment.TrackingNumber ?? "N/A")}</div>
+    <div class=""code"">Codigo PHUB: {System.Net.WebUtility.HtmlEncode(shipment.ShipmentScanCode)}</div>
+    <h3>Itens para separacao</h3>
+    <ul>{itemsHtml}</ul>
+    <div class=""hint"">Use o tracking do marketplace quando existir. Se nao existir ou houver conflito, use o codigo PHUB acima no scanner/campo de bipagem.</div>
+  </div>
+</body>
+</html>";
+
+        return ServiceResult<MarketplacePackingLabelDownloadResult>.Success(new MarketplacePackingLabelDownloadResult
+        {
+            ContentType = "text/html",
+            FileName = $"packing-label-{order.InternalOrderNumber ?? order.MlOrderId}-{shipment.ShipmentId}.html",
+            Content = System.Text.Encoding.UTF8.GetBytes(html)
+        });
     }
 
     private async Task<ServiceResult<MarketplaceOrder>> GetOrderForAccessAsync(
@@ -914,6 +1211,7 @@ public sealed class OrderFulfillmentService
         return new MarketplaceShipmentResult
         {
             ShipmentId = shipment.Shipment.ShipmentId,
+            ShipmentScanCode = shipment.Shipment.ShipmentScanCode,
             Status = shipment.Shipment.Status,
             Substatus = shipment.Shipment.Substatus,
             ShippingMode = shipment.Shipment.ShippingMode,
@@ -928,6 +1226,69 @@ public sealed class OrderFulfillmentService
             LabelAvailability = MarketplaceOrderWorkflow.ResolveLabelAvailability(shipment.Shipment),
             Milestones = shipment.Milestones
         };
+    }
+
+    private async Task<List<OrderView>> BuildOrderViewsAsync(
+        IReadOnlyCollection<MarketplaceOrder> orders,
+        IReadOnlyDictionary<string, List<OrderShipmentSnapshot>> shipmentLookup,
+        CancellationToken cancellationToken)
+    {
+        var productNames = await BuildProductNameLookupAsync(orders.SelectMany(item => item.Items), cancellationToken);
+        var views = new List<OrderView>(orders.Count);
+        foreach (var order in orders)
+        {
+            views.Add(await BuildOrderViewAsync(
+                order,
+                GetOrderShipments(order, shipmentLookup),
+                productNames,
+                cancellationToken));
+        }
+
+        return views;
+    }
+
+    private async Task<OrderView> BuildOrderViewAsync(
+        MarketplaceOrder order,
+        IReadOnlyCollection<OrderShipmentSnapshot> shipments,
+        CancellationToken cancellationToken)
+    {
+        var productNames = await BuildProductNameLookupAsync(order.Items, cancellationToken);
+        return await BuildOrderViewAsync(order, shipments, productNames, cancellationToken);
+    }
+
+    private async Task<OrderView> BuildOrderViewAsync(
+        MarketplaceOrder order,
+        IReadOnlyCollection<OrderShipmentSnapshot> shipments,
+        IReadOnlyDictionary<string, string> productNames,
+        CancellationToken cancellationToken)
+    {
+        var inventorySummary = await _inventoryService.BuildSummaryAsync(
+            order,
+            shipments.Select(item => item.Shipment).ToList(),
+            cancellationToken);
+
+        return BuildOrderView(order, shipments, inventorySummary, productNames);
+    }
+
+    private async Task<Dictionary<string, string>> BuildProductNameLookupAsync(
+        IEnumerable<MarketplaceOrderItem> items,
+        CancellationToken cancellationToken)
+    {
+        var variantSkus = items
+            .Where(item => !string.IsNullOrWhiteSpace(item.SabrVariantSku))
+            .Select(item => item.SabrVariantSku!)
+            .Distinct()
+            .ToList();
+        if (variantSkus.Count == 0)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        return await _dbContext.ProductVariants
+            .AsNoTracking()
+            .Where(item => variantSkus.Contains(item.VariantSku))
+            .Select(item => new { item.VariantSku, item.Name })
+            .ToDictionaryAsync(item => item.VariantSku, item => item.Name, cancellationToken);
     }
 
     private static MarketplaceInternalFulfillmentSummaryResult BuildInternalSummary(MarketplaceOrder order, IReadOnlyCollection<OrderShipmentSnapshot> shipments)
@@ -1006,6 +1367,25 @@ public sealed class OrderFulfillmentService
             ]);
         }
 
+        var alreadyDispatched = await _dbContext.MarketplaceEventLogs
+            .AsNoTracking()
+            .AnyAsync(item => item.TenantId == order.TenantId
+                              && item.ClientId == order.ClientId
+                              && item.Provider == order.Provider
+                              && item.ResourceId == shipmentId
+                              && item.Topic == MarketplaceEventTopics.AuditFulfillmentDispatched,
+                cancellationToken);
+        if (alreadyDispatched)
+        {
+            return ServiceResult<OrderActionResult>.Success(new OrderActionResult
+            {
+                OrderId = order.Id,
+                Status = order.Status,
+                Action = MarketplaceShipmentMilestones.Dispatched,
+                UpdatedAt = order.UpdatedAt
+            });
+        }
+
         await _auditLogService.RecordAsync(
             order.TenantId,
             order.ClientId,
@@ -1046,14 +1426,17 @@ public sealed class OrderFulfillmentService
         });
     }
 
-    private static OrderView BuildOrderView(MarketplaceOrder order, IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+    private static OrderView BuildOrderView(
+        MarketplaceOrder order,
+        IReadOnlyCollection<OrderShipmentSnapshot> shipments,
+        MarketplaceOrderInventorySummary inventorySummary,
+        IReadOnlyDictionary<string, string> productNames)
     {
         var primaryShipment = FindPrimaryShipment(shipments);
         var internalSummary = BuildInternalSummary(order, shipments);
         var channelStatus = BuildChannelStatus(order, shipments, primaryShipment);
         var labelAvailability = ResolveOrderLabelAvailability(shipments);
         var requiresLabelForPayment = MarketplaceOrderWorkflow.RequiresLabelForPayment(order.Provider);
-        var canMarkPaid = !requiresLabelForPayment || shipments.Any(item => MarketplaceOrderWorkflow.HasOperationalLabel(item.Shipment));
 
         return new OrderView(
             order,
@@ -1067,7 +1450,12 @@ public sealed class OrderFulfillmentService
             internalSummary.Stage,
             channelStatus.Stage,
             requiresLabelForPayment,
-            canMarkPaid);
+            inventorySummary.CanMarkPaid,
+            inventorySummary.InventoryStatus,
+            inventorySummary.PaymentBlockers,
+            inventorySummary.CanEnterFulfillment,
+            inventorySummary,
+            productNames);
     }
 
     private static MarketplaceOrderListItemResult MapClientOrderListItem(OrderView view)
@@ -1075,6 +1463,7 @@ public sealed class OrderFulfillmentService
         return new MarketplaceOrderListItemResult
         {
             Id = view.Order.Id,
+            InternalOrderNumber = view.Order.InternalOrderNumber,
             Provider = view.Order.Provider,
             SellerId = view.Order.SellerId.ToString(),
             MlOrderId = view.Order.MlOrderId,
@@ -1091,6 +1480,9 @@ public sealed class OrderFulfillmentService
             LabelAvailability = view.LabelAvailability,
             RequiresLabelForPayment = view.RequiresLabelForPayment,
             CanMarkPaid = view.CanMarkPaid,
+            InventoryStatus = view.InventoryStatus,
+            PaymentBlockers = view.PaymentBlockers,
+            CanEnterFulfillment = view.CanEnterFulfillment,
             ShipmentsCount = view.Shipments.Count,
             TrackingNumber = view.PrimaryShipment?.Shipment.TrackingNumber,
             TrackingUrl = view.PrimaryShipment?.Shipment.TrackingUrl,
@@ -1113,6 +1505,7 @@ public sealed class OrderFulfillmentService
         return new MarketplaceOrderDetailResult
         {
             Id = view.Order.Id,
+            InternalOrderNumber = view.Order.InternalOrderNumber,
             Provider = view.Order.Provider,
             SellerId = view.Order.SellerId.ToString(),
             MlOrderId = view.Order.MlOrderId,
@@ -1128,6 +1521,9 @@ public sealed class OrderFulfillmentService
             CanRefund = MarketplaceOrderStatuses.RefundableStatuses.Contains(view.Order.Status),
             RequiresLabelForPayment = view.RequiresLabelForPayment,
             CanMarkPaid = view.CanMarkPaid,
+            InventoryStatus = view.InventoryStatus,
+            PaymentBlockers = view.PaymentBlockers,
+            CanEnterFulfillment = view.CanEnterFulfillment,
             CanAutoCancel = MarketplaceOrderWorkflow.CanAutoCancel(view.CurrentInternalStage),
             CurrentInternalStage = view.CurrentInternalStage,
             CurrentChannelStage = view.CurrentChannelStage,
@@ -1144,6 +1540,7 @@ public sealed class OrderFulfillmentService
         return new AdminOrderListItemResult
         {
             Id = view.Order.Id,
+            InternalOrderNumber = view.Order.InternalOrderNumber,
             TenantId = view.Order.TenantId,
             ClientId = view.Order.ClientId,
             ClientName = clientName,
@@ -1163,6 +1560,9 @@ public sealed class OrderFulfillmentService
             LabelAvailability = view.LabelAvailability,
             RequiresLabelForPayment = view.RequiresLabelForPayment,
             CanMarkPaid = view.CanMarkPaid,
+            InventoryStatus = view.InventoryStatus,
+            PaymentBlockers = view.PaymentBlockers,
+            CanEnterFulfillment = view.CanEnterFulfillment,
             CurrentInternalStage = view.CurrentInternalStage,
             ChannelStatus = view.ChannelStatus,
             CancellationRequest = view.CancellationRequest,
@@ -1322,5 +1722,10 @@ public sealed class OrderFulfillmentService
         string CurrentInternalStage,
         string CurrentChannelStage,
         bool RequiresLabelForPayment,
-        bool CanMarkPaid);
+        bool CanMarkPaid,
+        string InventoryStatus,
+        List<string> PaymentBlockers,
+        bool CanEnterFulfillment,
+        MarketplaceOrderInventorySummary InventorySummary,
+        IReadOnlyDictionary<string, string> ProductNames);
 }

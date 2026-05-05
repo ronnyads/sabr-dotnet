@@ -19,6 +19,8 @@ public sealed class TikTokShopSyncService
     private readonly IAppDbContext _dbContext;
     private readonly ITikTokShopApiClient _apiClient;
     private readonly TikTokShopOAuthService _oauthService;
+    private readonly MarketplaceOrderNumberService _orderNumberService;
+    private readonly MarketplaceOrderInventoryService _inventoryService;
     private readonly TikTokShopOptions _options;
     private readonly ILogger<TikTokShopSyncService> _logger;
 
@@ -26,12 +28,16 @@ public sealed class TikTokShopSyncService
         IAppDbContext dbContext,
         ITikTokShopApiClient apiClient,
         TikTokShopOAuthService oauthService,
+        MarketplaceOrderNumberService orderNumberService,
+        MarketplaceOrderInventoryService inventoryService,
         IOptions<TikTokShopOptions> options,
         ILogger<TikTokShopSyncService> logger)
     {
         _dbContext = dbContext;
         _apiClient = apiClient;
         _oauthService = oauthService;
+        _orderNumberService = orderNumberService;
+        _inventoryService = inventoryService;
         _options = options.Value;
         _logger = logger;
     }
@@ -344,6 +350,11 @@ public sealed class TikTokShopSyncService
 
                 if (existingOrderMap.TryGetValue(detail.OrderId, out var existingOrder))
                 {
+                    if (string.IsNullOrWhiteSpace(existingOrder.InternalOrderNumber))
+                    {
+                        await _orderNumberService.EnsureOrderNumberAsync(existingOrder, cancellationToken);
+                    }
+
                     existingOrder.Status = detail.OrderStatus;
                     existingOrder.UpdatedAt = DateTimeOffset.UtcNow;
                     existingOrder.RawJson = rawJson;
@@ -376,6 +387,7 @@ public sealed class TikTokShopSyncService
                         ImportedAt = DateTimeOffset.FromUnixTimeSeconds(detail.CreateTime),
                         RawJson = rawJson
                     };
+                    await _orderNumberService.EnsureOrderNumberAsync(order, cancellationToken);
 
                     if (detail.PaidTime.HasValue && detail.PaidTime.Value > 0)
                     {
@@ -395,6 +407,15 @@ public sealed class TikTokShopSyncService
                     _dbContext.MarketplaceOrders.Add(order);
                     existingOrderMap[order.MlOrderId] = order;
                     ordersUpserted++;
+                }
+
+                if (existingOrderMap.TryGetValue(detail.OrderId, out var currentOrder))
+                {
+                    await _inventoryService.ReconcileReservationsAsync(
+                        currentOrder,
+                        connection.SellerId,
+                        reservationTtlHours: 24,
+                        cancellationToken);
                 }
 
                 pendingPersistedOrders++;
@@ -782,6 +803,11 @@ public sealed class TikTokShopSyncService
                 shipment.TrackingUrl = null;
                 shipment.ShipByDeadlineAt = FromUnixTimeSeconds(packageDetail.PickUpEndTime);
                 shipment.ShippedAt = InferShippedAt(packageDetail);
+                shipment.ShipmentScanCode = string.IsNullOrWhiteSpace(shipment.ShipmentScanCode)
+                    && !string.IsNullOrWhiteSpace(shipment.MlOrderId)
+                    && orderLookup.TryGetValue(shipment.MlOrderId, out var scanOrder)
+                        ? MarketplaceOrderWorkflow.BuildShipmentScanCode(scanOrder, shipment)
+                        : shipment.ShipmentScanCode;
                 shipment.UpdatedAt = DateTimeOffset.UtcNow;
 
                 try

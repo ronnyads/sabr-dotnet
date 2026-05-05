@@ -9,6 +9,7 @@ public sealed class MarketplaceOrder
     public Guid ClientId { get; set; }
     public MarketplaceProvider Provider { get; set; } = MarketplaceProvider.MercadoLivre;
     public long SellerId { get; set; }
+    public string? InternalOrderNumber { get; set; }
     public string MlOrderId { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public DateTimeOffset? PaidAt { get; set; }

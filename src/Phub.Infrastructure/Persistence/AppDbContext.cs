@@ -46,6 +46,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<TenantMarketplaceListingMap> TenantMarketplaceListingMaps => Set<TenantMarketplaceListingMap>();
     public DbSet<ProductMarketplaceCategoryLock> ProductMarketplaceCategoryLocks => Set<ProductMarketplaceCategoryLock>();
     public DbSet<MarketplaceOrder> MarketplaceOrders => Set<MarketplaceOrder>();
+    public DbSet<MarketplaceOrderNumberSequence> MarketplaceOrderNumberSequences => Set<MarketplaceOrderNumberSequence>();
     public DbSet<MarketplaceOrderItem> MarketplaceOrderItems => Set<MarketplaceOrderItem>();
     public DbSet<MarketplaceShipment> MarketplaceShipments => Set<MarketplaceShipment>();
     public DbSet<StockReservation> StockReservations => Set<StockReservation>();
@@ -1195,6 +1196,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
             entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
             entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.InternalOrderNumber).HasColumnName("internal_order_number").HasMaxLength(32);
             entity.Property(e => e.MlOrderId).HasColumnName("ml_order_id").HasMaxLength(80).IsRequired();
             entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(80).IsRequired();
             entity.Property(e => e.PaidAt).HasColumnName("paid_at");
@@ -1219,6 +1221,18 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .HasDatabaseName("ux_marketplace_orders_scope_provider_ml_order");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.Status, e.ImportedAt })
                 .HasDatabaseName("ix_marketplace_orders_scope_status_imported");
+            entity.HasIndex(e => e.InternalOrderNumber)
+                .IsUnique()
+                .HasDatabaseName("ux_marketplace_orders_internal_order_number");
+        });
+
+        modelBuilder.Entity<MarketplaceOrderNumberSequence>(entity =>
+        {
+            entity.ToTable("marketplace_order_number_sequences");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").IsRequired();
+            entity.Property(e => e.NextNumber).HasColumnName("next_number").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
         });
 
         modelBuilder.Entity<MarketplaceOrderItem>(entity =>
@@ -1264,6 +1278,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
             entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
             entity.Property(e => e.ShipmentId).HasColumnName("shipment_id").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.ShipmentScanCode).HasColumnName("shipment_scan_code").HasMaxLength(160);
             entity.Property(e => e.MlOrderId).HasColumnName("ml_order_id").HasMaxLength(80);
             entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(80);
             entity.Property(e => e.Substatus).HasColumnName("substatus").HasMaxLength(120);
@@ -1286,6 +1301,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .HasDatabaseName("ux_marketplace_shipments_scope_provider_shipment");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.MlOrderId })
                 .HasDatabaseName("ix_marketplace_shipments_scope_order");
+            entity.HasIndex(e => e.ShipmentScanCode)
+                .HasDatabaseName("ix_marketplace_shipments_scan_code");
         });
 
         modelBuilder.Entity<StockReservation>(entity =>

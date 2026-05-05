@@ -10,6 +10,7 @@ public sealed class MarketplaceShipment
     public MarketplaceProvider Provider { get; set; } = MarketplaceProvider.MercadoLivre;
     public long SellerId { get; set; }
     public string ShipmentId { get; set; } = string.Empty;
+    public string? ShipmentScanCode { get; set; }
     public string? MlOrderId { get; set; }
     public string? Status { get; set; }
     public string? Substatus { get; set; }

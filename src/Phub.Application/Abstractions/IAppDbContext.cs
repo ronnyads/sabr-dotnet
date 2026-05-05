@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Phub.Domain.Entities;
 
 namespace Phub.Application.Abstractions;
@@ -35,6 +36,7 @@ public interface IAppDbContext
     DbSet<TenantMarketplaceListingMap> TenantMarketplaceListingMaps { get; }
     DbSet<ProductMarketplaceCategoryLock> ProductMarketplaceCategoryLocks { get; }
     DbSet<MarketplaceOrder> MarketplaceOrders { get; }
+    DbSet<MarketplaceOrderNumberSequence> MarketplaceOrderNumberSequences { get; }
     DbSet<MarketplaceOrderItem> MarketplaceOrderItems { get; }
     DbSet<MarketplaceShipment> MarketplaceShipments { get; }
     DbSet<StockReservation> StockReservations { get; }
@@ -48,6 +50,7 @@ public interface IAppDbContext
     DbSet<SupplierWalletEntry> SupplierWalletEntries { get; }
     DbSet<SupplierWithdrawal> SupplierWithdrawals { get; }
     DbSet<PlatformFinancialConfig> PlatformFinancialConfigs { get; }
+    DatabaseFacade Database { get; }
     Task<long> NextClientProtheusCodeAsync(CancellationToken cancellationToken = default);
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

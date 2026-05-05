@@ -240,6 +240,43 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("/api/v1/admin/orders/procurement")]
+    public async Task<IActionResult> ListProcurement(
+        [FromQuery] int skip = 0,
+        [FromQuery] int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 100);
+        var result = await _fulfillmentService.ListProcurementAsync(skip, limit, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpPost("/api/v1/admin/fulfillment/scan")]
+    public async Task<IActionResult> ScanShipment(
+        [FromBody] MarketplaceShipmentScanRequest? request,
+        CancellationToken cancellationToken = default)
+    {
+        var adminId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "admin";
+        var result = await _fulfillmentService.ScanShipmentAsync(request?.Value ?? string.Empty, adminId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return Ok(result.Data);
+    }
+
+    [HttpGet("/api/v1/admin/fulfillment/{orderId:guid}/packing-labels/{shipmentId}")]
+    public async Task<IActionResult> GetPackingLabel(
+        [FromRoute] Guid orderId,
+        [FromRoute] string shipmentId,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _fulfillmentService.GetPackingLabelAsync(orderId, shipmentId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return File(result.Data.Content, result.Data.ContentType, result.Data.FileName);
+    }
+
     [HttpPost("{orderId:guid}/cancellation-request/approve")]
     public async Task<IActionResult> ApproveCancellationRequest(
         [FromRoute] Guid orderId,
@@ -281,6 +318,16 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         if (errors.Any(e => string.Equals(e.Message, "LABEL_REQUIRED_BEFORE_PAYMENT", StringComparison.OrdinalIgnoreCase)))
         {
             return UnprocessableEntity(CreateApiError("LABEL_REQUIRED_BEFORE_PAYMENT", "A etiqueta precisa estar disponível para confirmar o pagamento.", errors));
+        }
+
+        if (errors.Any(e => string.Equals(e.Message, "OUT_OF_STOCK_FOR_PAYMENT", StringComparison.OrdinalIgnoreCase)))
+        {
+            return UnprocessableEntity(CreateApiError("OUT_OF_STOCK_FOR_PAYMENT", "O pedido nao possui estoque suficiente para confirmacao de pagamento.", errors));
+        }
+
+        if (errors.Any(e => string.Equals(e.Message, "TRACKING_NOT_UNIQUE", StringComparison.OrdinalIgnoreCase)))
+        {
+            return UnprocessableEntity(CreateApiError("TRACKING_NOT_UNIQUE", "Este tracking aparece em mais de um pacote. Use o codigo PHUB.", errors));
         }
 
         return BadRequest(CreateApiError("VALIDATION_ERROR", errors.FirstOrDefault()?.Message ?? "Invalid request", errors));

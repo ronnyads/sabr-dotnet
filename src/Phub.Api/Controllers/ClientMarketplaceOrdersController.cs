@@ -283,6 +283,9 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         if (errors.Any(e => string.Equals(e.Message, "LABEL_REQUIRED_BEFORE_PAYMENT", StringComparison.OrdinalIgnoreCase)))
             return UnprocessableEntity(CreateApiError("LABEL_REQUIRED_BEFORE_PAYMENT", "A etiqueta precisa estar disponível para confirmar o pagamento.", errors));
 
+        if (errors.Any(e => string.Equals(e.Message, "OUT_OF_STOCK_FOR_PAYMENT", StringComparison.OrdinalIgnoreCase)))
+            return UnprocessableEntity(CreateApiError("OUT_OF_STOCK_FOR_PAYMENT", "O pedido nao possui estoque suficiente para confirmacao de pagamento.", errors));
+
         return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid request", errors));
     }
 

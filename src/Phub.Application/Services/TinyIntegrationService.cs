@@ -13,17 +13,20 @@ public sealed class TinyIntegrationService
     private readonly IAppDbContext _dbContext;
     private readonly ITinyErpApiClient _tinyApiClient;
     private readonly TinyOAuthService _tinyOAuthService;
+    private readonly MarketplaceOrderNumberService _orderNumberService;
     private readonly ILogger<TinyIntegrationService> _logger;
 
     public TinyIntegrationService(
         IAppDbContext dbContext,
         ITinyErpApiClient tinyApiClient,
         TinyOAuthService tinyOAuthService,
+        MarketplaceOrderNumberService orderNumberService,
         ILogger<TinyIntegrationService> logger)
     {
         _dbContext = dbContext;
         _tinyApiClient = tinyApiClient;
         _tinyOAuthService = tinyOAuthService;
+        _orderNumberService = orderNumberService;
         _logger = logger;
     }
 
@@ -271,6 +274,11 @@ public sealed class TinyIntegrationService
 
         if (existing != null)
         {
+            if (string.IsNullOrWhiteSpace(existing.InternalOrderNumber))
+            {
+                await _orderNumberService.EnsureOrderNumberAsync(existing, cancellationToken);
+            }
+
             existing.Status = tinyOrder.Situacao;
             existing.UpdatedAt = nowUtc;
             syncResult.Updated++;
@@ -288,6 +296,7 @@ public sealed class TinyIntegrationService
             Status = tinyOrder.Situacao,
             PaidAt = tinyOrder.DataPedido.HasValue ? new DateTimeOffset(tinyOrder.DataPedido.Value, TimeSpan.Zero) : null
         };
+        await _orderNumberService.EnsureOrderNumberAsync(order, cancellationToken);
         _dbContext.MarketplaceOrders.Add(order);
         await _dbContext.SaveChangesAsync(cancellationToken);
 
