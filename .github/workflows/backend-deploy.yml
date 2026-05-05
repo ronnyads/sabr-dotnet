@@ -50,8 +50,10 @@ jobs:
 
       - name: Fly deploy
         run: |
+          # Infra atual usa apenas um app Fly para o backend.
+          # Apesar do nome histórico "sabr-api-dev", este e o app que serve produção hoje.
           flyctl deploy \
-            --app "${{ github.ref_name == 'main' && 'sabr-api-prod' || 'sabr-api-dev' }}" \
+            --app "sabr-api-dev" \
             --remote-only \
             --wait-timeout 300
         env:
