@@ -37,6 +37,8 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
     public async Task<IActionResult> ListMarketplaceOrders(
         [FromQuery] string? provider = null,
         [FromQuery] string? status = null,
+        [FromQuery] string? internalStatus = null,
+        [FromQuery] string? channelStatus = null,
         [FromQuery] string? logisticType = null,
         [FromQuery] int skip = 0,
         [FromQuery] int limit = 20,
@@ -60,6 +62,8 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
                 tenantId!,
                 clientId,
                 parsedProvider,
+                internalStatus,
+                channelStatus,
                 status,
                 logisticType,
                 skip,
@@ -123,6 +127,41 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
             return MapValidationError(result.Errors);
 
         return File(result.Data.Content, result.Data.ContentType, result.Data.FileName);
+    }
+
+    [HttpPost("marketplace/{orderId:guid}/labels/pull")]
+    public async Task<IActionResult> PullOrderLabel(
+        [FromRoute] Guid orderId,
+        [FromQuery] string? shipmentId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+            return error!;
+
+        var result = await _orderFulfillmentService.PullLabelAsync(orderId, tenantId, clientId, shipmentId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return Ok(result.Data);
+    }
+
+    [HttpPost("marketplace/labels/pull")]
+    public async Task<IActionResult> PullOrderLabelsBulk(
+        [FromBody] MarketplacePullLabelsBulkRequest? request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+            return error!;
+
+        var result = await _orderFulfillmentService.PullLabelsBulkAsync(
+            tenantId!,
+            clientId,
+            request?.OrderIds ?? [],
+            cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return Ok(result.Data);
     }
 
     [HttpPost("{orderId:guid}/mark-paid")]
@@ -241,6 +280,8 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
 
         if (errors.Any(e => string.Equals(e.Message, "ML_UNMAPPED_ITEM", StringComparison.OrdinalIgnoreCase)))
             return UnprocessableEntity(CreateApiError("ML_UNMAPPED_ITEM", "Order has unmapped items", errors));
+        if (errors.Any(e => string.Equals(e.Message, "LABEL_REQUIRED_BEFORE_PAYMENT", StringComparison.OrdinalIgnoreCase)))
+            return UnprocessableEntity(CreateApiError("LABEL_REQUIRED_BEFORE_PAYMENT", "A etiqueta precisa estar disponível para confirmar o pagamento.", errors));
 
         return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid request", errors));
     }

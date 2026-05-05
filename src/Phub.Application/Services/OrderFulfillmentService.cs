@@ -33,7 +33,9 @@ public sealed class OrderFulfillmentService
         string tenantId,
         Guid clientId,
         MarketplaceProvider? provider,
-        string? status,
+        string? internalStatus,
+        string? channelStatus,
+        string? legacyStatus,
         string? logisticType,
         int skip,
         int limit,
@@ -50,62 +52,32 @@ public sealed class OrderFulfillmentService
         if (provider.HasValue)
             query = query.Where(o => o.Provider == provider.Value);
 
-        if (!string.IsNullOrWhiteSpace(status))
-        {
-            var normalizedStatus = status.Trim().ToLowerInvariant();
-            query = query.Where(o => o.Status.ToLower() == normalizedStatus);
-        }
-
         if (!string.IsNullOrWhiteSpace(logisticType))
         {
             var normalizedLogisticType = logisticType.Trim().ToLowerInvariant();
             query = query.Where(o => o.LogisticType != null && o.LogisticType.ToLower() == normalizedLogisticType);
         }
 
-        var total = await query.CountAsync(cancellationToken);
         var orders = await query
             .OrderByDescending(o => o.ImportedAt)
-            .Skip(safeSkip)
-            .Take(safeLimit)
             .ToListAsync(cancellationToken);
 
         var shipmentLookup = await BuildShipmentLookupAsync(orders, cancellationToken);
 
-        var items = orders.Select(order =>
-        {
-            var shipments = GetOrderShipments(order, shipmentLookup);
-            var primaryShipment = shipments
-                .OrderByDescending(item => item.Shipment.LabelContentBytes != null && item.Shipment.LabelContentBytes.Length > 0)
-                .ThenByDescending(item => !string.IsNullOrWhiteSpace(item.Shipment.TrackingNumber))
-                .ThenBy(item => item.Shipment.CreatedAt)
-                .FirstOrDefault();
-            var internalSummary = BuildInternalSummary(shipments);
+        var normalizedChannelStatus = NormalizeFilter(channelStatus) ?? NormalizeFilter(legacyStatus);
+        var normalizedInternalStatus = NormalizeFilter(internalStatus);
+        var filtered = orders
+            .Select(order => BuildOrderView(order, GetOrderShipments(order, shipmentLookup)))
+            .Where(view => MatchesInternalStatus(view, normalizedInternalStatus)
+                           && MatchesChannelStatus(view, normalizedChannelStatus))
+            .ToList();
 
-            return new MarketplaceOrderListItemResult
-            {
-                Id = order.Id,
-                Provider = order.Provider,
-                SellerId = order.SellerId.ToString(),
-                MlOrderId = order.MlOrderId,
-                Status = order.Status,
-                PaidAt = order.PaidAt,
-                SabrPaymentConfirmedAt = order.SabrPaymentConfirmedAt,
-                ShippingMode = primaryShipment?.Shipment.ShippingMode ?? order.ShippingMode,
-                LogisticType = primaryShipment?.Shipment.LogisticType ?? order.LogisticType,
-                ShipByDeadlineAt = primaryShipment?.Shipment.ShipByDeadlineAt ?? order.ShipByDeadlineAt,
-                HasUnmappedItems = order.Items.Any(item => item.MappingState == MarketplaceMappingStates.Unmapped),
-                TotalItems = order.Items.Count,
-                ReservedItems = order.Items.Sum(item => item.ReservedQuantity),
-                HasLabel = shipments.Any(item => item.Shipment.LabelContentBytes != null && item.Shipment.LabelContentBytes.Length > 0),
-                ShipmentsCount = shipments.Count,
-                TrackingNumber = primaryShipment?.Shipment.TrackingNumber,
-                TrackingUrl = primaryShipment?.Shipment.TrackingUrl,
-                ShippingProvider = ResolveShippingProvider(primaryShipment?.Shipment),
-                InternalFulfillmentSummary = internalSummary,
-                RiskFlagsJson = order.RiskFlagsJson,
-                ImportedAt = order.ImportedAt
-            };
-        }).ToList();
+        var total = filtered.Count;
+        var items = filtered
+            .Skip(safeSkip)
+            .Take(safeLimit)
+            .Select(MapClientOrderListItem)
+            .ToList();
 
         return new PagedResult<MarketplaceOrderListItemResult>
         {
@@ -155,23 +127,162 @@ public sealed class OrderFulfillmentService
             .Select(MapShipmentResult)
             .ToList();
 
-        var result = new MarketplaceOrderDetailResult
+        var view = BuildOrderView(order, GetOrderShipments(order, shipmentLookup));
+        var result = MapClientOrderDetail(view, shipments, order.Items.Select(i => new MarketplaceOrderItemDetailResult
+        {
+            Id = i.Id,
+            MlItemId = i.MlItemId,
+            MlVariationId = i.MlVariationId,
+            SabrVariantSku = i.SabrVariantSku,
+            ProductName = i.SabrVariantSku != null ? products.GetValueOrDefault(i.SabrVariantSku) : null,
+            Quantity = i.Quantity,
+            MappingState = i.MappingState
+        }).ToList());
+
+        return ServiceResult<MarketplaceOrderDetailResult>.Success(result);
+    }
+
+    public async Task<PagedResult<AdminOrderListItemResult>> ListAdminOrdersAsync(
+        string? status,
+        string? internalStatus,
+        string? channelStatus,
+        string? tenantId,
+        MarketplaceProvider? provider,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        int skip,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var safeSkip = Math.Max(0, skip);
+        var safeLimit = Math.Min(200, Math.Max(1, limit));
+
+        var query = _dbContext.MarketplaceOrders
+            .AsNoTracking()
+            .Include(o => o.Items)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(tenantId))
+        {
+            query = query.Where(o => o.TenantId == tenantId);
+        }
+
+        if (provider.HasValue)
+        {
+            query = query.Where(o => o.Provider == provider.Value);
+        }
+
+        if (from.HasValue)
+        {
+            query = query.Where(o => o.CreatedAt >= from.Value);
+        }
+
+        if (to.HasValue)
+        {
+            query = query.Where(o => o.CreatedAt <= to.Value);
+        }
+
+        var orders = await query
+            .OrderByDescending(o => o.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        var clientIds = orders.Select(o => o.ClientId).Distinct().ToList();
+        var clients = await _dbContext.Clients
+            .AsNoTracking()
+            .Where(c => clientIds.Contains(c.Id))
+            .Select(c => new { c.Id, c.AccountName })
+            .ToDictionaryAsync(c => c.Id, c => c.AccountName, cancellationToken);
+
+        var shipmentLookup = await BuildShipmentLookupAsync(orders, cancellationToken);
+        var normalizedChannelStatus = NormalizeFilter(channelStatus) ?? NormalizeFilter(status);
+        var normalizedInternalStatus = NormalizeFilter(internalStatus);
+
+        var filtered = orders
+            .Select(order => BuildOrderView(order, GetOrderShipments(order, shipmentLookup)))
+            .Where(view => MatchesInternalStatus(view, normalizedInternalStatus)
+                           && MatchesChannelStatus(view, normalizedChannelStatus))
+            .ToList();
+
+        var total = filtered.Count;
+        var items = filtered
+            .Skip(safeSkip)
+            .Take(safeLimit)
+            .Select(view => MapAdminOrderListItem(view, clients.GetValueOrDefault(view.Order.ClientId)))
+            .ToList();
+
+        return new PagedResult<AdminOrderListItemResult>
+        {
+            Items = items,
+            Total = total,
+            Skip = safeSkip,
+            Limit = safeLimit
+        };
+    }
+
+    public async Task<ServiceResult<AdminOrderDetailResult>> GetAdminOrderAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        var order = await _dbContext.MarketplaceOrders
+            .AsNoTracking()
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == orderId, cancellationToken);
+        if (order == null)
+        {
+            return ServiceResult<AdminOrderDetailResult>.Failure([
+                new ValidationError("orderId", "ORDER_NOT_FOUND")
+            ]);
+        }
+
+        var clientName = await _dbContext.Clients
+            .AsNoTracking()
+            .Where(c => c.Id == order.ClientId)
+            .Select(c => c.AccountName)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
+        var view = BuildOrderView(order, GetOrderShipments(order, shipmentLookup));
+
+        var variantSkus = order.Items
+            .Where(i => !string.IsNullOrWhiteSpace(i.SabrVariantSku))
+            .Select(i => i.SabrVariantSku!)
+            .Distinct()
+            .ToList();
+        var products = await _dbContext.ProductVariants
+            .AsNoTracking()
+            .Where(v => variantSkus.Contains(v.VariantSku))
+            .Select(v => new { v.VariantSku, v.Name })
+            .ToDictionaryAsync(v => v.VariantSku, v => v.Name, cancellationToken);
+
+        var result = new AdminOrderDetailResult
         {
             Id = order.Id,
+            TenantId = order.TenantId,
+            ClientId = order.ClientId,
+            ClientName = clientName,
             Provider = order.Provider,
             SellerId = order.SellerId.ToString(),
             MlOrderId = order.MlOrderId,
             Status = order.Status,
             PaidAt = order.PaidAt,
             SabrPaymentConfirmedAt = order.SabrPaymentConfirmedAt,
-            ShipmentId = order.ShipmentId,
-            ShippingMode = shipments.FirstOrDefault()?.ShippingMode ?? order.ShippingMode,
-            LogisticType = shipments.FirstOrDefault()?.LogisticType ?? order.LogisticType,
-            ShipByDeadlineAt = shipments.FirstOrDefault()?.ShipByDeadlineAt ?? order.ShipByDeadlineAt,
+            ShipmentId = view.PrimaryShipment?.Shipment.ShipmentId ?? order.ShipmentId,
+            ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? order.ShippingMode,
+            LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? order.LogisticType,
+            ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? order.ShipByDeadlineAt,
+            HasUnmappedItems = order.Items.Any(i => i.MappingState == MarketplaceMappingStates.Unmapped),
+            TotalItems = order.Items.Count,
+            HasLabel = view.HasLabel,
+            LabelAvailability = view.LabelAvailability,
+            RequiresLabelForPayment = view.RequiresLabelForPayment,
+            CanMarkPaid = view.CanMarkPaid,
+            CurrentInternalStage = view.CurrentInternalStage,
+            ChannelStatus = view.ChannelStatus,
+            CancellationRequest = view.CancellationRequest,
+            InternalFulfillmentSummary = view.InternalSummary,
+            RiskFlagsJson = order.RiskFlagsJson,
             ImportedAt = order.ImportedAt,
-            CanCancel = MarketplaceOrderStatuses.CancellableStatuses.Contains(order.Status),
-            CanRefund = MarketplaceOrderStatuses.RefundableStatuses.Contains(order.Status),
-            Items = order.Items.Select(i => new MarketplaceOrderItemDetailResult
+            Items = order.Items.Select(i => new AdminOrderItemResult
             {
                 Id = i.Id,
                 MlItemId = i.MlItemId,
@@ -179,13 +290,12 @@ public sealed class OrderFulfillmentService
                 SabrVariantSku = i.SabrVariantSku,
                 ProductName = i.SabrVariantSku != null ? products.GetValueOrDefault(i.SabrVariantSku) : null,
                 Quantity = i.Quantity,
+                ReservedQuantity = i.ReservedQuantity,
                 MappingState = i.MappingState
-            }).ToList(),
-            Shipments = shipments,
-            InternalFulfillmentSummary = BuildInternalSummary(GetOrderShipments(order, shipmentLookup))
+            }).ToList()
         };
 
-        return ServiceResult<MarketplaceOrderDetailResult>.Success(result);
+        return ServiceResult<AdminOrderDetailResult>.Success(result);
     }
 
     /// <summary>
@@ -217,7 +327,8 @@ public sealed class OrderFulfillmentService
             .Select(item => new MarketplaceShipmentLabelListItemResult
             {
                 ShipmentId = item.Shipment.ShipmentId,
-                HasLabel = item.Shipment.LabelContentBytes != null && item.Shipment.LabelContentBytes.Length > 0,
+                HasLabel = MarketplaceOrderWorkflow.HasOperationalLabel(item.Shipment),
+                LabelAvailability = MarketplaceOrderWorkflow.ResolveLabelAvailability(item.Shipment),
                 ShippingProvider = ResolveShippingProvider(item.Shipment),
                 TrackingNumber = item.Shipment.TrackingNumber,
                 Status = item.Shipment.Status
@@ -264,6 +375,151 @@ public sealed class OrderFulfillmentService
         }
 
         return await _labelService.GetOrFetchAsync(order.TenantId, order.ClientId, order.Provider, resolvedShipmentId, cancellationToken);
+    }
+
+    public async Task<ServiceResult<MarketplacePullShipmentLabelResult>> PullLabelAsync(
+        Guid orderId,
+        string? tenantId,
+        Guid? clientId,
+        string? shipmentId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var orderResult = await GetOrderForAccessAsync(orderId, tenantId, clientId, cancellationToken);
+        if (!orderResult.Succeeded || orderResult.Data == null)
+        {
+            return ServiceResult<MarketplacePullShipmentLabelResult>.Failure(orderResult.Errors);
+        }
+
+        var order = orderResult.Data;
+        var shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
+        var shipments = GetOrderShipments(order, shipmentLookup);
+        var resolvedShipmentId = !string.IsNullOrWhiteSpace(shipmentId)
+            ? shipmentId.Trim()
+            : ResolveDefaultShipmentId(order, shipments);
+
+        if (string.IsNullOrWhiteSpace(resolvedShipmentId))
+        {
+            return ServiceResult<MarketplacePullShipmentLabelResult>.Failure([
+                new ValidationError("shipmentId", "SHIPMENT_NOT_AVAILABLE")
+            ]);
+        }
+
+        var shipment = shipments.FirstOrDefault(item => string.Equals(item.Shipment.ShipmentId, resolvedShipmentId, StringComparison.Ordinal))?.Shipment;
+        if (shipment == null)
+        {
+            return ServiceResult<MarketplacePullShipmentLabelResult>.Failure([
+                new ValidationError("shipmentId", "SHIPMENT_NOT_FOUND")
+            ]);
+        }
+
+        var before = MarketplaceOrderWorkflow.ResolveLabelAvailability(shipment);
+        var labelResult = await _labelService.GetOrFetchAsync(order.TenantId, order.ClientId, order.Provider, resolvedShipmentId, cancellationToken);
+        if (!labelResult.Succeeded)
+        {
+            return ServiceResult<MarketplacePullShipmentLabelResult>.Success(new MarketplacePullShipmentLabelResult
+            {
+                OrderId = order.Id,
+                ShipmentId = resolvedShipmentId,
+                Succeeded = false,
+                CachedNow = false,
+                HasLabel = before != MarketplaceLabelAvailabilities.Pending,
+                LabelAvailability = before,
+                Message = labelResult.Errors.FirstOrDefault()?.Message ?? "Etiqueta ainda não foi liberada pelo canal."
+            });
+        }
+
+        var refreshedShipment = await _dbContext.MarketplaceShipments
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.TenantId == order.TenantId
+                                         && item.ClientId == order.ClientId
+                                         && item.Provider == order.Provider
+                                         && item.ShipmentId == resolvedShipmentId,
+                cancellationToken);
+        var availability = refreshedShipment == null
+            ? MarketplaceLabelAvailabilities.Pending
+            : MarketplaceOrderWorkflow.ResolveLabelAvailability(refreshedShipment);
+
+        return ServiceResult<MarketplacePullShipmentLabelResult>.Success(new MarketplacePullShipmentLabelResult
+        {
+            OrderId = order.Id,
+            ShipmentId = resolvedShipmentId,
+            Succeeded = true,
+            CachedNow = availability == MarketplaceLabelAvailabilities.AvailableCached,
+            HasLabel = availability != MarketplaceLabelAvailabilities.Pending,
+            LabelAvailability = availability,
+            Message = availability == MarketplaceLabelAvailabilities.AvailableCached
+                ? "Etiqueta puxada e cacheada com sucesso."
+                : "Etiqueta localizada no canal."
+        });
+    }
+
+    public async Task<ServiceResult<MarketplacePullLabelsBulkResult>> PullLabelsBulkAsync(
+        string tenantId,
+        Guid clientId,
+        IReadOnlyCollection<Guid> orderIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (orderIds.Count == 0)
+        {
+            return ServiceResult<MarketplacePullLabelsBulkResult>.Success(new MarketplacePullLabelsBulkResult());
+        }
+
+        var items = new List<MarketplacePullShipmentLabelResult>();
+        foreach (var orderId in orderIds.Distinct())
+        {
+            var orderResult = await GetOrderForAccessAsync(orderId, tenantId, clientId, cancellationToken);
+            if (!orderResult.Succeeded || orderResult.Data == null)
+            {
+                items.Add(new MarketplacePullShipmentLabelResult
+                {
+                    OrderId = orderId,
+                    Succeeded = false,
+                    CachedNow = false,
+                    HasLabel = false,
+                    LabelAvailability = MarketplaceLabelAvailabilities.Pending,
+                    Message = orderResult.Errors.FirstOrDefault()?.Message ?? "Pedido não encontrado."
+                });
+                continue;
+            }
+
+            var shipmentLookup = await BuildShipmentLookupAsync([orderResult.Data], cancellationToken);
+            var shipments = GetOrderShipments(orderResult.Data, shipmentLookup);
+            var shipmentIds = shipments.Select(item => item.Shipment.ShipmentId).Distinct(StringComparer.Ordinal).ToList();
+            if (shipmentIds.Count == 0)
+            {
+                shipmentIds.Add(ResolveDefaultShipmentId(orderResult.Data, shipments) ?? string.Empty);
+            }
+
+            foreach (var shipmentId in shipmentIds.Where(id => !string.IsNullOrWhiteSpace(id)))
+            {
+                var result = await PullLabelAsync(orderId, tenantId, clientId, shipmentId, cancellationToken);
+                if (result.Succeeded && result.Data != null)
+                {
+                    items.Add(result.Data);
+                }
+                else
+                {
+                    items.Add(new MarketplacePullShipmentLabelResult
+                    {
+                        OrderId = orderId,
+                        ShipmentId = shipmentId,
+                        Succeeded = false,
+                        CachedNow = false,
+                        HasLabel = false,
+                        LabelAvailability = MarketplaceLabelAvailabilities.Pending,
+                        Message = result.Errors.FirstOrDefault()?.Message ?? "Falha ao puxar etiqueta."
+                    });
+                }
+            }
+        }
+
+        return ServiceResult<MarketplacePullLabelsBulkResult>.Success(new MarketplacePullLabelsBulkResult
+        {
+            Total = items.Count,
+            Succeeded = items.Count(item => item.Succeeded),
+            Failed = items.Count(item => !item.Succeeded),
+            Items = items
+        });
     }
 
     /// <summary>
@@ -343,19 +599,14 @@ public sealed class OrderFulfillmentService
             "v1",
             cancellationToken);
 
-        if (normalizedMilestone == MarketplaceShipmentMilestones.LabelPrinted
-            && string.Equals(order.Status, MarketplaceOrderStatuses.PaymentConfirmed, StringComparison.Ordinal))
-        {
-            order.Status = MarketplaceOrderStatuses.LabelGenerated;
-            order.UpdatedAt = DateTimeOffset.UtcNow;
-        }
-
+        order.UpdatedAt = DateTimeOffset.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return ServiceResult<OrderActionResult>.Success(new OrderActionResult
         {
             OrderId = order.Id,
             Status = order.Status,
+            Action = normalizedMilestone,
             UpdatedAt = order.UpdatedAt
         });
     }
@@ -374,17 +625,10 @@ public sealed class OrderFulfillmentService
         if (order == null)
             return ServiceResult<OrderActionResult>.Failure([new ValidationError("orderId", "ORDER_NOT_FOUND")]);
 
-        var dispatchableStatuses = new HashSet<string>(StringComparer.Ordinal)
-        {
-            MarketplaceOrderStatuses.PaymentConfirmed,
-            MarketplaceOrderStatuses.LabelGenerated
-        };
-
-        if (!dispatchableStatuses.Contains(order.Status))
+        if (!order.SabrPaymentConfirmedAt.HasValue)
             return ServiceResult<OrderActionResult>.Failure([new ValidationError("status", $"ORDER_NOT_DISPATCHABLE: {order.Status}")]);
 
         var nowUtc = DateTimeOffset.UtcNow;
-        order.Status = MarketplaceOrderStatuses.Dispatched;
         order.UpdatedAt = nowUtc;
 
         var shipmentIds = await GetConcreteShipmentIdsAsync(order, cancellationToken);
@@ -425,6 +669,7 @@ public sealed class OrderFulfillmentService
         {
             OrderId   = order.Id,
             Status    = order.Status,
+            Action    = MarketplaceShipmentMilestones.Dispatched,
             UpdatedAt = order.UpdatedAt
         });
     }
@@ -437,20 +682,20 @@ public sealed class OrderFulfillmentService
         int limit,
         CancellationToken cancellationToken = default)
     {
-        var fulfillmentStatuses = new[] { MarketplaceOrderStatuses.PaymentConfirmed, MarketplaceOrderStatuses.LabelGenerated };
         var nowUtc = DateTimeOffset.UtcNow;
 
         var query = _dbContext.MarketplaceOrders
             .AsNoTracking()
             .Include(o => o.Items)
-            .Where(o => fulfillmentStatuses.Contains(o.Status))
+            .Where(o => o.SabrPaymentConfirmedAt.HasValue
+                        && o.Status != MarketplaceOrderStatuses.Cancelled
+                        && o.Status != MarketplaceOrderStatuses.Refunded
+                        && o.Status != MarketplaceOrderStatuses.Delivered)
             .OrderBy(o => o.ShipByDeadlineAt.HasValue ? 0 : 1)
             .ThenBy(o => o.ShipByDeadlineAt)
             .ThenBy(o => o.SabrPaymentConfirmedAt);
 
-        var total = await query.CountAsync(cancellationToken);
-
-        var orders = await query.Skip(skip).Take(limit).ToListAsync(cancellationToken);
+        var orders = await query.ToListAsync(cancellationToken);
 
         var clientIds = orders.Select(o => o.ClientId).Distinct().ToList();
         var clients = await _dbContext.Clients
@@ -461,29 +706,39 @@ public sealed class OrderFulfillmentService
 
         var shipmentLookup = await BuildShipmentLookupAsync(orders, cancellationToken);
 
-        var items = orders.Select(o =>
-        {
-            var orderShipments = GetOrderShipments(o, shipmentLookup);
-            return new AdminFulfillmentOrderResult
+        var allItems = orders
+            .Select(order => BuildOrderView(order, GetOrderShipments(order, shipmentLookup)))
+            .Where(view => view.CurrentInternalStage != MarketplaceInternalStages.Dispatched)
+            .OrderBy(view => view.Order.ShipByDeadlineAt.HasValue ? 0 : 1)
+            .ThenBy(view => view.Order.ShipByDeadlineAt)
+            .ThenBy(view => view.Order.SabrPaymentConfirmedAt)
+            .Select(view => new AdminFulfillmentOrderResult
             {
-                Id                      = o.Id,
-                TenantId                = o.TenantId,
-                ClientId                = o.ClientId,
-                ClientName              = clients.GetValueOrDefault(o.ClientId),
-                MlOrderId               = o.MlOrderId,
-                SellerId                = o.SellerId.ToString(),
-                ShipmentId              = o.ShipmentId,
-                ShippingMode            = o.ShippingMode,
-                LogisticType            = o.LogisticType,
-                ShipByDeadlineAt        = o.ShipByDeadlineAt,
-                IsUrgent                = o.ShipByDeadlineAt.HasValue && o.ShipByDeadlineAt.Value <= nowUtc.AddHours(4),
-                HasLabel                = orderShipments.Any(item => item.Shipment.LabelContentBytes != null && item.Shipment.LabelContentBytes.Length > 0),
-                TotalItems              = o.Items.Count,
-                SabrPaymentConfirmedAt  = o.SabrPaymentConfirmedAt ?? o.CreatedAt,
-                Shipments               = orderShipments.Select(MapShipmentResult).ToList(),
-                InternalFulfillmentSummary = BuildInternalSummary(orderShipments)
-            };
-        }).ToList();
+                Id = view.Order.Id,
+                TenantId = view.Order.TenantId,
+                ClientId = view.Order.ClientId,
+                ClientName = clients.GetValueOrDefault(view.Order.ClientId),
+                MlOrderId = view.Order.MlOrderId,
+                SellerId = view.Order.SellerId.ToString(),
+                ShipmentId = view.PrimaryShipment?.Shipment.ShipmentId ?? view.Order.ShipmentId,
+                ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? view.Order.ShippingMode,
+                LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? view.Order.LogisticType,
+                ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? view.Order.ShipByDeadlineAt,
+                IsUrgent = (view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? view.Order.ShipByDeadlineAt) is { } deadline
+                           && deadline <= nowUtc.AddHours(4),
+                HasLabel = view.HasLabel,
+                LabelAvailability = view.LabelAvailability,
+                TotalItems = view.Order.Items.Count,
+                SabrPaymentConfirmedAt = view.Order.SabrPaymentConfirmedAt ?? view.Order.CreatedAt,
+                Shipments = view.Shipments.Select(MapShipmentResult).ToList(),
+                ChannelStatus = view.ChannelStatus,
+                CancellationRequest = view.CancellationRequest,
+                InternalFulfillmentSummary = view.InternalSummary
+            })
+            .ToList();
+
+        var total = allItems.Count;
+        var items = allItems.Skip(skip).Take(limit).ToList();
 
         return new PagedResult<AdminFulfillmentOrderResult>
         {
@@ -669,69 +924,52 @@ public sealed class OrderFulfillmentService
             ShippingProvider = ResolveShippingProvider(shipment.Shipment),
             ShippedAt = shipment.Shipment.ShippedAt,
             ShipByDeadlineAt = shipment.Shipment.ShipByDeadlineAt,
-            HasLabel = shipment.Shipment.LabelContentBytes != null && shipment.Shipment.LabelContentBytes.Length > 0,
+            HasLabel = MarketplaceOrderWorkflow.HasOperationalLabel(shipment.Shipment),
+            LabelAvailability = MarketplaceOrderWorkflow.ResolveLabelAvailability(shipment.Shipment),
             Milestones = shipment.Milestones
         };
     }
 
-    private static MarketplaceInternalFulfillmentSummaryResult BuildInternalSummary(IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+    private static MarketplaceInternalFulfillmentSummaryResult BuildInternalSummary(MarketplaceOrder order, IReadOnlyCollection<OrderShipmentSnapshot> shipments)
     {
         var milestones = new MarketplaceShipmentMilestonesResult
         {
-            ProcessingStartedAt = shipments
-                .Select(item => item.Milestones.ProcessingStartedAt)
-                .Where(item => item.HasValue)
-                .Select(item => item!.Value)
-                .DefaultIfEmpty()
-                .Max(),
-            LabelPrintedAt = shipments
-                .Select(item => item.Milestones.LabelPrintedAt)
-                .Where(item => item.HasValue)
-                .Select(item => item!.Value)
-                .DefaultIfEmpty()
-                .Max(),
-            SeparatedAt = shipments
-                .Select(item => item.Milestones.SeparatedAt)
-                .Where(item => item.HasValue)
-                .Select(item => item!.Value)
-                .DefaultIfEmpty()
-                .Max(),
-            DispatchedAt = shipments
-                .Select(item => item.Milestones.DispatchedAt)
-                .Where(item => item.HasValue)
-                .Select(item => item!.Value)
-                .DefaultIfEmpty()
-                .Max()
+            ReceivedAt = order.ImportedAt,
+            PaidAt = order.SabrPaymentConfirmedAt,
+            ProcessingStartedAt = GetLatest(shipment => shipment.Milestones.ProcessingStartedAt, shipments) ?? order.SabrPaymentConfirmedAt,
+            LabelPrintedAt = GetLatest(shipment => shipment.Milestones.LabelPrintedAt, shipments),
+            SeparatedAt = GetLatest(shipment => shipment.Milestones.SeparatedAt, shipments),
+            DispatchedAt = GetLatest(shipment => shipment.Milestones.DispatchedAt, shipments)
         };
 
         var stage = milestones.DispatchedAt.HasValue
-            ? MarketplaceShipmentMilestones.Dispatched
+            ? MarketplaceInternalStages.Dispatched
             : milestones.SeparatedAt.HasValue
-                ? MarketplaceShipmentMilestones.Separated
+                ? MarketplaceInternalStages.Separated
                 : milestones.LabelPrintedAt.HasValue
-                    ? MarketplaceShipmentMilestones.LabelPrinted
+                    ? MarketplaceInternalStages.LabelPrinted
                     : milestones.ProcessingStartedAt.HasValue
-                        ? MarketplaceShipmentMilestones.ProcessingStarted
-                        : "pending";
+                        ? MarketplaceInternalStages.ProcessingStarted
+                        : milestones.PaidAt.HasValue
+                            ? MarketplaceInternalStages.Paid
+                            : milestones.ReceivedAt.HasValue
+                                ? MarketplaceInternalStages.Received
+                                : MarketplaceInternalStages.Pending;
 
         return new MarketplaceInternalFulfillmentSummaryResult
         {
             Stage = stage,
             Label = stage switch
             {
-                MarketplaceShipmentMilestones.Dispatched => "Despachado",
-                MarketplaceShipmentMilestones.Separated => "Pedido separado",
-                MarketplaceShipmentMilestones.LabelPrinted => "Etiqueta impressa",
-                MarketplaceShipmentMilestones.ProcessingStarted => "Em processamento",
+                MarketplaceInternalStages.Dispatched => "Pedido enviado",
+                MarketplaceInternalStages.Separated => "Pedido separado",
+                MarketplaceInternalStages.LabelPrinted => "Etiqueta impressa",
+                MarketplaceInternalStages.ProcessingStarted => "Em processamento",
+                MarketplaceInternalStages.Paid => "Pedido pago",
+                MarketplaceInternalStages.Received => "Pedido recebido",
                 _ => "Aguardando processamento"
             },
-            Milestones = new MarketplaceShipmentMilestonesResult
-            {
-                ProcessingStartedAt = milestones.ProcessingStartedAt == default ? null : milestones.ProcessingStartedAt,
-                LabelPrintedAt = milestones.LabelPrintedAt == default ? null : milestones.LabelPrintedAt,
-                SeparatedAt = milestones.SeparatedAt == default ? null : milestones.SeparatedAt,
-                DispatchedAt = milestones.DispatchedAt == default ? null : milestones.DispatchedAt
-            }
+            Milestones = milestones
         };
     }
 
@@ -761,14 +999,7 @@ public sealed class OrderFulfillmentService
         string dispatchedByAdminId,
         CancellationToken cancellationToken)
     {
-        var dispatchableStatuses = new HashSet<string>(StringComparer.Ordinal)
-        {
-            MarketplaceOrderStatuses.PaymentConfirmed,
-            MarketplaceOrderStatuses.LabelGenerated,
-            MarketplaceOrderStatuses.Dispatched
-        };
-
-        if (!dispatchableStatuses.Contains(order.Status))
+        if (!order.SabrPaymentConfirmedAt.HasValue)
         {
             return ServiceResult<OrderActionResult>.Failure([
                 new ValidationError("status", $"ORDER_NOT_DISPATCHABLE: {order.Status}")
@@ -786,36 +1017,22 @@ public sealed class OrderFulfillmentService
             "v1",
             cancellationToken);
 
-        var allShipmentIds = await GetConcreteShipmentIdsAsync(order, cancellationToken);
-        var allDispatched = allShipmentIds.All(candidate =>
-            candidate == shipmentId ||
-            _dbContext.MarketplaceEventLogs.AsNoTracking().Any(item =>
-                item.TenantId == order.TenantId
-                && item.ClientId == order.ClientId
-                && item.Provider == order.Provider
-                && item.Topic == MarketplaceEventTopics.AuditFulfillmentDispatched
-                && item.ResourceId == candidate));
+        order.UpdatedAt = DateTimeOffset.UtcNow;
 
-        if (allDispatched)
+        await _auditLogService.RecordAsync(
+            order.TenantId,
+            order.ClientId,
+            order.Provider,
+            order.SellerId,
+            MarketplaceEventTopics.AuditOrderDispatched,
+            order.MlOrderId,
+            new { orderId = order.MlOrderId, dispatchedByAdminId },
+            "v1",
+            cancellationToken);
+
+        if (order.Provider == MarketplaceProvider.TinyErp && !string.IsNullOrWhiteSpace(order.ShipmentId))
         {
-            order.Status = MarketplaceOrderStatuses.Dispatched;
-            order.UpdatedAt = DateTimeOffset.UtcNow;
-
-            await _auditLogService.RecordAsync(
-                order.TenantId,
-                order.ClientId,
-                order.Provider,
-                order.SellerId,
-                MarketplaceEventTopics.AuditOrderDispatched,
-                order.MlOrderId,
-                new { orderId = order.MlOrderId, dispatchedByAdminId },
-                "v1",
-                cancellationToken);
-
-            if (order.Provider == MarketplaceProvider.TinyErp && !string.IsNullOrWhiteSpace(order.ShipmentId))
-            {
-                _ = _tinyIntegrationService.UpdateOrderDispatchAsync(order.Id, order.ShipmentId, string.Empty);
-            }
+            _ = _tinyIntegrationService.UpdateOrderDispatchAsync(order.Id, order.ShipmentId, string.Empty);
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -824,9 +1041,228 @@ public sealed class OrderFulfillmentService
         {
             OrderId = order.Id,
             Status = order.Status,
+            Action = MarketplaceShipmentMilestones.Dispatched,
             UpdatedAt = order.UpdatedAt
         });
     }
+
+    private static OrderView BuildOrderView(MarketplaceOrder order, IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+    {
+        var primaryShipment = FindPrimaryShipment(shipments);
+        var internalSummary = BuildInternalSummary(order, shipments);
+        var channelStatus = BuildChannelStatus(order, shipments, primaryShipment);
+        var labelAvailability = ResolveOrderLabelAvailability(shipments);
+        var requiresLabelForPayment = MarketplaceOrderWorkflow.RequiresLabelForPayment(order.Provider);
+        var canMarkPaid = !requiresLabelForPayment || shipments.Any(item => MarketplaceOrderWorkflow.HasOperationalLabel(item.Shipment));
+
+        return new OrderView(
+            order,
+            shipments,
+            primaryShipment,
+            internalSummary,
+            channelStatus,
+            MarketplaceOrderWorkflow.BuildCancellationRequest(order),
+            labelAvailability,
+            labelAvailability != MarketplaceLabelAvailabilities.Pending,
+            internalSummary.Stage,
+            channelStatus.Stage,
+            requiresLabelForPayment,
+            canMarkPaid);
+    }
+
+    private static MarketplaceOrderListItemResult MapClientOrderListItem(OrderView view)
+    {
+        return new MarketplaceOrderListItemResult
+        {
+            Id = view.Order.Id,
+            Provider = view.Order.Provider,
+            SellerId = view.Order.SellerId.ToString(),
+            MlOrderId = view.Order.MlOrderId,
+            Status = view.Order.Status,
+            PaidAt = view.Order.PaidAt,
+            SabrPaymentConfirmedAt = view.Order.SabrPaymentConfirmedAt,
+            ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? view.Order.ShippingMode,
+            LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? view.Order.LogisticType,
+            ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? view.Order.ShipByDeadlineAt,
+            HasUnmappedItems = view.Order.Items.Any(item => item.MappingState == MarketplaceMappingStates.Unmapped),
+            TotalItems = view.Order.Items.Count,
+            ReservedItems = view.Order.Items.Sum(item => item.ReservedQuantity),
+            HasLabel = view.HasLabel,
+            LabelAvailability = view.LabelAvailability,
+            RequiresLabelForPayment = view.RequiresLabelForPayment,
+            CanMarkPaid = view.CanMarkPaid,
+            ShipmentsCount = view.Shipments.Count,
+            TrackingNumber = view.PrimaryShipment?.Shipment.TrackingNumber,
+            TrackingUrl = view.PrimaryShipment?.Shipment.TrackingUrl,
+            ShippingProvider = ResolveShippingProvider(view.PrimaryShipment?.Shipment),
+            CurrentInternalStage = view.CurrentInternalStage,
+            CurrentChannelStage = view.CurrentChannelStage,
+            ChannelStatus = view.ChannelStatus,
+            CancellationRequest = view.CancellationRequest,
+            InternalFulfillmentSummary = view.InternalSummary,
+            RiskFlagsJson = view.Order.RiskFlagsJson,
+            ImportedAt = view.Order.ImportedAt
+        };
+    }
+
+    private static MarketplaceOrderDetailResult MapClientOrderDetail(
+        OrderView view,
+        List<MarketplaceShipmentResult> shipments,
+        List<MarketplaceOrderItemDetailResult> items)
+    {
+        return new MarketplaceOrderDetailResult
+        {
+            Id = view.Order.Id,
+            Provider = view.Order.Provider,
+            SellerId = view.Order.SellerId.ToString(),
+            MlOrderId = view.Order.MlOrderId,
+            Status = view.Order.Status,
+            PaidAt = view.Order.PaidAt,
+            SabrPaymentConfirmedAt = view.Order.SabrPaymentConfirmedAt,
+            ShipmentId = view.PrimaryShipment?.Shipment.ShipmentId ?? view.Order.ShipmentId,
+            ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? view.Order.ShippingMode,
+            LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? view.Order.LogisticType,
+            ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? view.Order.ShipByDeadlineAt,
+            ImportedAt = view.Order.ImportedAt,
+            CanCancel = MarketplaceOrderStatuses.CancellableStatuses.Contains(view.Order.Status),
+            CanRefund = MarketplaceOrderStatuses.RefundableStatuses.Contains(view.Order.Status),
+            RequiresLabelForPayment = view.RequiresLabelForPayment,
+            CanMarkPaid = view.CanMarkPaid,
+            CanAutoCancel = MarketplaceOrderWorkflow.CanAutoCancel(view.CurrentInternalStage),
+            CurrentInternalStage = view.CurrentInternalStage,
+            CurrentChannelStage = view.CurrentChannelStage,
+            ChannelStatus = view.ChannelStatus,
+            CancellationRequest = view.CancellationRequest,
+            Items = items,
+            Shipments = shipments,
+            InternalFulfillmentSummary = view.InternalSummary
+        };
+    }
+
+    private static AdminOrderListItemResult MapAdminOrderListItem(OrderView view, string? clientName)
+    {
+        return new AdminOrderListItemResult
+        {
+            Id = view.Order.Id,
+            TenantId = view.Order.TenantId,
+            ClientId = view.Order.ClientId,
+            ClientName = clientName,
+            Provider = view.Order.Provider,
+            SellerId = view.Order.SellerId.ToString(),
+            MlOrderId = view.Order.MlOrderId,
+            Status = view.Order.Status,
+            PaidAt = view.Order.PaidAt,
+            SabrPaymentConfirmedAt = view.Order.SabrPaymentConfirmedAt,
+            ShipmentId = view.PrimaryShipment?.Shipment.ShipmentId ?? view.Order.ShipmentId,
+            ShippingMode = view.PrimaryShipment?.Shipment.ShippingMode ?? view.Order.ShippingMode,
+            LogisticType = view.PrimaryShipment?.Shipment.LogisticType ?? view.Order.LogisticType,
+            ShipByDeadlineAt = view.PrimaryShipment?.Shipment.ShipByDeadlineAt ?? view.Order.ShipByDeadlineAt,
+            HasUnmappedItems = view.Order.Items.Any(i => i.MappingState == MarketplaceMappingStates.Unmapped),
+            TotalItems = view.Order.Items.Count,
+            HasLabel = view.HasLabel,
+            LabelAvailability = view.LabelAvailability,
+            RequiresLabelForPayment = view.RequiresLabelForPayment,
+            CanMarkPaid = view.CanMarkPaid,
+            CurrentInternalStage = view.CurrentInternalStage,
+            ChannelStatus = view.ChannelStatus,
+            CancellationRequest = view.CancellationRequest,
+            InternalFulfillmentSummary = view.InternalSummary,
+            RiskFlagsJson = view.Order.RiskFlagsJson,
+            ImportedAt = view.Order.ImportedAt
+        };
+    }
+
+    private static MarketplaceChannelStatusResult BuildChannelStatus(
+        MarketplaceOrder order,
+        IReadOnlyCollection<OrderShipmentSnapshot> shipments,
+        OrderShipmentSnapshot? primaryShipment)
+    {
+        var shipmentDispatched = shipments
+            .Where(item => MarketplaceOrderWorkflow.IsExternalDispatched(item.Shipment))
+            .Select(item => item.Shipment.ShippedAt ?? item.Shipment.UpdatedAt)
+            .OrderByDescending(item => item)
+            .FirstOrDefault();
+
+        var rawStatus = primaryShipment?.Shipment.Status ?? order.Status;
+        var stage = shipmentDispatched != default
+            ? MarketplaceChannelStages.Dispatched
+            : order.Status switch
+            {
+                MarketplaceOrderStatuses.Delivered => MarketplaceChannelStages.Delivered,
+                MarketplaceOrderStatuses.Cancelled => MarketplaceChannelStages.Cancelled,
+                MarketplaceOrderStatuses.RefundRequested => MarketplaceChannelStages.RefundRequested,
+                MarketplaceOrderStatuses.Refunded => MarketplaceChannelStages.Refunded,
+                _ when MarketplaceOrderWorkflow.IsExternalDelivered(rawStatus) => MarketplaceChannelStages.Delivered,
+                _ when MarketplaceOrderWorkflow.IsExternalCancelled(rawStatus) => MarketplaceChannelStages.Cancelled,
+                _ => MarketplaceChannelStages.AwaitingShipment
+            };
+
+        return new MarketplaceChannelStatusResult
+        {
+            Stage = stage,
+            Label = MarketplaceOrderWorkflow.ToChannelLabel(stage, rawStatus),
+            OccurredAt = stage == MarketplaceChannelStages.Dispatched
+                ? shipmentDispatched
+                : primaryShipment?.Shipment.ShippedAt,
+            RawStatus = rawStatus
+        };
+    }
+
+    private static OrderShipmentSnapshot? FindPrimaryShipment(IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+    {
+        return shipments
+            .OrderByDescending(item => MarketplaceOrderWorkflow.ResolveLabelAvailability(item.Shipment) == MarketplaceLabelAvailabilities.AvailableCached)
+            .ThenByDescending(item => MarketplaceOrderWorkflow.ResolveLabelAvailability(item.Shipment) == MarketplaceLabelAvailabilities.AvailableRemote)
+            .ThenByDescending(item => !string.IsNullOrWhiteSpace(item.Shipment.TrackingNumber))
+            .ThenBy(item => item.Shipment.CreatedAt)
+            .FirstOrDefault();
+    }
+
+    private static string ResolveOrderLabelAvailability(IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+    {
+        if (shipments.Any(item => MarketplaceOrderWorkflow.ResolveLabelAvailability(item.Shipment) == MarketplaceLabelAvailabilities.AvailableCached))
+        {
+            return MarketplaceLabelAvailabilities.AvailableCached;
+        }
+
+        if (shipments.Any(item => MarketplaceOrderWorkflow.ResolveLabelAvailability(item.Shipment) == MarketplaceLabelAvailabilities.AvailableRemote))
+        {
+            return MarketplaceLabelAvailabilities.AvailableRemote;
+        }
+
+        return MarketplaceLabelAvailabilities.Pending;
+    }
+
+    private static DateTimeOffset? GetLatest(
+        Func<OrderShipmentSnapshot, DateTimeOffset?> selector,
+        IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+    {
+        var values = shipments
+            .Select(selector)
+            .Where(item => item.HasValue)
+            .Select(item => item!.Value)
+            .OrderByDescending(item => item)
+            .ToList();
+
+        return values.Count == 0 ? null : values[0];
+    }
+
+    private static bool MatchesInternalStatus(OrderView view, string? filter)
+        => string.IsNullOrWhiteSpace(filter)
+           || string.Equals(view.CurrentInternalStage, filter, StringComparison.OrdinalIgnoreCase);
+
+    private static bool MatchesChannelStatus(OrderView view, string? filter)
+        => string.IsNullOrWhiteSpace(filter)
+           || string.Equals(view.CurrentChannelStage, filter, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(view.Order.Status, filter, StringComparison.OrdinalIgnoreCase);
+
+    private static string? NormalizeFilter(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToLowerInvariant();
+
+    private static string? ResolveDefaultShipmentId(MarketplaceOrder order, IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+        => !string.IsNullOrWhiteSpace(order.ShipmentId)
+            ? order.ShipmentId.Trim()
+            : shipments.FirstOrDefault()?.Shipment.ShipmentId;
 
     private static string BuildOrderKey(string tenantId, Guid clientId, MarketplaceProvider provider, string orderId)
         => $"{tenantId}|{clientId:N}|{(int)provider}|{orderId}";
@@ -873,4 +1309,18 @@ public sealed class OrderFulfillmentService
     private sealed record OrderShipmentSnapshot(
         MarketplaceShipment Shipment,
         MarketplaceShipmentMilestonesResult Milestones);
+
+    private sealed record OrderView(
+        MarketplaceOrder Order,
+        IReadOnlyCollection<OrderShipmentSnapshot> Shipments,
+        OrderShipmentSnapshot? PrimaryShipment,
+        MarketplaceInternalFulfillmentSummaryResult InternalSummary,
+        MarketplaceChannelStatusResult ChannelStatus,
+        MarketplaceCancellationRequestResult CancellationRequest,
+        string LabelAvailability,
+        bool HasLabel,
+        string CurrentInternalStage,
+        string CurrentChannelStage,
+        bool RequiresLabelForPayment,
+        bool CanMarkPaid);
 }

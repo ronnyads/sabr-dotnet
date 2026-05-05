@@ -200,6 +200,9 @@ public sealed class MarketplaceShipmentLabelService
             });
         }
 
+        shipment.LabelSourceUrl = documentResponse.Data.DocUrl;
+        shipment.UpdatedAt = DateTimeOffset.UtcNow;
+
         using var response = await TikTokLabelHttpClient.GetAsync(documentResponse.Data.DocUrl, cancellationToken);
         response.EnsureSuccessStatusCode();
         var labelBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);

@@ -1204,6 +1204,12 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.ShipByDeadlineAt).HasColumnName("ship_by_deadline_at");
             entity.Property(e => e.ImportedAt).HasColumnName("imported_at").IsRequired();
             entity.Property(e => e.SabrPaymentConfirmedAt).HasColumnName("sabr_payment_confirmed_at");
+            entity.Property(e => e.CancellationRequestStatus).HasColumnName("cancellation_request_status").HasMaxLength(40);
+            entity.Property(e => e.CancellationRequestedAt).HasColumnName("cancellation_requested_at");
+            entity.Property(e => e.CancellationRequestedBy).HasColumnName("cancellation_requested_by").HasMaxLength(120);
+            entity.Property(e => e.CancellationRequestReason).HasColumnName("cancellation_request_reason").HasMaxLength(1000);
+            entity.Property(e => e.CancellationReviewedAt).HasColumnName("cancellation_reviewed_at");
+            entity.Property(e => e.CancellationReviewedBy).HasColumnName("cancellation_reviewed_by").HasMaxLength(120);
             entity.Property(e => e.RiskFlagsJson).HasColumnName("risk_flags_json").HasColumnType("jsonb");
             entity.Property(e => e.RawJson).HasColumnName("raw_json").HasColumnType("jsonb");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();

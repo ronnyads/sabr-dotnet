@@ -784,6 +784,31 @@ public sealed class TikTokShopSyncService
                 shipment.ShippedAt = InferShippedAt(packageDetail);
                 shipment.UpdatedAt = DateTimeOffset.UtcNow;
 
+                try
+                {
+                    var documentResponse = await _apiClient.GetPackageShippingDocumentAsync(
+                        accessToken,
+                        _options.AppKey,
+                        _options.AppSecret,
+                        packageDetail.PackageId,
+                        connection.ShopCipher,
+                        cancellationToken: cancellationToken);
+
+                    if (documentResponse.IsSuccess && !string.IsNullOrWhiteSpace(documentResponse.Data?.DocUrl))
+                    {
+                        shipment.LabelSourceUrl = documentResponse.Data.DocUrl;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(
+                        ex,
+                        "TikTok Shop package shipping document probe failed. tenantId={TenantId} clientId={ClientId} packageId={PackageId}",
+                        tenantId,
+                        clientId,
+                        packageDetail.PackageId);
+                }
+
                 if (!string.IsNullOrWhiteSpace(shipment.MlOrderId)
                     && orderLookup.TryGetValue(shipment.MlOrderId, out var order))
                 {

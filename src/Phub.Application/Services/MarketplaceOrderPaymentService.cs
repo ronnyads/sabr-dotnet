@@ -86,6 +86,25 @@ public sealed class MarketplaceOrderPaymentService
             });
         }
 
+        if (MarketplaceOrderWorkflow.RequiresLabelForPayment(order.Provider))
+        {
+            var shipments = await _dbContext.MarketplaceShipments
+                .AsNoTracking()
+                .Where(item => item.TenantId == tenantId
+                               && item.ClientId == clientId
+                               && item.Provider == order.Provider
+                               && item.MlOrderId == order.MlOrderId)
+                .ToListAsync(cancellationToken);
+
+            if (!MarketplaceOrderWorkflow.CanMarkPaid(order, shipments))
+            {
+                return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
+                {
+                    new ValidationError("label", "LABEL_REQUIRED_BEFORE_PAYMENT")
+                });
+            }
+        }
+
         var nowUtc = DateTimeOffset.UtcNow;
         var riskEvaluation = await EvaluateRiskReasonsAsync(order, nowUtc, cancellationToken);
         var riskReasons = riskEvaluation.reasons;

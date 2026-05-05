@@ -18,6 +18,9 @@ public sealed class OrderActionResult
 {
     public Guid OrderId { get; set; }
     public string Status { get; set; } = string.Empty;
+    public string? Action { get; set; }
+    public string? Message { get; set; }
+    public string? CancellationRequestStatus { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
@@ -42,6 +45,13 @@ public class AdminOrderListItemResult
     public bool HasUnmappedItems { get; set; }
     public int TotalItems { get; set; }
     public bool HasLabel { get; set; }
+    public string LabelAvailability { get; set; } = MarketplaceLabelAvailabilities.Pending;
+    public bool RequiresLabelForPayment { get; set; }
+    public bool CanMarkPaid { get; set; }
+    public string CurrentInternalStage { get; set; } = MarketplaceInternalStages.Pending;
+    public MarketplaceChannelStatusResult ChannelStatus { get; set; } = new();
+    public MarketplaceCancellationRequestResult? CancellationRequest { get; set; }
+    public MarketplaceInternalFulfillmentSummaryResult? InternalFulfillmentSummary { get; set; }
     public string? RiskFlagsJson { get; set; }
     public DateTimeOffset ImportedAt { get; set; }
 }
@@ -77,9 +87,12 @@ public sealed class AdminFulfillmentOrderResult
     public DateTimeOffset? ShipByDeadlineAt { get; set; }
     public bool IsUrgent { get; set; }
     public bool HasLabel { get; set; }
+    public string LabelAvailability { get; set; } = MarketplaceLabelAvailabilities.Pending;
     public int TotalItems { get; set; }
     public DateTimeOffset SabrPaymentConfirmedAt { get; set; }
     public List<MarketplaceShipmentResult> Shipments { get; set; } = new();
+    public MarketplaceChannelStatusResult ChannelStatus { get; set; } = new();
+    public MarketplaceCancellationRequestResult? CancellationRequest { get; set; }
     public MarketplaceInternalFulfillmentSummaryResult? InternalFulfillmentSummary { get; set; }
 }
 
@@ -263,10 +276,17 @@ public sealed class MarketplaceOrderListItemResult
     public int TotalItems { get; set; }
     public int ReservedItems { get; set; }
     public bool HasLabel { get; set; }
+    public string LabelAvailability { get; set; } = MarketplaceLabelAvailabilities.Pending;
+    public bool RequiresLabelForPayment { get; set; }
+    public bool CanMarkPaid { get; set; }
     public int ShipmentsCount { get; set; }
     public string? TrackingNumber { get; set; }
     public string? TrackingUrl { get; set; }
     public string? ShippingProvider { get; set; }
+    public string CurrentInternalStage { get; set; } = MarketplaceInternalStages.Pending;
+    public string CurrentChannelStage { get; set; } = MarketplaceChannelStages.Pending;
+    public MarketplaceChannelStatusResult ChannelStatus { get; set; } = new();
+    public MarketplaceCancellationRequestResult? CancellationRequest { get; set; }
     public MarketplaceInternalFulfillmentSummaryResult? InternalFulfillmentSummary { get; set; }
     public string? RiskFlagsJson { get; set; }
     public DateTimeOffset ImportedAt { get; set; }
@@ -288,6 +308,13 @@ public sealed class MarketplaceOrderDetailResult
     public DateTimeOffset ImportedAt { get; set; }
     public bool CanCancel { get; set; }
     public bool CanRefund { get; set; }
+    public bool RequiresLabelForPayment { get; set; }
+    public bool CanMarkPaid { get; set; }
+    public bool CanAutoCancel { get; set; }
+    public string CurrentInternalStage { get; set; } = MarketplaceInternalStages.Pending;
+    public string CurrentChannelStage { get; set; } = MarketplaceChannelStages.Pending;
+    public MarketplaceChannelStatusResult ChannelStatus { get; set; } = new();
+    public MarketplaceCancellationRequestResult? CancellationRequest { get; set; }
     public List<MarketplaceOrderItemDetailResult> Items { get; set; } = new();
     public List<MarketplaceShipmentResult> Shipments { get; set; } = new();
     public MarketplaceInternalFulfillmentSummaryResult? InternalFulfillmentSummary { get; set; }
@@ -318,11 +345,14 @@ public sealed class MarketplaceShipmentResult
     public DateTimeOffset? ShippedAt { get; set; }
     public DateTimeOffset? ShipByDeadlineAt { get; set; }
     public bool HasLabel { get; set; }
+    public string LabelAvailability { get; set; } = MarketplaceLabelAvailabilities.Pending;
     public MarketplaceShipmentMilestonesResult Milestones { get; set; } = new();
 }
 
 public sealed class MarketplaceShipmentMilestonesResult
 {
+    public DateTimeOffset? ReceivedAt { get; set; }
+    public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset? ProcessingStartedAt { get; set; }
     public DateTimeOffset? LabelPrintedAt { get; set; }
     public DateTimeOffset? SeparatedAt { get; set; }
@@ -336,13 +366,58 @@ public sealed class MarketplaceInternalFulfillmentSummaryResult
     public MarketplaceShipmentMilestonesResult Milestones { get; set; } = new();
 }
 
+public sealed class MarketplaceChannelStatusResult
+{
+    public string Stage { get; set; } = MarketplaceChannelStages.Pending;
+    public string Label { get; set; } = "Aguardando atualização do canal";
+    public DateTimeOffset? OccurredAt { get; set; }
+    public string? RawStatus { get; set; }
+}
+
+public sealed class MarketplaceCancellationRequestResult
+{
+    public string Status { get; set; } = MarketplaceCancellationRequestStatuses.None;
+    public string Label { get; set; } = "Sem solicitação";
+    public DateTimeOffset? RequestedAt { get; set; }
+    public string? RequestedBy { get; set; }
+    public string? Reason { get; set; }
+    public DateTimeOffset? ReviewedAt { get; set; }
+    public string? ReviewedBy { get; set; }
+    public bool IsPending { get; set; }
+}
+
 public sealed class MarketplaceShipmentLabelListItemResult
 {
     public string ShipmentId { get; set; } = string.Empty;
     public bool HasLabel { get; set; }
+    public string LabelAvailability { get; set; } = MarketplaceLabelAvailabilities.Pending;
     public string? ShippingProvider { get; set; }
     public string? TrackingNumber { get; set; }
     public string? Status { get; set; }
+}
+
+public sealed class MarketplacePullShipmentLabelResult
+{
+    public Guid OrderId { get; set; }
+    public string ShipmentId { get; set; } = string.Empty;
+    public bool Succeeded { get; set; }
+    public bool CachedNow { get; set; }
+    public bool HasLabel { get; set; }
+    public string LabelAvailability { get; set; } = MarketplaceLabelAvailabilities.Pending;
+    public string Message { get; set; } = string.Empty;
+}
+
+public sealed class MarketplacePullLabelsBulkRequest
+{
+    public List<Guid> OrderIds { get; set; } = new();
+}
+
+public sealed class MarketplacePullLabelsBulkResult
+{
+    public int Total { get; set; }
+    public int Succeeded { get; set; }
+    public int Failed { get; set; }
+    public List<MarketplacePullShipmentLabelResult> Items { get; set; } = new();
 }
 
 public sealed class MarketplaceShipmentMilestoneAdvanceRequest
@@ -356,6 +431,43 @@ public static class MarketplaceShipmentMilestones
     public const string LabelPrinted = "label_printed";
     public const string Separated = "separated";
     public const string Dispatched = "dispatched";
+}
+
+public static class MarketplaceInternalStages
+{
+    public const string Pending = "pending";
+    public const string Received = "received";
+    public const string Paid = "paid";
+    public const string ProcessingStarted = MarketplaceShipmentMilestones.ProcessingStarted;
+    public const string LabelPrinted = MarketplaceShipmentMilestones.LabelPrinted;
+    public const string Separated = MarketplaceShipmentMilestones.Separated;
+    public const string Dispatched = MarketplaceShipmentMilestones.Dispatched;
+}
+
+public static class MarketplaceChannelStages
+{
+    public const string Pending = "pending";
+    public const string AwaitingShipment = "awaiting_shipment";
+    public const string Dispatched = "channel_dispatched";
+    public const string Delivered = "delivered";
+    public const string Cancelled = "cancelled";
+    public const string RefundRequested = "refund_requested";
+    public const string Refunded = "refunded";
+}
+
+public static class MarketplaceLabelAvailabilities
+{
+    public const string Pending = "pending";
+    public const string AvailableRemote = "available_remote";
+    public const string AvailableCached = "available_cached";
+}
+
+public static class MarketplaceCancellationRequestStatuses
+{
+    public const string None = "none";
+    public const string Requested = "requested";
+    public const string Approved = "approved";
+    public const string Rejected = "rejected";
 }
 
 public sealed class MarketplaceMarkPaidResult
@@ -426,6 +538,9 @@ public static class MarketplaceEventTopics
     public const string AuditOrderDispatched    = "audit.order.dispatched";
     public const string AuditOrderRefundRequest = "audit.order.refund_requested";
     public const string AuditOrderRefunded      = "audit.order.refunded";
+    public const string AuditOrderCancellationRequested = "audit.order.cancellation_requested";
+    public const string AuditOrderCancellationApproved  = "audit.order.cancellation_approved";
+    public const string AuditOrderCancellationRejected  = "audit.order.cancellation_rejected";
     public const string AuditShipmentShipped    = "audit.shipment.shipped";
     public const string AuditLabelGenerated     = "audit.label.generated";
     public const string AuditFulfillmentProcessingStarted = "audit.fulfillment.processing_started";

@@ -18,6 +18,12 @@ public sealed class MarketplaceOrder
     public DateTimeOffset? ShipByDeadlineAt { get; set; }
     public DateTimeOffset ImportedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
+    public string? CancellationRequestStatus { get; set; }
+    public DateTimeOffset? CancellationRequestedAt { get; set; }
+    public string? CancellationRequestedBy { get; set; }
+    public string? CancellationRequestReason { get; set; }
+    public DateTimeOffset? CancellationReviewedAt { get; set; }
+    public string? CancellationReviewedBy { get; set; }
     public string? RiskFlagsJson { get; set; }
     public string? RawJson { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
