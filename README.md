@@ -7,7 +7,7 @@ Minimal start to get the new system online.
 
 ## Run
 ```bash
-cd src/Sabr.Api
+cd src/Phub.Api
 dotnet run
 ```
 
@@ -25,7 +25,7 @@ Invoke-WebRequest http://127.0.0.1:5250/health/ready
 
 Se falhar, inicie o backend:
 ```bash
-dotnet run --project src/Sabr.Api/Sabr.Api.csproj
+dotnet run --project src/Phub.Api/Phub.Api.csproj
 ```
 
 Comando unico recomendado para client (sobe API se necessario + frontend):
@@ -40,7 +40,7 @@ Matriz rapida de erro em DEV:
 - `28P01` no startup da API: credencial de banco invalida para `sabr_user` (runbook: `docs/runbooks/login-local-28p01.md`).
 
 ## Build Lock (MSB3026/MSB3027)
-Quando o `Sabr.Api` esta em execucao, o processo pode bloquear `Sabr.Application.dll` e `Sabr.Infrastructure.dll` dentro de `src/Sabr.Api/bin/Debug/net8.0`, causando:
+Quando o `Phub.Api` esta em execucao, o processo pode bloquear `Phub.Application.dll` e `Phub.Infrastructure.dll` dentro de `src/Phub.Api/bin/Debug/net8.0`, causando:
 - `MSB3026` (copy retry)
 - `MSB3027`/`MSB3021` (copy failed: file in use)
 
@@ -54,20 +54,20 @@ Comandos:
 ../scripts/build-safe.ps1
 
 # Subir API sem rebuild
-dotnet run --no-build --project src/Sabr.Api/Sabr.Api.csproj
+dotnet run --no-build --project src/Phub.Api/Phub.Api.csproj
 ```
 
 Destravamento manual (se necessario):
 ```powershell
-Get-Process -Name Sabr.Api
+Get-Process -Name Phub.Api
 ../scripts/stop-sabr-api.ps1
-dotnet build src/Sabr.Api/Sabr.Api.csproj
+dotnet build src/Phub.Api/Phub.Api.csproj
 ```
 
 Testes rapidos com API ligada (evita recompilar referencias em uso):
 ```powershell
-dotnet build tests/Sabr.Api.Tests/Sabr.Api.Tests.csproj -p:BuildProjectReferences=false
-dotnet test tests/Sabr.Api.Tests/Sabr.Api.Tests.csproj --no-build --filter "MarketplaceCategoryResolverTests|CategorySuggestHttpTests"
+dotnet build tests/Phub.Api.Tests/Phub.Api.Tests.csproj -p:BuildProjectReferences=false
+dotnet test tests/Phub.Api.Tests/Phub.Api.Tests.csproj --no-build --filter "MarketplaceCategoryResolverTests|CategorySuggestHttpTests"
 ```
 
 ## Notes
@@ -80,7 +80,7 @@ dotnet test tests/Sabr.Api.Tests/Sabr.Api.Tests.csproj --no-build --filter "Mark
 Use fake data only in staging (no real PII). The command below creates deterministic fake tenants, clients, plans, catalogs, products and subscriptions:
 
 ```bash
-cd src/Sabr.Api
+cd src/Phub.Api
 dotnet run -- --seed-staging-fake
 ```
 
@@ -106,7 +106,7 @@ Quick local check:
 Use this seed to bootstrap a full local environment in a new machine (admin + client + catalog + marketplace connection without real token + wizard drafts):
 
 ```bash
-dotnet run --project src/Sabr.Api/Sabr.Api.csproj -- --seed-dev-initial
+dotnet run --project src/Phub.Api/Phub.Api.csproj -- --seed-dev-initial
 ```
 
 What it creates:
@@ -175,7 +175,7 @@ Runtime secrets are sourced from AWS Secrets Manager and injected via ECS task d
 ## Smoke Checklist (Local)
 
 1. Start API:
-   - `cd src/Sabr.Api`
+   - `cd src/Phub.Api`
    - `dotnet run -- --seed-staging-fake`
    - `dotnet run`
 2. Start frontend client:

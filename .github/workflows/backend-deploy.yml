@@ -35,14 +35,14 @@ jobs:
 
       # ── 3. Restore e Build ────────────────────────────────────────────────────
       - name: Restore
-        run: dotnet restore SabrHub.sln
+        run: dotnet restore PhubHub.sln
 
       - name: Build
-        run: dotnet build SabrHub.sln --configuration Release --no-restore
+        run: dotnet build PhubHub.sln --configuration Release --no-restore
 
       # ── 4. Testes unitários (exclui integration que precisam de banco) ─────────
       - name: Test
-        run: dotnet test SabrHub.sln --configuration Release --no-build --filter "FullyQualifiedName!~Integration"
+        run: dotnet test PhubHub.sln --configuration Release --no-build --filter "FullyQualifiedName!~Integration"
 
       # ── 5. Deploy para Fly.io ─────────────────────────────────────────────────
       - name: Deploy to Fly.io
@@ -51,7 +51,7 @@ jobs:
       - name: Fly deploy
         run: |
           flyctl deploy \
-            --app "sabr-api-dev" \
+            --app "${{ github.ref_name == 'main' && 'sabr-api-prod' || 'sabr-api-dev' }}" \
             --remote-only \
             --wait-timeout 300
         env:

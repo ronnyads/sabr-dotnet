@@ -1,9 +1,0 @@
-namespace Sabr.Domain.Enums;
-
-public enum DocumentStatus
-{
-    Pending = 1,
-    Approved = 2,
-    Rejected = 3,
-    UnderReview = 4
-}

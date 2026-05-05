@@ -13,7 +13,7 @@
 ## Fase 0 - Pre-deploy
 
 1. Confirmar build verde:
-   - `dotnet test tests/Sabr.Api.Tests/Sabr.Api.Tests.csproj --filter "FullyQualifiedName~MarketplaceResilienceHttpTests|FullyQualifiedName~CategorySuggestHttpTests"`
+   - `dotnet test tests/Phub.Api.Tests/Phub.Api.Tests.csproj --filter "FullyQualifiedName~MarketplaceResilienceHttpTests|FullyQualifiedName~CategorySuggestHttpTests"`
    - `npm.cmd run build:client`
 2. Confirmar feature flags do wizard no ambiente alvo.
 3. Registrar versao exata do artefato.

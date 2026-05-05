@@ -19,11 +19,11 @@
    ```
 3. Configure a API para usar a credencial local via user-secrets:
    ```bash
-   dotnet user-secrets set "ConnectionStrings:Default" "Host=127.0.0.1;Port=5432;Database=sabr3;Username=sabr_user;Password=04692021RGjl!" --project src/Sabr.Api/Sabr.Api.csproj
+   dotnet user-secrets set "ConnectionStrings:Default" "Host=127.0.0.1;Port=5432;Database=sabr3;Username=sabr_user;Password=04692021RGjl!" --project src/Phub.Api/Phub.Api.csproj
    ```
 4. Suba API e valide health:
    ```bash
-   dotnet run --project src/Sabr.Api/Sabr.Api.csproj
+   dotnet run --project src/Phub.Api/Phub.Api.csproj
    ```
    Health esperado:
    - `http://127.0.0.1:5250/health/ready` => `200`
@@ -31,7 +31,7 @@
 ## Seed e validacao de login
 1. Rodar seed de desenvolvimento:
    ```bash
-   dotnet run --project src/Sabr.Api/Sabr.Api.csproj -- --seed-dev-initial
+   dotnet run --project src/Phub.Api/Phub.Api.csproj -- --seed-dev-initial
    ```
 2. Validar login client (`localhost:4200`) com conta seed.
 3. Validar login admin (`localhost:4300`) com conta seed.

@@ -22,12 +22,12 @@ Este roteiro gera as 4 evidencias exigidas para GO da base:
 Configure segredos reais via user-secrets (recomendado):
 
 ```powershell
-dotnet user-secrets init --project src/Sabr.Api/Sabr.Api.csproj
-dotnet user-secrets set "MercadoLivre:ClientId" "<ML_CLIENT_ID_REAL>" --project src/Sabr.Api/Sabr.Api.csproj
-dotnet user-secrets set "MercadoLivre:ClientSecret" "<ML_CLIENT_SECRET_REAL>" --project src/Sabr.Api/Sabr.Api.csproj
-dotnet user-secrets set "MercadoLivre:RedirectUri" "http://localhost:5250/api/v1/client/integrations/mercadolivre/callback" --project src/Sabr.Api/Sabr.Api.csproj
-dotnet user-secrets set "MercadoLivre:WebhookSecret" "<ML_WEBHOOK_SECRET_REAL>" --project src/Sabr.Api/Sabr.Api.csproj
-dotnet user-secrets set "MercadoLivre:Mabang:ApiKey" "<MABANG_API_KEY_REAL>" --project src/Sabr.Api/Sabr.Api.csproj
+dotnet user-secrets init --project src/Phub.Api/Phub.Api.csproj
+dotnet user-secrets set "MercadoLivre:ClientId" "<ML_CLIENT_ID_REAL>" --project src/Phub.Api/Phub.Api.csproj
+dotnet user-secrets set "MercadoLivre:ClientSecret" "<ML_CLIENT_SECRET_REAL>" --project src/Phub.Api/Phub.Api.csproj
+dotnet user-secrets set "MercadoLivre:RedirectUri" "http://localhost:5250/api/v1/client/integrations/mercadolivre/callback" --project src/Phub.Api/Phub.Api.csproj
+dotnet user-secrets set "MercadoLivre:WebhookSecret" "<ML_WEBHOOK_SECRET_REAL>" --project src/Phub.Api/Phub.Api.csproj
+dotnet user-secrets set "MercadoLivre:Mabang:ApiKey" "<MABANG_API_KEY_REAL>" --project src/Phub.Api/Phub.Api.csproj
 ```
 
 Opcionalmente via variaveis de ambiente:
@@ -43,7 +43,7 @@ $env:MercadoLivre__Mabang__ApiKey="<MABANG_API_KEY_REAL>"
 Validacao rapida (sem expor segredo):
 
 ```powershell
-dotnet user-secrets list --project src/Sabr.Api/Sabr.Api.csproj | findstr /I "MercadoLivre:ClientId MercadoLivre:ClientSecret MercadoLivre:RedirectUri MercadoLivre:WebhookSecret"
+dotnet user-secrets list --project src/Phub.Api/Phub.Api.csproj | findstr /I "MercadoLivre:ClientId MercadoLivre:ClientSecret MercadoLivre:RedirectUri MercadoLivre:WebhookSecret"
 ```
 
 Output esperado:

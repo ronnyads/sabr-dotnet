@@ -8,8 +8,8 @@ rem   dev-start.cmd
 set "DOTNET_ROOT=%~dp0"
 set "FRONTEND_ROOT=%DOTNET_ROOT%..\sabr-frontend"
 
-if not exist "%DOTNET_ROOT%src\Sabr.Api\Sabr.Api.csproj" (
-  echo Could not find API project at "%DOTNET_ROOT%src\Sabr.Api\Sabr.Api.csproj"
+if not exist "%DOTNET_ROOT%src\Phub.Api\Phub.Api.csproj" (
+  echo Could not find API project at "%DOTNET_ROOT%src\Phub.Api\Phub.Api.csproj"
   exit /b 1
 )
 
@@ -24,8 +24,8 @@ if not exist "%NPM_CMD%" (
   exit /b 1
 )
 
-echo Starting SABR API (http://localhost:5250)...
-start "SABR API" cmd /k "cd /d "%DOTNET_ROOT%" && set ASPNETCORE_ENVIRONMENT=Development && dotnet run --project "src\Sabr.Api\Sabr.Api.csproj""
+echo Starting Phub API (http://localhost:5250)...
+start "Phub API" cmd /k "cd /d "%DOTNET_ROOT%" && set ASPNETCORE_ENVIRONMENT=Development && dotnet run --project "src\Phub.Api\Phub.Api.csproj""
 
 echo Starting SABR Client (http://localhost:4200)...
 start "SABR Client" cmd /k "cd /d "%FRONTEND_ROOT%" && "%NPM_CMD%" run start:client"
