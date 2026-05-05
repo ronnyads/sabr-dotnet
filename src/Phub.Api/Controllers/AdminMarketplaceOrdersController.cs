@@ -271,12 +271,39 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         [FromRoute] Guid orderId,
         CancellationToken cancellationToken = default)
     {
-        var result = await _fulfillmentService.GetLabelAsync(orderId, null, null, cancellationToken);
+        var result = await _fulfillmentService.GetLabelAsync(orderId, null, null, cancellationToken: cancellationToken);
         if (!result.Succeeded || result.Data == null)
             return MapValidationError(result.Errors);
 
         var label = result.Data;
         return File(label.Content, label.ContentType, label.FileName);
+    }
+
+    // GET /api/v1/admin/orders/{orderId}/labels
+    [HttpGet("{orderId:guid}/labels")]
+    public async Task<IActionResult> ListLabels(
+        [FromRoute] Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _fulfillmentService.ListLabelsAsync(orderId, null, null, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return Ok(result.Data);
+    }
+
+    // GET /api/v1/admin/orders/{orderId}/labels/{shipmentId}
+    [HttpGet("{orderId:guid}/labels/{shipmentId}")]
+    public async Task<IActionResult> GetLabelByShipment(
+        [FromRoute] Guid orderId,
+        [FromRoute] string shipmentId,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _fulfillmentService.GetLabelAsync(orderId, null, null, shipmentId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return File(result.Data.Content, result.Data.ContentType, result.Data.FileName);
     }
 
     // POST /api/v1/admin/orders/{orderId}/dispatch
@@ -287,6 +314,28 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
     {
         var adminId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "admin";
         var result = await _fulfillmentService.MarkDispatchedAsync(orderId, adminId, cancellationToken);
+
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return Ok(result.Data);
+    }
+
+    // POST /api/v1/admin/orders/{orderId}/shipments/{shipmentId}/milestone
+    [HttpPost("{orderId:guid}/shipments/{shipmentId}/milestone")]
+    public async Task<IActionResult> AdvanceShipmentMilestone(
+        [FromRoute] Guid orderId,
+        [FromRoute] string shipmentId,
+        [FromBody] MarketplaceShipmentMilestoneAdvanceRequest? request,
+        CancellationToken cancellationToken = default)
+    {
+        var adminId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "admin";
+        var result = await _fulfillmentService.AdvanceShipmentMilestoneAsync(
+            orderId,
+            shipmentId,
+            request?.Milestone ?? string.Empty,
+            adminId,
+            cancellationToken);
 
         if (!result.Succeeded || result.Data == null)
             return MapValidationError(result.Errors);

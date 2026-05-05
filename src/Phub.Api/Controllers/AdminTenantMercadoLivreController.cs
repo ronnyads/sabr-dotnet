@@ -89,7 +89,12 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
             return NotFound(CreateApiError("TENANT_NOT_FOUND", "Tenant not found"));
         }
 
-        var result = await _shipmentLabelService.GetOrFetchAsync(tenant.Id, clientId, shipmentId, cancellationToken);
+        var result = await _shipmentLabelService.GetOrFetchAsync(
+            tenant.Id,
+            clientId,
+            Phub.Domain.Enums.MarketplaceProvider.MercadoLivre,
+            shipmentId,
+            cancellationToken);
         if (!result.Succeeded || result.Data == null)
         {
             return NotFound(CreateApiError("LABEL_NOT_FOUND", "Label not found for shipment"));

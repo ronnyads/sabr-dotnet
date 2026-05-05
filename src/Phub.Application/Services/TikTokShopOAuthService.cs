@@ -1,4 +1,6 @@
+using System.Net;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Phub.Application.Abstractions;
 using Phub.Application.Validation;
@@ -12,15 +14,18 @@ public sealed class TikTokShopOAuthService
     private readonly IAppDbContext _dbContext;
     private readonly ITikTokShopApiClient _apiClient;
     private readonly Options.TikTokShopOptions _options;
+    private readonly ILogger<TikTokShopOAuthService> _logger;
 
     public TikTokShopOAuthService(
         IAppDbContext dbContext,
         ITikTokShopApiClient apiClient,
-        IOptions<Options.TikTokShopOptions> options)
+        IOptions<Options.TikTokShopOptions> options,
+        ILogger<TikTokShopOAuthService> logger)
     {
         _dbContext = dbContext;
         _apiClient = apiClient;
         _options = options.Value;
+        _logger = logger;
     }
 
     public string BuildConnectUrl(string state)
@@ -114,16 +119,32 @@ public sealed class TikTokShopOAuthService
             });
         }
 
-        var tokenData = tokenEnvelope.Data;
-        var expiresAt = ResolveExpiration(tokenData.AccessTokenExpireIn, tokenData.ExpiresIn);
-        var displayName = BuildDisplayName(tokenData);
         var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(
             item => item.TenantId == tenantId
                     && item.ClientId == clientId
                     && item.Provider == MarketplaceProvider.TikTokShop,
             cancellationToken);
+        var tokenData = tokenEnvelope.Data;
+        var resolvedShop = await ResolveAuthorizedShopAsync(tokenData, connection, cancellationToken);
+        var expiresAt = ResolveExpiration(tokenData.AccessTokenExpireIn, tokenData.ExpiresIn);
+        var displayName = BuildDisplayName(
+            resolvedShop.DisplayName,
+            resolvedShop.Region,
+            resolvedShop.ShopCipher);
 
-        var sellerId = TryParseSellerId(tokenData.ShopId);
+        var sellerId = TryParseSellerId(resolvedShop.ShopId);
+        if (!resolvedShop.IsComplete)
+        {
+            _logger.LogWarning(
+                "TikTok OAuth callback persisted incomplete shop metadata. tenantId={TenantId} clientId={ClientId} sellerId={SellerId} hasShopCipher={HasShopCipher} usedExistingMetadata={UsedExistingMetadata} operation={Operation}",
+                tenantId,
+                clientId,
+                sellerId,
+                !string.IsNullOrWhiteSpace(resolvedShop.ShopCipher),
+                resolvedShop.UsedExistingMetadata,
+                "oauth_callback");
+        }
+
         if (connection == null)
         {
             connection = new TenantMarketplaceConnection
@@ -133,7 +154,7 @@ public sealed class TikTokShopOAuthService
                 Provider = MarketplaceProvider.TikTokShop,
                 SellerId = sellerId,
                 Nickname = displayName,
-                ShopCipher = tokenData.ShopCipher,
+                ShopCipher = NormalizeNullable(resolvedShop.ShopCipher),
                 AccessToken = tokenData.AccessToken,
                 RefreshToken = tokenData.RefreshToken ?? string.Empty,
                 TokenExpiresAt = expiresAt
@@ -144,7 +165,7 @@ public sealed class TikTokShopOAuthService
         {
             connection.SellerId = sellerId;
             connection.Nickname = displayName;
-            connection.ShopCipher = tokenData.ShopCipher ?? connection.ShopCipher;
+            connection.ShopCipher = NormalizeNullable(resolvedShop.ShopCipher);
             connection.AccessToken = tokenData.AccessToken;
             connection.RefreshToken = tokenData.RefreshToken ?? connection.RefreshToken;
             connection.TokenExpiresAt = expiresAt;
@@ -181,6 +202,7 @@ public sealed class TikTokShopOAuthService
         var mappingsCount = await _dbContext.TenantMarketplaceListingMaps.CountAsync(
             m => m.TenantId == tenantId && m.ClientId == clientId && m.Provider == MarketplaceProvider.TikTokShop,
             cancellationToken);
+        var requiresReconnect = string.IsNullOrWhiteSpace(connection.ShopCipher) || connection.SellerId <= 0;
 
         return ServiceResult<TikTokShopStatusResult>.Success(new TikTokShopStatusResult
         {
@@ -190,7 +212,11 @@ public sealed class TikTokShopOAuthService
             LastSyncAt = connection.LastSyncAt,
             TokenExpiresAt = connection.TokenExpiresAt,
             OrdersCount = ordersCount,
-            MappingsCount = mappingsCount
+            MappingsCount = mappingsCount,
+            RequiresReconnect = requiresReconnect,
+            ConnectionWarning = requiresReconnect
+                ? "A autorizacao foi concluida, mas o TikTok Shop nao retornou os dados completos da loja. Reconecte a conta para liberar categorias e publicacao."
+                : null
         });
     }
 
@@ -207,32 +233,80 @@ public sealed class TikTokShopOAuthService
 
         if (connection == null)
         {
-            return ServiceResult<string>.Failure(new[]
-            {
-                new ValidationError("connection", "TikTok Shop não está conectado")
-            });
+            return ServiceResult<string>.Failure(
+                ServiceErrorCodes.TikTokShopNotConnected,
+                new[]
+                {
+                    new ValidationError("connection", "TikTok Shop nao esta conectado")
+                });
         }
 
-        // Refresh se o token expira nos próximos 5 minutos
         var needsRefresh = connection.TokenExpiresAt <= DateTimeOffset.UtcNow.AddMinutes(5);
 
         if (needsRefresh && !string.IsNullOrWhiteSpace(connection.RefreshToken))
         {
-            var refreshEnvelope = await _apiClient.RefreshTokenAsync(
-                _options.AppKey,
-                _options.AppSecret,
-                connection.RefreshToken,
-                cancellationToken);
-
-            if (refreshEnvelope.Code == 0 && refreshEnvelope.Data != null &&
-                !string.IsNullOrWhiteSpace(refreshEnvelope.Data.AccessToken))
+            try
             {
-                var tokenData = refreshEnvelope.Data;
-                connection.AccessToken = tokenData.AccessToken;
-                connection.RefreshToken = tokenData.RefreshToken ?? connection.RefreshToken;
-                connection.TokenExpiresAt = ResolveExpiration(tokenData.AccessTokenExpireIn, tokenData.ExpiresIn);
-                connection.UpdatedAt = DateTimeOffset.UtcNow;
-                await _dbContext.SaveChangesAsync(cancellationToken);
+                var refreshEnvelope = await _apiClient.RefreshTokenAsync(
+                    _options.AppKey,
+                    _options.AppSecret,
+                    connection.RefreshToken,
+                    cancellationToken);
+
+                if (refreshEnvelope.Code == 0 && refreshEnvelope.Data != null &&
+                    !string.IsNullOrWhiteSpace(refreshEnvelope.Data.AccessToken))
+                {
+                    var tokenData = refreshEnvelope.Data;
+                    connection.AccessToken = tokenData.AccessToken;
+                    connection.RefreshToken = tokenData.RefreshToken ?? connection.RefreshToken;
+                    connection.TokenExpiresAt = ResolveExpiration(tokenData.AccessTokenExpireIn, tokenData.ExpiresIn);
+                    connection.UpdatedAt = DateTimeOffset.UtcNow;
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+                }
+            }
+            catch (TikTokShopApiException ex) when (IsAuthRefreshFailure(ex.StatusCode))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "TikTok refresh token rejected. tenantId={TenantId} clientId={ClientId} statusCode={StatusCode} requestId={RequestId} operation={Operation}",
+                    tenantId,
+                    clientId,
+                    ex.StatusCode,
+                    ex.RequestId,
+                    "refresh_token");
+                return ServiceResult<string>.Failure(
+                    ServiceErrorCodes.TikTokShopReconnectRequired,
+                    "connection",
+                    "Sessao TikTok Shop expirada. Reconecte sua conta.");
+            }
+            catch (TikTokShopApiException ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "TikTok refresh token failed upstream. tenantId={TenantId} clientId={ClientId} statusCode={StatusCode} requestId={RequestId} operation={Operation}",
+                    tenantId,
+                    clientId,
+                    ex.StatusCode,
+                    ex.RequestId,
+                    "refresh_token");
+                return ServiceResult<string>.Failure(
+                    ServiceErrorCodes.TikTokShopUpstreamError,
+                    "connection",
+                    "TikTok Shop indisponivel no momento. Tente novamente.");
+            }
+            catch (HttpRequestException ex) when (IsAuthRefreshFailure(ex.StatusCode))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "TikTok refresh token rejected via HTTP exception. tenantId={TenantId} clientId={ClientId} statusCode={StatusCode} operation={Operation}",
+                    tenantId,
+                    clientId,
+                    ex.StatusCode,
+                    "refresh_token");
+                return ServiceResult<string>.Failure(
+                    ServiceErrorCodes.TikTokShopReconnectRequired,
+                    "connection",
+                    "Sessao TikTok Shop expirada. Reconecte sua conta.");
             }
         }
 
@@ -341,10 +415,128 @@ public sealed class TikTokShopOAuthService
         return ServiceResult<bool>.Success(true);
     }
 
-    private static string BuildDisplayName(TikTokShopTokenPayload tokenData)
+    private async Task<ResolvedTikTokShopShop> ResolveAuthorizedShopAsync(
+        TikTokShopTokenPayload tokenData,
+        TenantMarketplaceConnection? existingConnection,
+        CancellationToken cancellationToken)
     {
-        var sellerName = tokenData.SellerName?.Trim();
-        var region = tokenData.SellerBaseRegion?.Trim().ToUpperInvariant();
+        if (TryCreateResolvedShop(
+                tokenData.ShopId,
+                tokenData.ShopCipher,
+                tokenData.SellerName,
+                tokenData.SellerBaseRegion,
+                out var resolvedFromToken))
+        {
+            return resolvedFromToken;
+        }
+
+        try
+        {
+            var shops = await _apiClient.GetAuthorizedShopsAsync(
+                tokenData.AccessToken,
+                _options.AppKey,
+                _options.AppSecret,
+                cancellationToken);
+
+            var matchingShop = shops
+                .Where(shop => IsUsableShop(shop.ShopId, shop.ShopCipher))
+                .OrderByDescending(shop => string.Equals(shop.ShopId, tokenData.ShopId, StringComparison.Ordinal))
+                .ThenByDescending(shop => string.Equals(shop.ShopCipher, tokenData.ShopCipher, StringComparison.Ordinal))
+                .FirstOrDefault();
+
+            if (matchingShop is not null &&
+                TryCreateResolvedShop(
+                    matchingShop.ShopId,
+                    matchingShop.ShopCipher,
+                    matchingShop.SellerName ?? matchingShop.ShopName ?? tokenData.SellerName,
+                    matchingShop.SellerBaseRegion ?? tokenData.SellerBaseRegion,
+                    out var resolvedFromApi))
+            {
+                return resolvedFromApi;
+            }
+        }
+        catch (TikTokShopApiException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "TikTok authorized shops lookup failed during OAuth callback. statusCode={StatusCode} requestId={RequestId} hasTokenShopCipher={HasTokenShopCipher} tokenShopId={TokenShopId} operation={Operation}",
+                ex.StatusCode,
+                ex.RequestId,
+                !string.IsNullOrWhiteSpace(tokenData.ShopCipher),
+                tokenData.ShopId,
+                ex.Operation);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "TikTok authorized shops lookup failed with HTTP exception during OAuth callback. statusCode={StatusCode} hasTokenShopCipher={HasTokenShopCipher} tokenShopId={TokenShopId} operation={Operation}",
+                ex.StatusCode,
+                !string.IsNullOrWhiteSpace(tokenData.ShopCipher),
+                tokenData.ShopId,
+                "authorized_shops");
+        }
+
+        if (existingConnection != null &&
+            TryCreateResolvedShop(
+                existingConnection.SellerId > 0 ? existingConnection.SellerId.ToString() : null,
+                existingConnection.ShopCipher,
+                existingConnection.Nickname,
+                tokenData.SellerBaseRegion,
+                out var resolvedFromExisting))
+        {
+            _logger.LogWarning(
+                "TikTok OAuth callback reused existing shop metadata after incomplete authorization payload. sellerId={SellerId} hasShopCipher={HasShopCipher} operation={Operation}",
+                existingConnection.SellerId,
+                !string.IsNullOrWhiteSpace(existingConnection.ShopCipher),
+                "oauth_callback");
+            return resolvedFromExisting with { UsedExistingMetadata = true };
+        }
+
+        _logger.LogWarning(
+            "TikTok OAuth callback continuing with incomplete shop metadata. hasTokenShopCipher={HasTokenShopCipher} tokenShopId={TokenShopId} operation={Operation}",
+            !string.IsNullOrWhiteSpace(tokenData.ShopCipher),
+            tokenData.ShopId,
+            "oauth_callback");
+        return ResolvedTikTokShopShop.CreateIncomplete(
+            tokenData.ShopId,
+            tokenData.ShopCipher,
+            tokenData.SellerName,
+            tokenData.SellerBaseRegion);
+    }
+
+    private static bool TryCreateResolvedShop(
+        string? shopId,
+        string? shopCipher,
+        string? displayName,
+        string? region,
+        out ResolvedTikTokShopShop resolvedShop)
+    {
+        if (!IsUsableShop(shopId, shopCipher))
+        {
+            resolvedShop = default!;
+            return false;
+        }
+
+        resolvedShop = new ResolvedTikTokShopShop(
+            shopId!.Trim(),
+            shopCipher!.Trim(),
+            displayName?.Trim(),
+            region?.Trim(),
+            true);
+        return true;
+    }
+
+    private static bool IsUsableShop(string? shopId, string? shopCipher)
+        => TryParseSellerId(shopId) > 0 && !string.IsNullOrWhiteSpace(shopCipher);
+
+    private static string? NormalizeNullable(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string BuildDisplayName(string? sellerName, string? region, string? shopCipher)
+    {
+        sellerName = sellerName?.Trim();
+        region = region?.Trim().ToUpperInvariant();
 
         if (!string.IsNullOrWhiteSpace(sellerName) && !string.IsNullOrWhiteSpace(region))
         {
@@ -356,9 +548,9 @@ public sealed class TikTokShopOAuthService
             return sellerName;
         }
 
-        if (!string.IsNullOrWhiteSpace(tokenData.ShopCipher))
+        if (!string.IsNullOrWhiteSpace(shopCipher))
         {
-            return tokenData.ShopCipher!;
+            return shopCipher!;
         }
 
         return "TikTok Shop";
@@ -368,6 +560,9 @@ public sealed class TikTokShopOAuthService
     {
         return long.TryParse(rawShopId, out var parsed) ? parsed : 0L;
     }
+
+    private static bool IsAuthRefreshFailure(HttpStatusCode? statusCode)
+        => statusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
 
     private static DateTimeOffset ResolveExpiration(long? absoluteEpochSeconds, long? fallbackSeconds)
     {
@@ -398,6 +593,27 @@ public sealed class TikTokShopOAuthService
                normalized.StartsWith("<", StringComparison.OrdinalIgnoreCase) ||
                normalized.EndsWith(">", StringComparison.OrdinalIgnoreCase);
     }
+
+    private sealed record ResolvedTikTokShopShop(
+        string? ShopId,
+        string? ShopCipher,
+        string? DisplayName,
+        string? Region,
+        bool IsComplete,
+        bool UsedExistingMetadata = false)
+    {
+        public static ResolvedTikTokShopShop CreateIncomplete(
+            string? shopId,
+            string? shopCipher,
+            string? displayName,
+            string? region)
+            => new(
+                NormalizeNullable(shopId),
+                NormalizeNullable(shopCipher),
+                NormalizeNullable(displayName),
+                NormalizeNullable(region),
+                false);
+    }
 }
 
 public sealed class TikTokShopStatusResult
@@ -409,4 +625,6 @@ public sealed class TikTokShopStatusResult
     public DateTimeOffset? TokenExpiresAt { get; set; }
     public int OrdersCount { get; set; }
     public int MappingsCount { get; set; }
+    public bool RequiresReconnect { get; set; }
+    public string? ConnectionWarning { get; set; }
 }

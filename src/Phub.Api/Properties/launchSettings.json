@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "Sabr.Api": {
+    "Phub.Api": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,

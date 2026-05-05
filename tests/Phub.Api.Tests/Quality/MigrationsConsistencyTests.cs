@@ -52,8 +52,7 @@ public sealed class MigrationsConsistencyTests
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current != null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "PhubHub.sln")) ||
-                File.Exists(Path.Combine(current.FullName, "SabrHub.sln")))
+            if (File.Exists(Path.Combine(current.FullName, "PhubHub.sln")))
             {
                 return current.FullName;
             }
@@ -61,6 +60,6 @@ public sealed class MigrationsConsistencyTests
             current = current.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate repository root containing SabrHub.sln.");
+        throw new DirectoryNotFoundException("Could not locate repository root containing PhubHub.sln.");
     }
 }

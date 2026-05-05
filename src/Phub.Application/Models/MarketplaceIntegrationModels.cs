@@ -79,6 +79,8 @@ public sealed class AdminFulfillmentOrderResult
     public bool HasLabel { get; set; }
     public int TotalItems { get; set; }
     public DateTimeOffset SabrPaymentConfirmedAt { get; set; }
+    public List<MarketplaceShipmentResult> Shipments { get; set; } = new();
+    public MarketplaceInternalFulfillmentSummaryResult? InternalFulfillmentSummary { get; set; }
 }
 
 public static class MarketplaceMappingStates
@@ -260,8 +262,100 @@ public sealed class MarketplaceOrderListItemResult
     public bool HasUnmappedItems { get; set; }
     public int TotalItems { get; set; }
     public int ReservedItems { get; set; }
+    public bool HasLabel { get; set; }
+    public int ShipmentsCount { get; set; }
+    public string? TrackingNumber { get; set; }
+    public string? TrackingUrl { get; set; }
+    public string? ShippingProvider { get; set; }
+    public MarketplaceInternalFulfillmentSummaryResult? InternalFulfillmentSummary { get; set; }
     public string? RiskFlagsJson { get; set; }
     public DateTimeOffset ImportedAt { get; set; }
+}
+
+public sealed class MarketplaceOrderDetailResult
+{
+    public Guid Id { get; set; }
+    public MarketplaceProvider Provider { get; set; }
+    public string SellerId { get; set; } = string.Empty;
+    public string MlOrderId { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public DateTimeOffset? PaidAt { get; set; }
+    public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
+    public string? ShipmentId { get; set; }
+    public string? ShippingMode { get; set; }
+    public string? LogisticType { get; set; }
+    public DateTimeOffset? ShipByDeadlineAt { get; set; }
+    public DateTimeOffset ImportedAt { get; set; }
+    public bool CanCancel { get; set; }
+    public bool CanRefund { get; set; }
+    public List<MarketplaceOrderItemDetailResult> Items { get; set; } = new();
+    public List<MarketplaceShipmentResult> Shipments { get; set; } = new();
+    public MarketplaceInternalFulfillmentSummaryResult? InternalFulfillmentSummary { get; set; }
+}
+
+public sealed class MarketplaceOrderItemDetailResult
+{
+    public Guid Id { get; set; }
+    public string MlItemId { get; set; } = string.Empty;
+    public string? MlVariationId { get; set; }
+    public string? SabrVariantSku { get; set; }
+    public string? ProductName { get; set; }
+    public int Quantity { get; set; }
+    public string MappingState { get; set; } = string.Empty;
+}
+
+public sealed class MarketplaceShipmentResult
+{
+    public string ShipmentId { get; set; } = string.Empty;
+    public string? Status { get; set; }
+    public string? Substatus { get; set; }
+    public string? ShippingMode { get; set; }
+    public string? LogisticType { get; set; }
+    public string? TrackingNumber { get; set; }
+    public string? TrackingMethod { get; set; }
+    public string? TrackingUrl { get; set; }
+    public string? ShippingProvider { get; set; }
+    public DateTimeOffset? ShippedAt { get; set; }
+    public DateTimeOffset? ShipByDeadlineAt { get; set; }
+    public bool HasLabel { get; set; }
+    public MarketplaceShipmentMilestonesResult Milestones { get; set; } = new();
+}
+
+public sealed class MarketplaceShipmentMilestonesResult
+{
+    public DateTimeOffset? ProcessingStartedAt { get; set; }
+    public DateTimeOffset? LabelPrintedAt { get; set; }
+    public DateTimeOffset? SeparatedAt { get; set; }
+    public DateTimeOffset? DispatchedAt { get; set; }
+}
+
+public sealed class MarketplaceInternalFulfillmentSummaryResult
+{
+    public string Stage { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public MarketplaceShipmentMilestonesResult Milestones { get; set; } = new();
+}
+
+public sealed class MarketplaceShipmentLabelListItemResult
+{
+    public string ShipmentId { get; set; } = string.Empty;
+    public bool HasLabel { get; set; }
+    public string? ShippingProvider { get; set; }
+    public string? TrackingNumber { get; set; }
+    public string? Status { get; set; }
+}
+
+public sealed class MarketplaceShipmentMilestoneAdvanceRequest
+{
+    public string Milestone { get; set; } = string.Empty;
+}
+
+public static class MarketplaceShipmentMilestones
+{
+    public const string ProcessingStarted = "processing_started";
+    public const string LabelPrinted = "label_printed";
+    public const string Separated = "separated";
+    public const string Dispatched = "dispatched";
 }
 
 public sealed class MarketplaceMarkPaidResult
@@ -334,6 +428,10 @@ public static class MarketplaceEventTopics
     public const string AuditOrderRefunded      = "audit.order.refunded";
     public const string AuditShipmentShipped    = "audit.shipment.shipped";
     public const string AuditLabelGenerated     = "audit.label.generated";
+    public const string AuditFulfillmentProcessingStarted = "audit.fulfillment.processing_started";
+    public const string AuditFulfillmentLabelPrinted      = "audit.fulfillment.label_printed";
+    public const string AuditFulfillmentSeparated         = "audit.fulfillment.separated";
+    public const string AuditFulfillmentDispatched        = "audit.fulfillment.dispatched";
 }
 
 public sealed class MercadoLivreWebhookPayload

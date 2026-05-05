@@ -51,7 +51,7 @@ jobs:
       - name: Fly deploy
         run: |
           flyctl deploy \
-            --app "sabr-api-dev" \
+            --app "${{ github.ref_name == 'main' && 'sabr-api-prod' || 'sabr-api-dev' }}" \
             --remote-only \
             --wait-timeout 300
         env:

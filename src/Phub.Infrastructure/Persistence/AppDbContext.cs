@@ -579,7 +579,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
         // Demais entidades: precisam de sigla mapeada.
         if (!ProtheusTableMap.TryGetPrefix(entity, out var prefix) || string.IsNullOrWhiteSpace(prefix))
         {
-            throw new InvalidOperationException($"Tabela Protheus nÃ£o definida para {entity.GetType().Name}. Cadastre a sigla antes de salvar.");
+            throw new InvalidOperationException($"Tabela Protheus nao definida para {entity.GetType().Name}. Cadastre a sigla antes de salvar.");
         }
 
         var requiredPrefix = $"{prefix}_";

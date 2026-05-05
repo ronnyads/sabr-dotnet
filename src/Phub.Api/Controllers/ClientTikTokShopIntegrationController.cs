@@ -120,6 +120,29 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
                 return TopLevelRedirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "oauth_error")));
             }
 
+            try
+            {
+                var syncResult = await _syncService.SyncOrdersAsync(payload.TenantId, payload.ClientId, cancellationToken);
+                if (!syncResult.Succeeded)
+                {
+                    _logger.LogWarning(
+                        "TikTok Shop post-connect sync finished with validation issues. tenantId={TenantId} clientId={ClientId} errors={Errors} traceId={TraceId}",
+                        payload.TenantId,
+                        payload.ClientId,
+                        string.Join("; ", syncResult.Errors.Select(e => e.Message)),
+                        HttpContext.TraceIdentifier);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "TikTok Shop post-connect sync failed. tenantId={TenantId} clientId={ClientId} traceId={TraceId}",
+                    payload.TenantId,
+                    payload.ClientId,
+                    HttpContext.TraceIdentifier);
+            }
+
             return TopLevelRedirect(BuildClientRedirectTarget(AppendQuery(payload.ReturnUrl, "tiktok", "connected")));
         }
         catch (Exception ex)
@@ -155,7 +178,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         var result = await _oauthService.ResetAsync(tenantId!, clientId, cancellationToken);
         if (!result.Succeeded)
         {
-            return MapValidationError(result.Errors);
+            return MapValidationError(result.ErrorCode, result.Errors);
         }
 
         return NoContent();
@@ -172,7 +195,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         var result = await _oauthService.DisconnectAsync(tenantId!, clientId, cancellationToken);
         if (!result.Succeeded)
         {
-            return MapValidationError(result.Errors);
+            return MapValidationError(result.ErrorCode, result.Errors);
         }
 
         return NoContent();
@@ -191,7 +214,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
             var result = await _syncService.SyncOrdersAsync(tenantId!, clientId, cancellationToken);
             if (!result.Succeeded)
             {
-                return MapValidationError(result.Errors);
+                return MapValidationError(result.ErrorCode, result.Errors);
             }
 
             return Ok(result.Data);
@@ -231,7 +254,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         var result = await _mappingService.CreateMappingAsync(tenantId!, clientId, request, cancellationToken);
         if (!result.Succeeded)
         {
-            return MapValidationError(result.Errors);
+            return MapValidationError(result.ErrorCode, result.Errors);
         }
 
         return StatusCode(StatusCodes.Status201Created, result.Data);
@@ -248,7 +271,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         var result = await _mappingService.DeleteMappingAsync(tenantId!, clientId, id, cancellationToken);
         if (!result.Succeeded)
         {
-            return MapValidationError(result.Errors);
+            return MapValidationError(result.ErrorCode, result.Errors);
         }
 
         return NoContent();
@@ -267,7 +290,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         var result = await _publishService.ValidatePublishAsync(tenantId!, clientId, request, cancellationToken);
         if (!result.Succeeded)
         {
-            return MapValidationError(result.Errors);
+            return MapValidationError(result.ErrorCode, result.Errors);
         }
 
         return Ok(result.Data);
@@ -288,7 +311,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
             var result = await _publishService.PublishAsync(tenantId!, clientId, request, cancellationToken);
             if (!result.Succeeded)
             {
-                return MapValidationError(result.Errors);
+                return MapValidationError(result.ErrorCode, result.Errors);
             }
 
             return Ok(result.Data);
@@ -328,7 +351,7 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
             var result = await _publishService.GetCategoriesAsync(tenantId!, clientId, cancellationToken);
             if (!result.Succeeded)
             {
-                return MapValidationError(result.Errors);
+                return MapValidationError(result.ErrorCode, result.Errors);
             }
 
             return Ok(result.Data);
@@ -398,8 +421,38 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
         return true;
     }
 
-    private IActionResult MapValidationError(IReadOnlyCollection<ValidationError> errors)
+    private IActionResult MapValidationError(string? errorCode, IReadOnlyCollection<ValidationError> errors)
     {
+        var resolvedCode = string.IsNullOrWhiteSpace(errorCode)
+            ? ServiceErrorCodes.ValidationError
+            : errorCode;
+        var firstMessage = errors.FirstOrDefault()?.Message;
+
+        if (string.Equals(resolvedCode, ServiceErrorCodes.TikTokShopNotConnected, StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound(CreateApiError(
+                resolvedCode,
+                string.IsNullOrWhiteSpace(firstMessage) ? "TikTok Shop connection not found" : firstMessage,
+                errors));
+        }
+
+        if (string.Equals(resolvedCode, ServiceErrorCodes.TikTokShopReconnectRequired, StringComparison.OrdinalIgnoreCase))
+        {
+            return Conflict(CreateApiError(
+                resolvedCode,
+                string.IsNullOrWhiteSpace(firstMessage) ? "TikTok Shop reconnection required" : firstMessage,
+                errors));
+        }
+
+        if (string.Equals(resolvedCode, ServiceErrorCodes.TikTokShopUpstreamError, StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(StatusCodes.Status502BadGateway,
+                CreateApiError(
+                    resolvedCode,
+                    string.IsNullOrWhiteSpace(firstMessage) ? "TikTok Shop upstream request failed" : firstMessage,
+                    errors));
+        }
+
         if (errors.Count == 0)
         {
             return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid request"));

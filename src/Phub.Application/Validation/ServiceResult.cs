@@ -71,5 +71,7 @@ public static class ServiceErrorCodes
     public const string ImageLimitExceeded = "IMAGE_LIMIT_EXCEEDED";
     public const string ProductMissingCatalogLinks = "PRODUCT_MISSING_CATALOG_LINKS";
     public const string MlAuthInvalid      = "ML_AUTH_INVALID";
+    public const string TikTokShopNotConnected = "TIKTOK_SHOP_NOT_CONNECTED";
+    public const string TikTokShopReconnectRequired = "TIKTOK_SHOP_RECONNECT_REQUIRED";
+    public const string TikTokShopUpstreamError = "TIKTOK_SHOP_UPSTREAM_ERROR";
 }
-

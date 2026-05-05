@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -415,25 +416,116 @@ public sealed class TikTokShopPublishService
         Guid clientId,
         CancellationToken cancellationToken = default)
     {
+        var connection = await _dbContext.TenantMarketplaceConnections
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                c => c.TenantId == tenantId && c.ClientId == clientId && c.Provider == MarketplaceProvider.TikTokShop,
+                cancellationToken);
+
+        if (connection == null)
+        {
+            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(
+                ServiceErrorCodes.TikTokShopNotConnected,
+                "connection",
+                "TikTok Shop nao esta conectado");
+        }
+
+        if (string.IsNullOrWhiteSpace(connection.ShopCipher) || connection.SellerId <= 0)
+        {
+            _logger.LogWarning(
+                "TikTok categories requested with incomplete connection. tenantId={TenantId} clientId={ClientId} hasShopCipher={HasShopCipher} sellerId={SellerId} operation={Operation}",
+                tenantId,
+                clientId,
+                !string.IsNullOrWhiteSpace(connection.ShopCipher),
+                connection.SellerId,
+                "get_categories");
+            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(
+                ServiceErrorCodes.TikTokShopReconnectRequired,
+                "connection",
+                "Conexao TikTok Shop incompleta. Reconecte sua conta.");
+        }
+
         var tokenResult = await _oauthService.GetValidAccessTokenAsync(tenantId, clientId, cancellationToken);
         if (!tokenResult.Succeeded || tokenResult.Data == null)
         {
-            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(tokenResult.Errors);
+            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(
+                tokenResult.ErrorCode ?? ServiceErrorCodes.ValidationError,
+                tokenResult.Errors);
         }
 
-        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(
-            c => c.TenantId == tenantId && c.ClientId == clientId && c.Provider == MarketplaceProvider.TikTokShop,
-            cancellationToken);
-
-        var response = await _apiClient.GetCategoriesAsync(
-            tokenResult.Data, _options.AppKey, _options.AppSecret, connection?.ShopCipher, cancellationToken);
+        TikTokShopApiResponse<TikTokShopCategoryData> response;
+        try
+        {
+            response = await _apiClient.GetCategoriesAsync(
+                tokenResult.Data,
+                _options.AppKey,
+                _options.AppSecret,
+                connection.ShopCipher,
+                cancellationToken);
+        }
+        catch (TikTokShopApiException ex) when (ShouldReconnect(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "TikTok categories require reconnect. tenantId={TenantId} clientId={ClientId} statusCode={StatusCode} requestId={RequestId} apiCode={ApiCode} apiMessage={ApiMessage} hasShopCipher={HasShopCipher} operation={Operation}",
+                tenantId,
+                clientId,
+                ex.StatusCode,
+                ex.RequestId,
+                ex.ApiCode,
+                ex.ApiMessage,
+                !string.IsNullOrWhiteSpace(connection.ShopCipher),
+                "get_categories");
+            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(
+                ServiceErrorCodes.TikTokShopReconnectRequired,
+                "connection",
+                "Sessao TikTok Shop invalida ou loja nao autorizada. Reconecte sua conta.");
+        }
+        catch (TikTokShopApiException ex)
+        {
+            _logger.LogError(
+                ex,
+                "TikTok categories upstream failure. tenantId={TenantId} clientId={ClientId} statusCode={StatusCode} requestId={RequestId} apiCode={ApiCode} apiMessage={ApiMessage} hasShopCipher={HasShopCipher} operation={Operation}",
+                tenantId,
+                clientId,
+                ex.StatusCode,
+                ex.RequestId,
+                ex.ApiCode,
+                ex.ApiMessage,
+                !string.IsNullOrWhiteSpace(connection.ShopCipher),
+                "get_categories");
+            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "categories",
+                "TikTok Shop indisponivel ao carregar categorias. Tente novamente.");
+        }
 
         if (!response.IsSuccess || response.Data == null)
         {
-            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(new[]
+            _logger.LogWarning(
+                "TikTok categories returned unsuccessful envelope. tenantId={TenantId} clientId={ClientId} requestId={RequestId} apiCode={ApiCode} hasShopCipher={HasShopCipher} operation={Operation} message={Message}",
+                tenantId,
+                clientId,
+                response.RequestId,
+                response.Code,
+                !string.IsNullOrWhiteSpace(connection.ShopCipher),
+                "get_categories",
+                response.Message);
+
+            if (ShouldReconnect(response.Message))
             {
-                new ValidationError("categories", response.Message)
-            });
+                return ServiceResult<List<TikTokShopCategoryItem>>.Failure(
+                    ServiceErrorCodes.TikTokShopReconnectRequired,
+                    "connection",
+                    "Sessao TikTok Shop invalida ou loja nao autorizada. Reconecte sua conta.");
+            }
+
+            return ServiceResult<List<TikTokShopCategoryItem>>.Failure(
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "categories",
+                string.IsNullOrWhiteSpace(response.Message)
+                    ? "TikTok Shop indisponivel ao carregar categorias. Tente novamente."
+                    : response.Message);
         }
 
         var items = response.Data.CategoryList
@@ -448,6 +540,33 @@ public sealed class TikTokShopPublishService
             .ToList();
 
         return ServiceResult<List<TikTokShopCategoryItem>>.Success(items);
+    }
+
+    private static bool ShouldReconnect(TikTokShopApiException exception)
+    {
+        if (exception.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            return true;
+        }
+
+        return exception.StatusCode == HttpStatusCode.BadRequest &&
+               ShouldReconnect(exception.ApiMessage ?? exception.RawBody);
+    }
+
+    private static bool ShouldReconnect(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        var normalized = message.Trim().ToLowerInvariant();
+        return normalized.Contains("shop") ||
+               normalized.Contains("cipher") ||
+               normalized.Contains("token") ||
+               normalized.Contains("auth") ||
+               normalized.Contains("authorize") ||
+               normalized.Contains("permission");
     }
 
     public async Task<ServiceResult<List<TikTokShopListingResult>>> ListListingsAsync(

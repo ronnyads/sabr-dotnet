@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Application.Services;
@@ -16,31 +15,27 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
 {
     private readonly ILogger<ClientMarketplaceOrdersController> _logger;
     private readonly ITenantProvider _tenantProvider;
-    private readonly MercadoLivreIntegrationService _integrationService;
+    private readonly OrderFulfillmentService _orderFulfillmentService;
     private readonly MarketplaceOrderPaymentService _paymentService;
     private readonly OrderCancellationService _cancellationService;
-    private readonly IAppDbContext _dbContext;
 
     public ClientMarketplaceOrdersController(
         ILogger<ClientMarketplaceOrdersController> logger,
         ITenantProvider tenantProvider,
-        MercadoLivreIntegrationService integrationService,
+        OrderFulfillmentService orderFulfillmentService,
         MarketplaceOrderPaymentService paymentService,
-        OrderCancellationService cancellationService,
-        IAppDbContext dbContext)
+        OrderCancellationService cancellationService)
     {
         _logger = logger;
         _tenantProvider = tenantProvider;
-        _integrationService = integrationService;
+        _orderFulfillmentService = orderFulfillmentService;
         _paymentService = paymentService;
         _cancellationService = cancellationService;
-        _dbContext = dbContext;
     }
 
-    // GET /api/v1/client/orders/marketplace
     [HttpGet("marketplace")]
     public async Task<IActionResult> ListMarketplaceOrders(
-        [FromQuery] string provider = "MercadoLivre",
+        [FromQuery] string? provider = null,
         [FromQuery] string? status = null,
         [FromQuery] string? logisticType = null,
         [FromQuery] int skip = 0,
@@ -50,12 +45,18 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
             return error!;
 
-        if (!Enum.TryParse<MarketplaceProvider>(provider, ignoreCase: true, out var parsedProvider))
-            return BadRequest(CreateApiError("PROVIDER_INVALID", "Invalid marketplace provider"));
+        MarketplaceProvider? parsedProvider = null;
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            if (!Enum.TryParse<MarketplaceProvider>(provider, ignoreCase: true, out var providerValue))
+                return BadRequest(CreateApiError("PROVIDER_INVALID", "Invalid marketplace provider"));
+
+            parsedProvider = providerValue;
+        }
 
         try
         {
-            var result = await _integrationService.ListOrdersAsync(
+            var result = await _orderFulfillmentService.ListClientOrdersAsync(
                 tenantId!,
                 clientId,
                 parsedProvider,
@@ -74,11 +75,10 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
                 parsedProvider, tenantId, clientId, HttpContext.TraceIdentifier);
             return StatusCode(
                 StatusCodes.Status500InternalServerError,
-                CreateApiError("ML_ORDERS_INTERNAL_ERROR", "Falha interna ao carregar pedidos de marketplace"));
+                CreateApiError("MARKETPLACE_ORDERS_INTERNAL_ERROR", "Falha interna ao carregar pedidos de marketplace"));
         }
     }
 
-    // GET /api/v1/client/orders/marketplace/{orderId}
     [HttpGet("marketplace/{orderId:guid}")]
     public async Task<IActionResult> GetMarketplaceOrder(
         [FromRoute] Guid orderId,
@@ -87,56 +87,44 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
             return error!;
 
-        var order = await _dbContext.MarketplaceOrders
-            .AsNoTracking()
-            .Include(o => o.Items)
-            .FirstOrDefaultAsync(o => o.Id == orderId
-                && o.TenantId == tenantId
-                && o.ClientId == clientId, cancellationToken);
+        var result = await _orderFulfillmentService.GetClientOrderAsync(orderId, tenantId!, clientId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
 
-        if (order == null)
-            return NotFound(CreateApiError("ORDER_NOT_FOUND", "Pedido não encontrado"));
-
-        var variantSkus = order.Items
-            .Where(i => !string.IsNullOrWhiteSpace(i.SabrVariantSku))
-            .Select(i => i.SabrVariantSku!)
-            .Distinct().ToList();
-        var products = await _dbContext.ProductVariants
-            .AsNoTracking()
-            .Where(v => variantSkus.Contains(v.VariantSku))
-            .Select(v => new { v.VariantSku, v.Name })
-            .ToDictionaryAsync(v => v.VariantSku, v => v.Name, cancellationToken);
-
-        return Ok(new
-        {
-            order.Id,
-            order.Provider,
-            SellerId = order.SellerId.ToString(),
-            order.MlOrderId,
-            order.Status,
-            order.PaidAt,
-            order.SabrPaymentConfirmedAt,
-            order.ShipmentId,
-            order.ShippingMode,
-            order.LogisticType,
-            order.ShipByDeadlineAt,
-            order.ImportedAt,
-            CanCancel = MarketplaceOrderStatuses.CancellableStatuses.Contains(order.Status),
-            CanRefund = MarketplaceOrderStatuses.RefundableStatuses.Contains(order.Status),
-            Items = order.Items.Select(i => new
-            {
-                i.Id,
-                i.MlItemId,
-                i.MlVariationId,
-                i.SabrVariantSku,
-                ProductName = i.SabrVariantSku != null ? products.GetValueOrDefault(i.SabrVariantSku) : null,
-                i.Quantity,
-                i.MappingState
-            })
-        });
+        return Ok(result.Data);
     }
 
-    // POST /api/v1/client/orders/{orderId}/mark-paid
+    [HttpGet("marketplace/{orderId:guid}/labels")]
+    public async Task<IActionResult> ListOrderLabels(
+        [FromRoute] Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+            return error!;
+
+        var result = await _orderFulfillmentService.ListLabelsAsync(orderId, tenantId, clientId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return Ok(result.Data);
+    }
+
+    [HttpGet("marketplace/{orderId:guid}/labels/{shipmentId}")]
+    public async Task<IActionResult> DownloadOrderLabel(
+        [FromRoute] Guid orderId,
+        [FromRoute] string shipmentId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+            return error!;
+
+        var result = await _orderFulfillmentService.GetLabelAsync(orderId, tenantId, clientId, shipmentId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return File(result.Data.Content, result.Data.ContentType, result.Data.FileName);
+    }
+
     [HttpPost("{orderId:guid}/mark-paid")]
     public async Task<IActionResult> MarkPaid(
         [FromRoute] Guid orderId,
@@ -167,7 +155,6 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         return Ok(result.Data.Result);
     }
 
-    // POST /api/v1/client/orders/marketplace/{orderId}/cancel
     [HttpPost("marketplace/{orderId:guid}/cancel")]
     public async Task<IActionResult> CancelOrder(
         [FromRoute] Guid orderId,
@@ -191,7 +178,6 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         return Ok(result.Data);
     }
 
-    // POST /api/v1/client/orders/marketplace/{orderId}/refund-request
     [HttpPost("marketplace/{orderId:guid}/refund-request")]
     public async Task<IActionResult> RequestRefund(
         [FromRoute] Guid orderId,
@@ -247,8 +233,8 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         if (errors.Count == 0)
             return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid request"));
 
-        if (errors.Any(e => e.Message.Contains("NOT_FOUND")))
-            return NotFound(CreateApiError("ORDER_NOT_FOUND", "Pedido não encontrado"));
+        if (errors.Any(e => e.Message.Contains("NOT_FOUND") || e.Message.Contains("NOT_AVAILABLE")))
+            return NotFound(CreateApiError("ORDER_NOT_FOUND", errors.First().Message));
 
         if (errors.Any(e => e.Message.Contains("NOT_CANCELLABLE") || e.Message.Contains("NOT_REFUNDABLE")))
             return UnprocessableEntity(CreateApiError("INVALID_TRANSITION", errors.First().Message));

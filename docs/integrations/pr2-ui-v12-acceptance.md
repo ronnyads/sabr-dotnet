@@ -15,9 +15,9 @@ GO final somente com Fase A `PASS` + Fase B `PASS`.
 
 ### 2.1 Build/test
 
-1. `dotnet test SabrHub.sln -v minimal` -> `PASS`
+1. `dotnet test PhubHub.sln -v minimal` -> `PASS`
    - Resultado: `Aprovado: 118, Falha: 0`
-2. `dotnet test tests/Sabr.Api.Tests/Sabr.Api.Tests.csproj --filter FullyQualifiedName~ListingDraftHttpTests -v minimal` -> `PASS`
+2. `dotnet test tests/Phub.Api.Tests/Phub.Api.Tests.csproj --filter FullyQualifiedName~ListingDraftHttpTests -v minimal` -> `PASS`
    - Resultado: `Aprovado: 25, Falha: 0`
 3. `npm.cmd run build:client` -> `PASS`
 4. `npm.cmd run build:admin` -> `PASS`
@@ -122,9 +122,8 @@ Status atual: `PENDENTE`
 ## 5) Comandos executados (raw)
 
 ```bash
-dotnet test SabrHub.sln -v minimal
-dotnet test tests/Sabr.Api.Tests/Sabr.Api.Tests.csproj --filter FullyQualifiedName~ListingDraftHttpTests -v minimal
+dotnet test PhubHub.sln -v minimal
+dotnet test tests/Phub.Api.Tests/Phub.Api.Tests.csproj --filter FullyQualifiedName~ListingDraftHttpTests -v minimal
 npm.cmd run build:client
 npm.cmd run build:admin
 ```
-

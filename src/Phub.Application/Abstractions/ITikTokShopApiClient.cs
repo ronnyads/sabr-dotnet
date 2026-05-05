@@ -34,7 +34,41 @@ public interface ITikTokShopApiClient
         string? shopCipher = null,
         CancellationToken cancellationToken = default);
 
+    Task<TikTokShopApiResponse<TikTokShopPackageSearchData>> SearchPackagesAsync(
+        string accessToken,
+        string appKey,
+        string appSecret,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        string? shopCipher = null,
+        string? cursor = null,
+        CancellationToken cancellationToken = default);
+
+    Task<TikTokShopApiResponse<TikTokShopPackageDetail>> GetPackageDetailAsync(
+        string accessToken,
+        string appKey,
+        string appSecret,
+        string packageId,
+        string? shopCipher = null,
+        CancellationToken cancellationToken = default);
+
+    Task<TikTokShopApiResponse<TikTokShopShippingDocumentData>> GetPackageShippingDocumentAsync(
+        string accessToken,
+        string appKey,
+        string appSecret,
+        string packageId,
+        string? shopCipher = null,
+        int documentType = 1,
+        int documentSize = 0,
+        CancellationToken cancellationToken = default);
+
     Task PingAsync(
+        string accessToken,
+        string appKey,
+        string appSecret,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<TikTokShopAuthorizedShop>> GetAuthorizedShopsAsync(
         string accessToken,
         string appKey,
         string appSecret,
@@ -121,6 +155,19 @@ public sealed class TikTokShopTokenPayload
     public long? ExpiresIn { get; set; }
 }
 
+public sealed class TikTokShopAuthorizedShop
+{
+    public string ShopId { get; set; } = string.Empty;
+
+    public string ShopCipher { get; set; } = string.Empty;
+
+    public string? ShopName { get; set; }
+
+    public string? SellerName { get; set; }
+
+    public string? SellerBaseRegion { get; set; }
+}
+
 // Generic API response wrapper
 public sealed class TikTokShopApiResponse<T>
 {
@@ -157,6 +204,18 @@ public sealed class TikTokShopOrderSummary
     [JsonPropertyName("order_id")]
     public string OrderId { get; set; } = string.Empty;
 
+    [JsonPropertyName("id")]
+    public string? AlternateId
+    {
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                OrderId = value;
+            }
+        }
+    }
+
     [JsonPropertyName("order_status")]
     public string OrderStatus { get; set; } = string.Empty;
 
@@ -178,6 +237,18 @@ public sealed class TikTokShopOrderDetail
 {
     [JsonPropertyName("order_id")]
     public string OrderId { get; set; } = string.Empty;
+
+    [JsonPropertyName("id")]
+    public string? AlternateId
+    {
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                OrderId = value;
+            }
+        }
+    }
 
     [JsonPropertyName("order_status")]
     public string OrderStatus { get; set; } = string.Empty;
@@ -224,6 +295,9 @@ public sealed class TikTokShopOrderLineItem
     [JsonPropertyName("sku_name")]
     public string? SkuName { get; set; }
 
+    [JsonPropertyName("seller_sku")]
+    public string? SellerSku { get; set; }
+
     [JsonPropertyName("quantity")]
     public int Quantity { get; set; }
 
@@ -250,6 +324,108 @@ public sealed class TikTokShopOrderPayment
 
     [JsonPropertyName("currency")]
     public string? Currency { get; set; }
+}
+
+public sealed class TikTokShopPackageSearchData
+{
+    [JsonPropertyName("more")]
+    public bool More { get; set; }
+
+    [JsonPropertyName("next_cursor")]
+    public string? NextCursor { get; set; }
+
+    [JsonPropertyName("total")]
+    public int Total { get; set; }
+
+    [JsonPropertyName("package_list")]
+    public List<TikTokShopPackageSummary> PackageList { get; set; } = [];
+}
+
+public sealed class TikTokShopPackageSummary
+{
+    [JsonPropertyName("package_id")]
+    public string PackageId { get; set; } = string.Empty;
+
+    [JsonPropertyName("package_status")]
+    public int PackageStatus { get; set; }
+
+    [JsonPropertyName("create_time")]
+    public long CreateTime { get; set; }
+
+    [JsonPropertyName("update_time")]
+    public long UpdateTime { get; set; }
+}
+
+public sealed class TikTokShopPackageDetail
+{
+    [JsonPropertyName("package_id")]
+    public string PackageId { get; set; } = string.Empty;
+
+    [JsonPropertyName("package_status")]
+    public int PackageStatus { get; set; }
+
+    [JsonPropertyName("package_freeze_status")]
+    public int PackageFreezeStatus { get; set; }
+
+    [JsonPropertyName("delivery_option")]
+    public int DeliveryOption { get; set; }
+
+    [JsonPropertyName("shipping_provider")]
+    public string? ShippingProvider { get; set; }
+
+    [JsonPropertyName("shipping_provider_id")]
+    public string? ShippingProviderId { get; set; }
+
+    [JsonPropertyName("tracking_number")]
+    public string? TrackingNumber { get; set; }
+
+    [JsonPropertyName("pick_up_type")]
+    public int PickUpType { get; set; }
+
+    [JsonPropertyName("pick_up_start_time")]
+    public long? PickUpStartTime { get; set; }
+
+    [JsonPropertyName("pick_up_end_time")]
+    public long? PickUpEndTime { get; set; }
+
+    [JsonPropertyName("create_time")]
+    public long CreateTime { get; set; }
+
+    [JsonPropertyName("update_time")]
+    public long UpdateTime { get; set; }
+
+    [JsonPropertyName("order_info_list")]
+    public List<TikTokShopPackageOrderInfo> OrderInfoList { get; set; } = [];
+}
+
+public sealed class TikTokShopPackageOrderInfo
+{
+    [JsonPropertyName("order_id")]
+    public string OrderId { get; set; } = string.Empty;
+
+    [JsonPropertyName("sku_list")]
+    public List<TikTokShopPackageSkuInfo> SkuList { get; set; } = [];
+}
+
+public sealed class TikTokShopPackageSkuInfo
+{
+    [JsonPropertyName("quantity")]
+    public string? Quantity { get; set; }
+
+    [JsonPropertyName("sku_id")]
+    public string? SkuId { get; set; }
+
+    [JsonPropertyName("sku_image")]
+    public string? SkuImage { get; set; }
+
+    [JsonPropertyName("sku_name")]
+    public string? SkuName { get; set; }
+}
+
+public sealed class TikTokShopShippingDocumentData
+{
+    [JsonPropertyName("doc_url")]
+    public string? DocUrl { get; set; }
 }
 
 public sealed class TikTokShopRecipientAddress
@@ -407,6 +583,18 @@ public sealed class TikTokShopCategoryData
 {
     [JsonPropertyName("category_list")]
     public List<TikTokShopCategory> CategoryList { get; set; } = [];
+
+    [JsonPropertyName("categories")]
+    public List<TikTokShopCategory>? Categories
+    {
+        set
+        {
+            if (value is { Count: > 0 })
+            {
+                CategoryList = value;
+            }
+        }
+    }
 }
 
 public sealed class TikTokShopCategory
