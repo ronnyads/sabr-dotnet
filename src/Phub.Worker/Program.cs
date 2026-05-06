@@ -7,6 +7,9 @@ using Phub.Application.Services;
 using Phub.Domain.Protheus;
 using Phub.Infrastructure.Integrations.Mabang;
 using Phub.Infrastructure.Integrations.MercadoLivre;
+using Phub.Infrastructure.Integrations.Shopify;
+using Phub.Infrastructure.Integrations.TikTokShop;
+using Phub.Infrastructure.Integrations.TinyErp;
 using Phub.Infrastructure.Persistence;
 using Phub.Infrastructure.Services;
 using Serilog;
@@ -39,6 +42,11 @@ try
 
     builder.Services.AddOptions<MercadoLivreOptions>()
         .Bind(builder.Configuration.GetSection(MercadoLivreOptions.SectionName))
+        .ValidateDataAnnotations()
+        .ValidateOnStart();
+
+    builder.Services.AddOptions<TikTokShopOptions>()
+        .Bind(builder.Configuration.GetSection(TikTokShopOptions.SectionName))
         .ValidateDataAnnotations()
         .ValidateOnStart();
 
@@ -88,6 +96,22 @@ try
         client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
     });
 
+    builder.Services.Configure<TinyErpOptions>(builder.Configuration.GetSection("TinyErp"));
+    builder.Services.AddHttpClient<ITinyErpApiClient, TinyErpApiClient>();
+
+    builder.Services.Configure<ShopifyOptions>(builder.Configuration.GetSection(ShopifyOptions.SectionName));
+    builder.Services.AddHttpClient<IShopifyApiClient, ShopifyApiClient>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
+
+    builder.Services.AddHttpClient<ITikTokShopApiClient, TikTokShopApiClient>((sp, client) =>
+    {
+        var options = sp.GetRequiredService<IOptions<TikTokShopOptions>>().Value;
+        client.BaseAddress = new Uri(options.ApiBaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
+
     // ── Application Services ──────────────────────────────────────────────────
     builder.Services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
     builder.Services.AddScoped<MercadoLivreSyncService>();
@@ -99,6 +123,7 @@ try
     builder.Services.AddScoped<MercadoLivreIntegrationService>();
     builder.Services.AddScoped<MarketplaceMabangDispatchService>();
     builder.Services.AddScoped<MarketplaceAuditLogService>();
+    builder.Services.AddScoped<MarketplaceOrderMappingService>();
     builder.Services.AddScoped<MarketplaceOrderNumberService>();
     builder.Services.AddScoped<MarketplaceOrderInventoryService>();
     builder.Services.AddScoped<MarketplaceOrderPaymentService>();
@@ -106,6 +131,11 @@ try
     builder.Services.AddScoped<StockAvailabilityService>();
     builder.Services.AddScoped<ProductVariantBackfillService>();
     builder.Services.AddScoped<MarketplaceCategoryResolver>();
+    builder.Services.AddScoped<ShopifyOAuthService>();
+    builder.Services.AddScoped<TikTokShopOAuthService>();
+    builder.Services.AddScoped<TikTokShopSyncService>();
+    builder.Services.AddScoped<TinyOAuthService>();
+    builder.Services.AddScoped<TinyIntegrationService>();
     builder.Services.AddScoped<IProtheusOutboxProcessor, MockProtheusOutboxProcessor>();
 
     // ── Workers ───────────────────────────────────────────────────────────────
