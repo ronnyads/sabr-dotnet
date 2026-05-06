@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -202,7 +203,38 @@ public sealed class TikTokShopOAuthService
         var mappingsCount = await _dbContext.TenantMarketplaceListingMaps.CountAsync(
             m => m.TenantId == tenantId && m.ClientId == clientId && m.Provider == MarketplaceProvider.TikTokShop,
             cancellationToken);
+        var ordersMissingItemsCount = await _dbContext.MarketplaceOrders.CountAsync(
+            o => o.TenantId == tenantId
+                 && o.ClientId == clientId
+                 && o.Provider == MarketplaceProvider.TikTokShop
+                 && !o.Items.Any(),
+            cancellationToken);
+        var latestSyncLog = await _dbContext.MarketplaceEventLogs
+            .AsNoTracking()
+            .Where(e => e.TenantId == tenantId
+                        && e.ClientId == clientId
+                        && e.Provider == MarketplaceProvider.TikTokShop
+                        && e.Topic == "sync_orders")
+            .OrderByDescending(e => e.UpdatedAt)
+            .ThenByDescending(e => e.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
         var requiresReconnect = string.IsNullOrWhiteSpace(connection.ShopCipher) || connection.SellerId <= 0;
+        var syncSnapshot = ReadSyncStatusSnapshot(latestSyncLog);
+
+        var syncHealth = requiresReconnect
+            ? "blocked"
+            : ordersMissingItemsCount > 0
+                ? "degraded"
+                : syncSnapshot?.SyncHealth ?? "healthy";
+        var syncBlockingReason = requiresReconnect
+            ? "connection_reconnect_required"
+            : ordersMissingItemsCount > 0
+                ? "no_imported_items"
+                : syncSnapshot?.BlockingReason;
+        var lastSyncErrorCode = syncSnapshot?.ErrorCode;
+        var lastSyncErrorMessage = ordersMissingItemsCount > 0
+            ? $"Existem {ordersMissingItemsCount} pedido(s) TikTok sem itens importados para mapear."
+            : syncSnapshot?.Message;
 
         return ServiceResult<TikTokShopStatusResult>.Success(new TikTokShopStatusResult
         {
@@ -214,6 +246,11 @@ public sealed class TikTokShopOAuthService
             OrdersCount = ordersCount,
             MappingsCount = mappingsCount,
             RequiresReconnect = requiresReconnect,
+            SyncHealth = syncHealth,
+            SyncBlockingReason = syncBlockingReason,
+            LastSyncErrorCode = lastSyncErrorCode,
+            LastSyncErrorMessage = lastSyncErrorMessage,
+            OrdersMissingItemsCount = ordersMissingItemsCount,
             ConnectionWarning = requiresReconnect
                 ? "A autorizacao foi concluida, mas o TikTok Shop nao retornou os dados completos da loja. Reconecte a conta para liberar categorias e publicacao."
                 : null
@@ -594,6 +631,44 @@ public sealed class TikTokShopOAuthService
                normalized.EndsWith(">", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static TikTokShopSyncStatusSnapshot? ReadSyncStatusSnapshot(MarketplaceEventLog? log)
+    {
+        if (log == null || string.IsNullOrWhiteSpace(log.PayloadJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(log.PayloadJson);
+            var root = document.RootElement;
+            return new TikTokShopSyncStatusSnapshot(
+                ReadString(root, "syncHealth"),
+                ReadString(root, "errorCode"),
+                ReadString(root, "blockingReason"),
+                ReadString(root, "message"));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.ToString(),
+            _ => null
+        };
+    }
+
     private sealed record ResolvedTikTokShopShop(
         string? ShopId,
         string? ShopCipher,
@@ -614,6 +689,12 @@ public sealed class TikTokShopOAuthService
                 NormalizeNullable(region),
                 false);
     }
+
+    private sealed record TikTokShopSyncStatusSnapshot(
+        string? SyncHealth,
+        string? ErrorCode,
+        string? BlockingReason,
+        string? Message);
 }
 
 public sealed class TikTokShopStatusResult
@@ -626,5 +707,10 @@ public sealed class TikTokShopStatusResult
     public int OrdersCount { get; set; }
     public int MappingsCount { get; set; }
     public bool RequiresReconnect { get; set; }
+    public string? SyncHealth { get; set; }
+    public string? SyncBlockingReason { get; set; }
+    public string? LastSyncErrorCode { get; set; }
+    public string? LastSyncErrorMessage { get; set; }
+    public int OrdersMissingItemsCount { get; set; }
     public string? ConnectionWarning { get; set; }
 }

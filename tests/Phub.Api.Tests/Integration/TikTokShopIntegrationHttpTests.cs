@@ -406,6 +406,55 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
     }
 
     [Fact]
+    public async Task GetStatus_WithBrokenSyncSnapshot_ExposesOperationalSyncFields()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-tts-status-sync";
+        const string tenantSlug = "ttsstatussync";
+        var clientId = Guid.NewGuid();
+        await SeedClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, shopCipher: "cipher-status-sync", sellerId: 1979655640);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.MarketplaceEventLogs.Add(new MarketplaceEventLog
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.TikTokShop,
+                SellerId = 1979655640,
+                Topic = "sync_orders",
+                ResourceId = "tiktokshop",
+                DedupeKey = $"sync_orders:{tenantId}:{clientId:D}:{MarketplaceProvider.TikTokShop}",
+                Status = MarketplaceEventStatuses.Failed,
+                LastError = "O TikTok Shop recusou o detalhe dos pedidos no endpoint legado.",
+                PayloadJson = """
+                    {
+                      "syncHealth": "blocked",
+                      "errorCode": "TIKTOK_SHOP_ORDER_DETAIL_V2_REQUIRED",
+                      "blockingReason": "detail_api_v2_required",
+                      "message": "O TikTok Shop recusou o detalhe dos pedidos no endpoint legado."
+                    }
+                    """
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.GetAsync("/api/v1/client/integrations/tiktokshop/status");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<TikTokShopStatusResult>();
+        Assert.NotNull(payload);
+        Assert.Equal("blocked", payload!.SyncHealth);
+        Assert.Equal("detail_api_v2_required", payload.SyncBlockingReason);
+        Assert.Equal("TIKTOK_SHOP_ORDER_DETAIL_V2_REQUIRED", payload.LastSyncErrorCode);
+        Assert.Contains("endpoint legado", payload.LastSyncErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task SyncNow_WhenConnectionHasMissingShopCipher_HydratesMetadata_AndReturns200()
     {
         await _factory.ResetDatabaseAsync();
@@ -516,6 +565,58 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
         var payload = await response.Content.ReadFromJsonAsync<ApiError>();
         Assert.NotNull(payload);
         Assert.Equal("TIKTOK_SHOP_RECONNECT_REQUIRED", payload!.Code);
+    }
+
+    [Fact]
+    public async Task SyncNow_WhenOrderDetailApiWasDeprecated_Returns409SemanticError_AndStatusShowsBlockedSync()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-tts-detail-v2";
+        const string tenantSlug = "ttsdetailv2";
+        var clientId = Guid.NewGuid();
+        await SeedClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, shopCipher: "cipher-detail-v2", sellerId: 1979655640);
+
+        _factory.FakeTikTokShopApiClient.SearchOrdersResponse = new TikTokShopApiResponse<TikTokShopOrderSearchData>
+        {
+            Code = 0,
+            Message = "ok",
+            Data = new TikTokShopOrderSearchData
+            {
+                Orders =
+                [
+                    new TikTokShopOrderSummary
+                    {
+                        OrderId = "tts-order-detail-v2",
+                        CreateTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    }
+                ]
+            }
+        };
+        _factory.FakeTikTokShopApiClient.GetOrderDetailException = new TikTokShopApiException(
+            HttpStatusCode.Gone,
+            "36009034",
+            "The V1 API is being deprecated right now, please follow this guide and upgrade to V2 as soon as possible",
+            "req-detail-v2",
+            "{\"code\":36009034}",
+            "get_order_detail");
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsync("/api/v1/client/integrations/tiktokshop/sync-now", JsonContent.Create(new { }));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<ApiError>();
+        Assert.NotNull(payload);
+        Assert.Equal("TIKTOK_SHOP_ORDER_DETAIL_V2_REQUIRED", payload!.Code);
+
+        var statusResponse = await client.GetAsync("/api/v1/client/integrations/tiktokshop/status");
+        Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+        var status = await statusResponse.Content.ReadFromJsonAsync<TikTokShopStatusResult>();
+        Assert.NotNull(status);
+        Assert.Equal("blocked", status!.SyncHealth);
+        Assert.Equal("detail_api_v2_required", status.SyncBlockingReason);
+        Assert.Equal("TIKTOK_SHOP_ORDER_DETAIL_V2_REQUIRED", status.LastSyncErrorCode);
     }
 
     [Fact]
@@ -990,6 +1091,66 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
         var item = Assert.Single(detailPayload.Items);
         Assert.Equal("SELLER-REPAIR", item.SabrVariantSku);
         Assert.Equal(MarketplaceMappingStates.MappedByExactSku, item.MappingState);
+    }
+
+    [Fact]
+    public async Task SyncNow_WhenSearchAlreadyReturnsLineItems_ImportsItemsWithoutCallingOrderDetail()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-tts-search-items";
+        const string tenantSlug = "ttssearchitems";
+        var clientId = Guid.NewGuid();
+        await SeedClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, shopCipher: "cipher-search-items", sellerId: 1979655640);
+        await SeedProductVariantAndAuthorizationAsync(tenantId, clientId, "BASE-SEARCH", "SELLER-SEARCH", "Produto Search");
+
+        _factory.FakeTikTokShopApiClient.SearchOrdersResponse = new TikTokShopApiResponse<TikTokShopOrderSearchData>
+        {
+            Code = 0,
+            Message = "ok",
+            Data = new TikTokShopOrderSearchData
+            {
+                Orders =
+                [
+                    new TikTokShopOrderSummary
+                    {
+                        OrderId = "tts-order-search-items",
+                        OrderStatus = "AWAITING_SHIPMENT",
+                        CreateTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                        UpdateTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                        ShopId = "1979655640",
+                        LineItems =
+                        [
+                            new TikTokShopOrderLineItem
+                            {
+                                Id = "line-search-1",
+                                ProductId = "product-search-1",
+                                SkuId = "sku-search-1",
+                                ProductName = "Produto Search",
+                                SkuName = "Padrao",
+                                SellerSku = "SELLER-SEARCH",
+                                Quantity = 2
+                            }
+                        ]
+                    }
+                ]
+            }
+        };
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsync("/api/v1/client/integrations/tiktokshop/sync-now", JsonContent.Create(new { }));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(0, _factory.FakeTikTokShopApiClient.GetOrderDetailCalls);
+
+        var listResponse = await client.GetAsync("/api/v1/client/orders/marketplace?provider=4");
+        Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
+        var listPayload = await listResponse.Content.ReadFromJsonAsync<PagedResult<MarketplaceOrderListItemResult>>();
+        Assert.NotNull(listPayload);
+        var listItem = Assert.Single(listPayload!.Items);
+        Assert.Equal(1, listItem.TotalItems);
+        Assert.DoesNotContain(MarketplaceOrderPaymentBlockers.NoImportedItems, listItem.PaymentBlockers);
     }
 
     [Fact]

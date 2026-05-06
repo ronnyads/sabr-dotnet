@@ -16,6 +16,14 @@ public sealed class TikTokShopSyncService
 {
     private const int SaveBatchSize = 25;
     private const int DetailBatchSize = 50;
+    private const string SyncOrdersTopic = "sync_orders";
+    private const string SyncStatusResourceId = "tiktokshop";
+    private const string SyncHealthHealthy = "healthy";
+    private const string SyncHealthDegraded = "degraded";
+    private const string SyncHealthBlocked = "blocked";
+    private const string SyncBlockingReasonDetailApiV2Required = "detail_api_v2_required";
+    private const string SyncBlockingReasonNoImportedItems = "no_imported_items";
+    private const string TikTokDeprecatedOrderDetailApiCode = "36009034";
 
     private readonly IAppDbContext _dbContext;
     private readonly ITikTokShopApiClient _apiClient;
@@ -71,6 +79,7 @@ public sealed class TikTokShopSyncService
 
         var accessToken = tokenResult.Data;
         var from = connection.LastSyncAt?.AddMinutes(-5) ?? DateTimeOffset.UtcNow.AddDays(-7);
+        from = await ExpandSyncWindowForBrokenOrdersAsync(tenantId, clientId, from, cancellationToken);
         var to = DateTimeOffset.UtcNow;
 
         var metadataHydrated = false;
@@ -87,6 +96,17 @@ public sealed class TikTokShopSyncService
                 clientId,
                 connection.SellerId,
                 "sync_orders");
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthBlocked,
+                ServiceErrorCodes.TikTokShopReconnectRequired,
+                "A autorizacao foi concluida, mas o TikTok Shop nao retornou os dados completos da loja. Reconecte a conta para sincronizar pedidos.",
+                "connection_reconnect_required",
+                null,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Failure(
                 ServiceErrorCodes.TikTokShopReconnectRequired,
                 "connection",
@@ -197,6 +217,17 @@ public sealed class TikTokShopSyncService
                 ex.ApiCode,
                 ex.ApiMessage,
                 ex.Operation ?? "search_orders");
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthDegraded,
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "TikTok Shop indisponivel no momento. Tente novamente.",
+                "upstream_error",
+                ex,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Failure(
                 ServiceErrorCodes.TikTokShopUpstreamError,
                 "connection",
@@ -213,6 +244,17 @@ public sealed class TikTokShopSyncService
                 !string.IsNullOrWhiteSpace(connection.ShopCipher),
                 ex.StatusCode,
                 "search_orders");
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthDegraded,
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "TikTok Shop indisponivel no momento. Tente novamente.",
+                "upstream_error",
+                null,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Failure(
                 ServiceErrorCodes.TikTokShopUpstreamError,
                 "connection",
@@ -222,31 +264,79 @@ public sealed class TikTokShopSyncService
         var repairedItems = 0;
         if (summaries.Count == 0)
         {
-            repairedItems = await RecoverOrdersWithMissingItemsAsync(
-                tenantId,
-                clientId,
-                connection,
-                accessToken,
-                cancellationToken);
+            try
+            {
+                repairedItems = await RecoverOrdersWithMissingItemsAsync(
+                    tenantId,
+                    clientId,
+                    connection,
+                    accessToken,
+                    cancellationToken);
+            }
+            catch (TikTokShopApiException ex) when (IsDeprecatedOrderDetailApi(ex))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "TikTok Shop repair sync blocked because order detail requires V2. tenantId={TenantId} clientId={ClientId} sellerId={SellerId} requestId={RequestId} apiCode={ApiCode}",
+                    tenantId,
+                    clientId,
+                    connection.SellerId,
+                    ex.RequestId,
+                    ex.ApiCode);
+                await RecordSyncStatusAsync(
+                    tenantId,
+                    clientId,
+                    connection.SellerId,
+                    MarketplaceEventStatuses.Failed,
+                    SyncHealthBlocked,
+                    ServiceErrorCodes.TikTokShopOrderDetailV2Required,
+                    "O TikTok Shop bloqueou o detalhe dos pedidos no endpoint legado. A integracao precisa consultar o payload V2 para importar os itens.",
+                    SyncBlockingReasonDetailApiV2Required,
+                    ex,
+                    cancellationToken);
+                return ServiceResult<TikTokShopSyncResult>.Failure(
+                    ServiceErrorCodes.TikTokShopOrderDetailV2Required,
+                    "connection",
+                    "O TikTok Shop bloqueou o detalhe dos pedidos no endpoint legado. Tente sincronizar novamente em alguns minutos.");
+            }
 
             connection.LastSyncAt = to;
             await _dbContext.SaveChangesAsync(cancellationToken);
+            await RecordHealthyOrBrokenSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                repairedItems,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Success(new TikTokShopSyncResult
             {
                 ItemsUpserted = repairedItems
             });
         }
 
-        List<TikTokShopOrderDetail> details;
+        var details = summaries
+            .Where(summary => summary.LineItems.Count > 0)
+            .Select(summary => summary.ToOrderDetail())
+            .ToList();
+
+        var orderIdsRequiringDetail = summaries
+            .Where(summary => summary.LineItems.Count == 0)
+            .Select(summary => summary.OrderId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
         try
         {
-            // Fetch details in batches of 50
-            details = await FetchOrderDetailsInBatchesAsync(
-                accessToken,
-                connection.ShopCipher,
-                connection.SellerId > 0 ? connection.SellerId.ToString() : null,
-                summaries.Select(s => s.OrderId).Where(id => !string.IsNullOrWhiteSpace(id)).ToArray(),
-                cancellationToken);
+            if (orderIdsRequiringDetail.Length > 0)
+            {
+                details.AddRange(await FetchOrderDetailsInBatchesAsync(
+                    accessToken,
+                    connection.ShopCipher,
+                    connection.SellerId > 0 ? connection.SellerId.ToString() : null,
+                    orderIdsRequiringDetail,
+                    cancellationToken));
+            }
         }
         catch (TikTokShopApiException ex) when (IsAuthFailure(ex.StatusCode))
         {
@@ -262,10 +352,48 @@ public sealed class TikTokShopSyncService
                 ex.ApiCode,
                 ex.ApiMessage,
                 ex.Operation ?? "get_order_detail");
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthBlocked,
+                ServiceErrorCodes.TikTokShopReconnectRequired,
+                "Sessao TikTok Shop invalida ao carregar os detalhes dos pedidos. Reconecte sua conta.",
+                "connection_reconnect_required",
+                ex,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Failure(
                 ServiceErrorCodes.TikTokShopReconnectRequired,
                 "connection",
                 "Sessao TikTok Shop invalida ao carregar os detalhes dos pedidos. Reconecte sua conta.");
+        }
+        catch (TikTokShopApiException ex) when (IsDeprecatedOrderDetailApi(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "TikTok Shop order detail blocked because V1 detail API was deprecated. tenantId={TenantId} clientId={ClientId} sellerId={SellerId} requestId={RequestId} apiCode={ApiCode} apiMessage={ApiMessage}",
+                tenantId,
+                clientId,
+                connection.SellerId,
+                ex.RequestId,
+                ex.ApiCode,
+                ex.ApiMessage);
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthBlocked,
+                ServiceErrorCodes.TikTokShopOrderDetailV2Required,
+                "O TikTok Shop recusou o detalhe dos pedidos no endpoint legado. A sincronizacao nao conseguiu importar os itens do pedido.",
+                SyncBlockingReasonDetailApiV2Required,
+                ex,
+                cancellationToken);
+            return ServiceResult<TikTokShopSyncResult>.Failure(
+                ServiceErrorCodes.TikTokShopOrderDetailV2Required,
+                "connection",
+                "O TikTok Shop recusou o detalhe dos pedidos no endpoint legado. Os itens do pedido ainda nao puderam ser importados.");
         }
         catch (HttpRequestException ex) when (IsAuthFailure(ex.StatusCode))
         {
@@ -278,6 +406,17 @@ public sealed class TikTokShopSyncService
                 !string.IsNullOrWhiteSpace(connection.ShopCipher),
                 ex.StatusCode,
                 "get_order_detail");
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthBlocked,
+                ServiceErrorCodes.TikTokShopReconnectRequired,
+                "Sessao TikTok Shop invalida ao carregar os detalhes dos pedidos. Reconecte sua conta.",
+                "connection_reconnect_required",
+                null,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Failure(
                 ServiceErrorCodes.TikTokShopReconnectRequired,
                 "connection",
@@ -297,6 +436,17 @@ public sealed class TikTokShopSyncService
                 ex.ApiCode,
                 ex.ApiMessage,
                 ex.Operation ?? "get_order_detail");
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthDegraded,
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "TikTok Shop indisponivel ao carregar detalhes dos pedidos. Tente novamente.",
+                "upstream_error",
+                ex,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Failure(
                 ServiceErrorCodes.TikTokShopUpstreamError,
                 "connection",
@@ -313,6 +463,17 @@ public sealed class TikTokShopSyncService
                 !string.IsNullOrWhiteSpace(connection.ShopCipher),
                 ex.StatusCode,
                 "get_order_detail");
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthDegraded,
+                ServiceErrorCodes.TikTokShopUpstreamError,
+                "TikTok Shop indisponivel ao carregar detalhes dos pedidos. Tente novamente.",
+                "upstream_error",
+                null,
+                cancellationToken);
             return ServiceResult<TikTokShopSyncResult>.Failure(
                 ServiceErrorCodes.TikTokShopUpstreamError,
                 "connection",
@@ -429,12 +590,41 @@ public sealed class TikTokShopSyncService
             }
         }
 
-        repairedItems += await RecoverOrdersWithMissingItemsAsync(
-            tenantId,
-            clientId,
-            connection,
-            accessToken,
-            cancellationToken);
+        try
+        {
+            repairedItems += await RecoverOrdersWithMissingItemsAsync(
+                tenantId,
+                clientId,
+                connection,
+                accessToken,
+                cancellationToken);
+        }
+        catch (TikTokShopApiException ex) when (IsDeprecatedOrderDetailApi(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "TikTok Shop repair pass blocked because order detail requires V2. tenantId={TenantId} clientId={ClientId} sellerId={SellerId} requestId={RequestId} apiCode={ApiCode}",
+                tenantId,
+                clientId,
+                connection.SellerId,
+                ex.RequestId,
+                ex.ApiCode);
+            await RecordSyncStatusAsync(
+                tenantId,
+                clientId,
+                connection.SellerId,
+                MarketplaceEventStatuses.Failed,
+                SyncHealthBlocked,
+                ServiceErrorCodes.TikTokShopOrderDetailV2Required,
+                "O TikTok Shop recusou o detalhe dos pedidos no endpoint legado. Ainda existem pedidos sem itens importados.",
+                SyncBlockingReasonDetailApiV2Required,
+                ex,
+                cancellationToken);
+            return ServiceResult<TikTokShopSyncResult>.Failure(
+                ServiceErrorCodes.TikTokShopOrderDetailV2Required,
+                "connection",
+                "O TikTok Shop recusou o detalhe dos pedidos no endpoint legado. Ainda existem pedidos sem itens importados.");
+        }
 
         await TrySyncShipmentsAsync(
             tenantId,
@@ -448,6 +638,12 @@ public sealed class TikTokShopSyncService
 
         connection.LastSyncAt = to;
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await RecordHealthyOrBrokenSyncStatusAsync(
+            tenantId,
+            clientId,
+            connection.SellerId,
+            itemsUpserted + repairedItems,
+            cancellationToken);
 
         _logger.LogInformation(
             "TikTok Shop sync completed. tenantId={TenantId} clientId={ClientId} ordersUpserted={Orders} itemsUpserted={Items} repairedItems={RepairedItems} mappingsCreated={MappingsCreated} sellerId={SellerId}",
@@ -550,6 +746,141 @@ public sealed class TikTokShopSyncService
                 "connection",
                 "A sessao TikTok Shop ficou inconsistente para sincronizar pedidos. Reconecte a conta.");
         }
+    }
+
+    private async Task<DateTimeOffset> ExpandSyncWindowForBrokenOrdersAsync(
+        string tenantId,
+        Guid clientId,
+        DateTimeOffset from,
+        CancellationToken cancellationToken)
+    {
+        var oldestBrokenImportedAt = await _dbContext.MarketplaceOrders
+            .AsNoTracking()
+            .Where(order => order.TenantId == tenantId
+                            && order.ClientId == clientId
+                            && order.Provider == MarketplaceProvider.TikTokShop
+                            && !order.Items.Any())
+            .OrderBy(order => order.ImportedAt)
+            .Select(order => (DateTimeOffset?)order.ImportedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (!oldestBrokenImportedAt.HasValue)
+        {
+            return from;
+        }
+
+        var expandedFrom = oldestBrokenImportedAt.Value.AddDays(-1);
+        var minimumAllowed = DateTimeOffset.UtcNow.AddDays(-30);
+        if (expandedFrom < minimumAllowed)
+        {
+            expandedFrom = minimumAllowed;
+        }
+
+        return expandedFrom < from ? expandedFrom : from;
+    }
+
+    private async Task RecordHealthyOrBrokenSyncStatusAsync(
+        string tenantId,
+        Guid clientId,
+        long sellerId,
+        int itemsUpserted,
+        CancellationToken cancellationToken)
+    {
+        var ordersMissingItemsCount = await GetOrdersMissingItemsCountAsync(tenantId, clientId, cancellationToken);
+        var syncHealth = ordersMissingItemsCount > 0 ? SyncHealthDegraded : SyncHealthHealthy;
+        var blockingReason = ordersMissingItemsCount > 0 ? SyncBlockingReasonNoImportedItems : null;
+        var message = ordersMissingItemsCount > 0
+            ? $"Ainda existem {ordersMissingItemsCount} pedido(s) TikTok sem itens importados para mapear."
+            : "Sincronizacao TikTok concluida com itens importados.";
+
+        await RecordSyncStatusAsync(
+            tenantId,
+            clientId,
+            sellerId,
+            MarketplaceEventStatuses.Processed,
+            syncHealth,
+            ordersMissingItemsCount > 0 ? SyncBlockingReasonNoImportedItems : null,
+            message,
+            blockingReason,
+            null,
+            cancellationToken,
+            itemsUpserted,
+            ordersMissingItemsCount);
+    }
+
+    private async Task<int> GetOrdersMissingItemsCountAsync(
+        string tenantId,
+        Guid clientId,
+        CancellationToken cancellationToken)
+    {
+        return await _dbContext.MarketplaceOrders
+            .AsNoTracking()
+            .Where(order => order.TenantId == tenantId
+                            && order.ClientId == clientId
+                            && order.Provider == MarketplaceProvider.TikTokShop
+                            && !order.Items.Any())
+            .CountAsync(cancellationToken);
+    }
+
+    private async Task RecordSyncStatusAsync(
+        string tenantId,
+        Guid clientId,
+        long sellerId,
+        string status,
+        string syncHealth,
+        string? errorCode,
+        string message,
+        string? blockingReason,
+        TikTokShopApiException? exception,
+        CancellationToken cancellationToken,
+        int? itemsUpserted = null,
+        int? ordersMissingItemsCount = null)
+    {
+        var dedupeKey = $"{SyncOrdersTopic}:{tenantId}:{clientId:D}:{MarketplaceProvider.TikTokShop}";
+        var existing = await _dbContext.MarketplaceEventLogs.FirstOrDefaultAsync(
+            item => item.DedupeKey == dedupeKey,
+            cancellationToken);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            syncHealth,
+            errorCode,
+            blockingReason,
+            message,
+            requestId = exception?.RequestId,
+            apiCode = exception?.ApiCode,
+            apiMessage = exception?.ApiMessage,
+            operation = exception?.Operation,
+            itemsUpserted,
+            ordersMissingItemsCount,
+            recordedAt = DateTimeOffset.UtcNow
+        });
+
+        if (existing is null)
+        {
+            existing = new MarketplaceEventLog
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.TikTokShop,
+                SellerId = sellerId,
+                Topic = SyncOrdersTopic,
+                ResourceId = SyncStatusResourceId,
+                DedupeKey = dedupeKey
+            };
+            _dbContext.MarketplaceEventLogs.Add(existing);
+        }
+
+        existing.SellerId = sellerId;
+        existing.Status = status;
+        existing.Attempts += 1;
+        existing.ProcessedAt = status == MarketplaceEventStatuses.Processed ? DateTimeOffset.UtcNow : existing.ProcessedAt;
+        existing.LastErrorAt = status == MarketplaceEventStatuses.Failed ? DateTimeOffset.UtcNow : null;
+        existing.LastError = status == MarketplaceEventStatuses.Failed ? message : null;
+        existing.PayloadJson = payload;
+        existing.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<int> UpsertOrderItemsAsync(
@@ -1350,6 +1681,11 @@ public sealed class TikTokShopSyncService
 
     private static bool IsAuthFailure(HttpStatusCode? statusCode)
         => statusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+
+    private static bool IsDeprecatedOrderDetailApi(TikTokShopApiException exception)
+        => string.Equals(exception.ApiCode, TikTokDeprecatedOrderDetailApiCode, StringComparison.Ordinal)
+           || (!string.IsNullOrWhiteSpace(exception.ApiMessage)
+               && exception.ApiMessage.Contains("upgrade to V2", StringComparison.OrdinalIgnoreCase));
 
     private static string? NormalizeNullable(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

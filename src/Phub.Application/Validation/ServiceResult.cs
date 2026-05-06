@@ -73,5 +73,6 @@ public static class ServiceErrorCodes
     public const string MlAuthInvalid      = "ML_AUTH_INVALID";
     public const string TikTokShopNotConnected = "TIKTOK_SHOP_NOT_CONNECTED";
     public const string TikTokShopReconnectRequired = "TIKTOK_SHOP_RECONNECT_REQUIRED";
+    public const string TikTokShopOrderDetailV2Required = "TIKTOK_SHOP_ORDER_DETAIL_V2_REQUIRED";
     public const string TikTokShopUpstreamError = "TIKTOK_SHOP_UPSTREAM_ERROR";
 }

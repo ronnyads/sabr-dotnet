@@ -203,6 +203,8 @@ public sealed class TikTokShopOrderSearchData
 public sealed class TikTokShopOrderSummary
 {
     private string? _alternateId;
+    private List<TikTokShopOrderLineItem>? _alternateLineItems;
+    private List<TikTokShopOrderLineItem>? _itemList;
 
     [JsonPropertyName("order_id")]
     public string OrderId { get; set; } = string.Empty;
@@ -229,6 +231,82 @@ public sealed class TikTokShopOrderSummary
 
     [JsonPropertyName("update_time")]
     public long UpdateTime { get; set; }
+
+    [JsonPropertyName("paid_time")]
+    public long? PaidTime { get; set; }
+
+    [JsonPropertyName("currency")]
+    public string? Currency { get; set; }
+
+    [JsonPropertyName("shop_id")]
+    public string? ShopId { get; set; }
+
+    [JsonPropertyName("line_items")]
+    public List<TikTokShopOrderLineItem> LineItems { get; set; } = [];
+
+    [JsonPropertyName("line_item_list")]
+    public List<TikTokShopOrderLineItem>? AlternateLineItems
+    {
+        get => _alternateLineItems;
+        set
+        {
+            _alternateLineItems = value;
+            if (value is { Count: > 0 })
+            {
+                LineItems = value;
+            }
+        }
+    }
+
+    [JsonPropertyName("item_list")]
+    public List<TikTokShopOrderLineItem>? ItemList
+    {
+        get => _itemList;
+        set
+        {
+            _itemList = value;
+            if (value is { Count: > 0 })
+            {
+                LineItems = value;
+            }
+        }
+    }
+
+    [JsonPropertyName("payment")]
+    public TikTokShopOrderPayment? Payment { get; set; }
+
+    [JsonPropertyName("recipient_address")]
+    public TikTokShopRecipientAddress? RecipientAddress { get; set; }
+
+    public TikTokShopOrderDetail ToOrderDetail()
+        => new()
+        {
+            OrderId = OrderId,
+            OrderStatus = OrderStatus,
+            CreateTime = CreateTime,
+            UpdateTime = UpdateTime,
+            PaidTime = PaidTime,
+            Currency = Currency,
+            ShopId = ShopId,
+            LineItems = LineItems.Count == 0 ? [] : LineItems.Select(CloneLineItem).ToList(),
+            Payment = Payment,
+            RecipientAddress = RecipientAddress
+        };
+
+    private static TikTokShopOrderLineItem CloneLineItem(TikTokShopOrderLineItem source)
+        => new()
+        {
+            Id = source.Id,
+            ProductId = source.ProductId,
+            SkuId = source.SkuId,
+            ProductName = source.ProductName,
+            SkuName = source.SkuName,
+            SellerSku = source.SellerSku,
+            Quantity = source.Quantity,
+            SalePrice = source.SalePrice,
+            Currency = source.Currency,
+            ItemTax = source.ItemTax
+        };
 }
 
 // Order detail

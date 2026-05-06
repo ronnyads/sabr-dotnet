@@ -456,6 +456,16 @@ public sealed class ClientTikTokShopIntegrationController : ControllerBase
                 errors));
         }
 
+        if (string.Equals(resolvedCode, ServiceErrorCodes.TikTokShopOrderDetailV2Required, StringComparison.OrdinalIgnoreCase))
+        {
+            return Conflict(CreateApiError(
+                resolvedCode,
+                string.IsNullOrWhiteSpace(firstMessage)
+                    ? "TikTok Shop order detail requires V2 before items can be imported"
+                    : firstMessage,
+                errors));
+        }
+
         if (string.Equals(resolvedCode, ServiceErrorCodes.TikTokShopUpstreamError, StringComparison.OrdinalIgnoreCase))
         {
             return StatusCode(StatusCodes.Status502BadGateway,
