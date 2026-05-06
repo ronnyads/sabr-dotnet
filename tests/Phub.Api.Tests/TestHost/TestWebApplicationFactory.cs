@@ -58,12 +58,14 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<AppDbContext>();
             services.RemoveAll<IAppDbContext>();
+            services.RemoveAll<IDocumentLookup>();
 
             services.AddDbContext<AppDbContext>(options =>
             {
                 options.UseInMemoryDatabase(_databaseName);
             });
             services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
+            services.AddScoped<IDocumentLookup, MockDocumentLookupService>();
         });
     }
 

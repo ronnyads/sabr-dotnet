@@ -21,6 +21,10 @@ public sealed class Client : EntityBase
     public string? Document { get; set; }
     public string? StateRegistration { get; set; }
     public bool IsStateRegistrationExempt { get; set; }
+    public string? CnpjUf { get; set; }
+    public bool IsCnpjOutsideSp { get; set; }
+    public bool OutOfSpCnpjWarningAccepted { get; set; }
+    public DateTimeOffset? OutOfSpCnpjWarningAcceptedAt { get; set; }
 
     public string? Whatsapp { get; set; }
     public string? Phone { get; set; }

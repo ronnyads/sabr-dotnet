@@ -75,6 +75,12 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
 
     public async Task<long> NextClientProtheusCodeAsync(CancellationToken cancellationToken = default)
     {
+        if (!Database.IsRelational())
+        {
+            var lastKnown = await Clients.LongCountAsync(cancellationToken);
+            return lastKnown + 1;
+        }
+
         var connection = Database.GetDbConnection();
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT nextval('client_protheus_code_seq')";
@@ -614,6 +620,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.TradeName).HasMaxLength(200);
             entity.Property(e => e.Document).HasMaxLength(20);
             entity.Property(e => e.StateRegistration).HasMaxLength(30);
+            entity.Property(e => e.CnpjUf).HasMaxLength(2);
             entity.Property(e => e.Whatsapp).HasMaxLength(30);
             entity.Property(e => e.Phone).HasMaxLength(30);
             entity.Property(e => e.ZipCode).HasMaxLength(10);

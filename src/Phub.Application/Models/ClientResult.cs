@@ -16,6 +16,10 @@ public sealed class ClientResult
     public string? Document { get; set; }
     public string? StateRegistration { get; set; }
     public bool IsStateRegistrationExempt { get; set; }
+    public string? CnpjUf { get; set; }
+    public bool IsCnpjOutsideSp { get; set; }
+    public bool OutOfSpCnpjWarningAccepted { get; set; }
+    public DateTimeOffset? OutOfSpCnpjWarningAcceptedAt { get; set; }
 
     public string Email { get; set; } = string.Empty;
     public string? Whatsapp { get; set; }

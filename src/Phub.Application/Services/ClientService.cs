@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Phub.Application.Abstractions;
+using Phub.Application.Exceptions;
 using Phub.Application.Models;
 using Phub.Application.Security;
 using Phub.Application.Validation;
@@ -20,11 +21,13 @@ public sealed class ClientService
 
     private readonly IAppDbContext _dbContext;
     private readonly ICepLookup _cepLookup;
+    private readonly IDocumentLookup _documentLookup;
 
-    public ClientService(IAppDbContext dbContext, ICepLookup cepLookup)
+    public ClientService(IAppDbContext dbContext, ICepLookup cepLookup, IDocumentLookup documentLookup)
     {
         _dbContext = dbContext;
         _cepLookup = cepLookup;
+        _documentLookup = documentLookup;
     }
 
     public async Task<ServiceResult<ClientRegistrationResult>> RegisterPublicAsync(
@@ -105,6 +108,20 @@ public sealed class ClientService
             ProtheusTag = ProtheusTag.Build(ProtheusPrefixes.Client, ProtheusOperationType.CREATE),
             ProtheusOperation = ProtheusOperationType.CREATE
         };
+
+        await ApplyCnpjOutsideSpWarningAsync(
+            client,
+            request.PersonType,
+            normalizedDocument,
+            request.State,
+            request.OutOfSpCnpjWarningAccepted,
+            errors,
+            cancellationToken);
+
+        if (errors.Count > 0)
+        {
+            return ServiceResult<ClientRegistrationResult>.Failure(errors);
+        }
 
         var store = new ClientStore
         {
@@ -474,6 +491,20 @@ public sealed class ClientService
             return ServiceResult<ClientResult>.Failure(errors);
         }
 
+        await ApplyCnpjOutsideSpWarningAsync(
+            client,
+            request.PersonType,
+            normalizedDocument,
+            request.State,
+            request.OutOfSpCnpjWarningAccepted,
+            errors,
+            cancellationToken);
+
+        if (errors.Count > 0)
+        {
+            return ServiceResult<ClientResult>.Failure(errors);
+        }
+
         client.PersonType = request.PersonType;
         client.LegalName = request.LegalName.Trim();
         client.TradeName = request.TradeName?.Trim();
@@ -548,6 +579,20 @@ public sealed class ClientService
         }
 
         await ValidateCepAsync(request.ZipCode, errors, cancellationToken);
+
+        if (errors.Count > 0)
+        {
+            return ServiceResult<ClientResult>.Failure(errors);
+        }
+
+        await ApplyCnpjOutsideSpWarningAsync(
+            client,
+            request.PersonType,
+            normalizedDocument,
+            request.State,
+            request.OutOfSpCnpjWarningAccepted,
+            errors,
+            cancellationToken);
 
         if (errors.Count > 0)
         {
@@ -854,6 +899,91 @@ public sealed class ClientService
         }
     }
 
+    private async Task ApplyCnpjOutsideSpWarningAsync(
+        Client client,
+        PersonType personType,
+        string normalizedDocument,
+        string? fallbackState,
+        bool warningAcceptedRequested,
+        List<ValidationError> errors,
+        CancellationToken cancellationToken)
+    {
+        var previousPersonType = client.PersonType;
+        var previousDocument = client.Document;
+        var previousCnpjUf = client.CnpjUf;
+        var previousIsCnpjOutsideSp = client.IsCnpjOutsideSp;
+        var previousWarningAccepted = client.OutOfSpCnpjWarningAccepted;
+        var previousWarningAcceptedAt = client.OutOfSpCnpjWarningAcceptedAt;
+
+        if (personType == PersonType.CPF)
+        {
+            client.CnpjUf = null;
+            client.IsCnpjOutsideSp = false;
+            client.OutOfSpCnpjWarningAccepted = false;
+            client.OutOfSpCnpjWarningAcceptedAt = null;
+            return;
+        }
+
+        var resolvedUf = await ResolveCnpjUfAsync(normalizedDocument, fallbackState, cancellationToken);
+        var isCnpjOutsideSp = !string.Equals(resolvedUf, "SP", StringComparison.OrdinalIgnoreCase);
+        client.CnpjUf = resolvedUf;
+        client.IsCnpjOutsideSp = isCnpjOutsideSp;
+
+        if (!isCnpjOutsideSp)
+        {
+            client.OutOfSpCnpjWarningAccepted = false;
+            client.OutOfSpCnpjWarningAcceptedAt = null;
+            return;
+        }
+
+        var sameScenario =
+            previousPersonType == PersonType.CNPJ &&
+            previousIsCnpjOutsideSp &&
+            string.Equals(previousDocument, normalizedDocument, StringComparison.Ordinal) &&
+            string.Equals(previousCnpjUf, resolvedUf, StringComparison.OrdinalIgnoreCase);
+
+        var hasAccepted = warningAcceptedRequested || (sameScenario && previousWarningAccepted);
+        if (!hasAccepted)
+        {
+            client.OutOfSpCnpjWarningAccepted = false;
+            client.OutOfSpCnpjWarningAcceptedAt = null;
+            errors.Add(new ValidationError(
+                "outOfSpCnpjWarningAccepted",
+                "O aviso para CNPJ com endereco fiscal fora de SP precisa ser aceito antes de continuar."));
+            return;
+        }
+
+        client.OutOfSpCnpjWarningAccepted = true;
+        client.OutOfSpCnpjWarningAcceptedAt =
+            sameScenario && previousWarningAccepted
+                ? previousWarningAcceptedAt ?? DateTimeOffset.UtcNow
+                : DateTimeOffset.UtcNow;
+    }
+
+    private async Task<string> ResolveCnpjUfAsync(string normalizedDocument, string? fallbackState, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var lookup = await _documentLookup.LookupAsync(normalizedDocument, cancellationToken);
+            var lookupUf = NormalizeUf(lookup?.Address?.State);
+            if (!string.IsNullOrWhiteSpace(lookupUf))
+            {
+                return lookupUf;
+            }
+        }
+        catch (ExternalServiceUnavailableException)
+        {
+        }
+
+        return NormalizeUf(fallbackState) ?? string.Empty;
+    }
+
+    private static string? NormalizeUf(string? value)
+    {
+        var normalized = value?.Trim().ToUpperInvariant();
+        return BrazilValidators.IsValidUF(normalized ?? string.Empty) ? normalized : null;
+    }
+
     private static string? NormalizeStateRegistration(string? value, bool isExempt)
     {
         if (isExempt)
@@ -894,6 +1024,10 @@ public sealed class ClientService
             Document = client.Document,
             StateRegistration = client.StateRegistration,
             IsStateRegistrationExempt = client.IsStateRegistrationExempt,
+            CnpjUf = client.CnpjUf,
+            IsCnpjOutsideSp = client.IsCnpjOutsideSp,
+            OutOfSpCnpjWarningAccepted = client.OutOfSpCnpjWarningAccepted,
+            OutOfSpCnpjWarningAcceptedAt = client.OutOfSpCnpjWarningAcceptedAt,
             Email = client.Email,
             Whatsapp = client.Whatsapp,
             Phone = client.Phone,

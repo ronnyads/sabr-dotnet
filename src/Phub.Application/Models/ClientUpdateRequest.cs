@@ -27,4 +27,5 @@ public sealed class ClientUpdateRequest
 
     public string ResponsibleName { get; set; } = string.Empty;
     public string ResponsibleDocument { get; set; } = string.Empty;
+    public bool OutOfSpCnpjWarningAccepted { get; set; }
 }
