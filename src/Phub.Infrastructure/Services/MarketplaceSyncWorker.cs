@@ -41,19 +41,42 @@ public sealed class MarketplaceSyncWorker : BackgroundService
 
     private async Task RunCycleAsync(CancellationToken cancellationToken)
     {
+        using var scope = _scopeFactory.CreateScope();
+        var mlSyncService = scope.ServiceProvider.GetRequiredService<MercadoLivreSyncService>();
+        var shopifySyncService = scope.ServiceProvider.GetRequiredService<ShopifyOAuthService>();
+        var tikTokShopSyncService = scope.ServiceProvider.GetRequiredService<TikTokShopSyncService>();
+        var tinyIntegrationService = scope.ServiceProvider.GetRequiredService<TinyIntegrationService>();
+
+        await RunProviderSyncAsync(
+            "MercadoLivre",
+            async () =>
+            {
+                await mlSyncService.SyncAllConnectionsAsync(cancellationToken: cancellationToken);
+                await mlSyncService.ExpireReservationsAsync(cancellationToken);
+            });
+
+        await RunProviderSyncAsync(
+            "Shopify",
+            () => shopifySyncService.SyncAllConnectionsAsync(cancellationToken));
+
+        await RunProviderSyncAsync(
+            "TikTokShop",
+            () => tikTokShopSyncService.SyncAllConnectionsAsync(cancellationToken));
+
+        await RunProviderSyncAsync(
+            "TinyErp",
+            () => tinyIntegrationService.SyncAllConnectionsAsync(cancellationToken));
+    }
+
+    private async Task RunProviderSyncAsync(string provider, Func<Task> action)
+    {
         try
         {
-            using var scope = _scopeFactory.CreateScope();
-            var mlSyncService = scope.ServiceProvider.GetRequiredService<MercadoLivreSyncService>();
-            await mlSyncService.SyncAllConnectionsAsync(cancellationToken: cancellationToken);
-            await mlSyncService.ExpireReservationsAsync(cancellationToken);
-
-            var shopifySyncService = scope.ServiceProvider.GetRequiredService<ShopifyOAuthService>();
-            await shopifySyncService.SyncAllConnectionsAsync(cancellationToken);
+            await action();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "MarketplaceSyncWorker cycle failed");
+            _logger.LogWarning(ex, "MarketplaceSyncWorker provider cycle failed. provider={Provider}", provider);
         }
     }
 }

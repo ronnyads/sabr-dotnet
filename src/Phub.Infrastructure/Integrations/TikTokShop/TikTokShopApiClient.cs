@@ -136,32 +136,66 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string appSecret,
         string[] orderIds,
         string? shopCipher = null,
+        string? shopId = null,
         CancellationToken cancellationToken = default)
     {
-        const string path = "/order/202309/orders";
+        if (orderIds.Length == 0)
+        {
+            return new TikTokShopApiResponse<TikTokShopOrderDetailData>
+            {
+                Message = "Order ids are required.",
+                Data = new TikTokShopOrderDetailData()
+            };
+        }
 
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        var queryParams = BuildSignedOpenApiQueryParams(
-            appKey,
-            accessToken,
-            timestamp,
-            appSecret,
-            path,
-            shopCipher);
-        queryParams["ids"] = string.Join(",", orderIds);
-        var unsignedQueryParams = RemoveUnsignedQueryParams(queryParams);
-        queryParams["sign"] = ComputeOpenApiSign(appSecret, path, unsignedQueryParams);
+        TikTokShopApiException? lastApiException = null;
+        foreach (var attempt in CreateOrderDetailAttempts(
+                     accessToken,
+                     appKey,
+                     appSecret,
+                     orderIds,
+                     shopCipher,
+                     shopId))
+        {
+            try
+            {
+                var response = await SendSignedRequestAsync(
+                    attempt.Path,
+                    attempt.Method,
+                    accessToken,
+                    attempt.QueryParams,
+                    "get_order_detail",
+                    cancellationToken,
+                    attempt.BodyJson);
 
-        var url = BuildUrl(path, queryParams);
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("x-tts-access-token", accessToken);
+                var payload = await response.Content.ReadFromJsonAsync<TikTokShopApiResponse<TikTokShopOrderDetailData>>(
+                                  cancellationToken: cancellationToken)
+                              ?? new TikTokShopApiResponse<TikTokShopOrderDetailData> { Message = "Empty response." };
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        await EnsureSuccessOrThrowAsync(response, "get_order_detail", cancellationToken);
+                if (attempt.AllowFallbackOnEmptyItems && OrdersContainNoLineItems(payload))
+                {
+                    continue;
+                }
 
-        return await response.Content.ReadFromJsonAsync<TikTokShopApiResponse<TikTokShopOrderDetailData>>(
-                   cancellationToken: cancellationToken)
-               ?? new TikTokShopApiResponse<TikTokShopOrderDetailData> { Message = "Empty response." };
+                return payload;
+            }
+            catch (TikTokShopApiException ex) when (attempt.AllowFallbackOnFailure)
+            {
+                lastApiException = ex;
+            }
+        }
+
+        if (lastApiException is not null)
+        {
+            throw lastApiException;
+        }
+
+        return new TikTokShopApiResponse<TikTokShopOrderDetailData>
+        {
+            Code = 0,
+            Message = "No order detail payload with imported items was returned by TikTok Shop.",
+            Data = new TikTokShopOrderDetailData()
+        };
     }
 
     public async Task<TikTokShopApiResponse<TikTokShopPackageSearchData>> SearchPackagesAsync(
@@ -639,6 +673,78 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
             AllowFallbackOnFailure: false);
     }
 
+    private IEnumerable<OrderDetailAttempt> CreateOrderDetailAttempts(
+        string accessToken,
+        string appKey,
+        string appSecret,
+        string[] orderIds,
+        string? shopCipher,
+        string? shopId)
+    {
+        const string currentPath = "/order/202309/orders";
+        const string legacyPath = "/api/orders/detail/query";
+
+        var currentIdsBodyJson = JsonSerializer.Serialize(new Dictionary<string, string[]>
+        {
+            ["ids"] = orderIds
+        });
+        yield return new OrderDetailAttempt(
+            currentPath,
+            HttpMethod.Post,
+            BuildSignedOpenApiQueryParams(
+                appKey,
+                accessToken,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
+                appSecret,
+                currentPath,
+                shopCipher,
+                bodyJson: currentIdsBodyJson),
+            currentIdsBodyJson,
+            AllowFallbackOnFailure: true,
+            AllowFallbackOnEmptyItems: true);
+
+        var currentOrderIdListBodyJson = JsonSerializer.Serialize(new Dictionary<string, string[]>
+        {
+            ["order_id_list"] = orderIds
+        });
+        yield return new OrderDetailAttempt(
+            currentPath,
+            HttpMethod.Post,
+            BuildSignedOpenApiQueryParams(
+                appKey,
+                accessToken,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
+                appSecret,
+                currentPath,
+                shopCipher,
+                bodyJson: currentOrderIdListBodyJson),
+            currentOrderIdListBodyJson,
+            AllowFallbackOnFailure: true,
+            AllowFallbackOnEmptyItems: true);
+
+        var legacyExtraParams = new Dictionary<string, string>();
+        if (!string.IsNullOrWhiteSpace(shopId))
+        {
+            legacyExtraParams["shop_id"] = shopId;
+        }
+
+        yield return new OrderDetailAttempt(
+            legacyPath,
+            HttpMethod.Post,
+            BuildSignedLegacyQueryParams(
+                appKey,
+                accessToken,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
+                appSecret,
+                legacyPath,
+                shopCipher: null,
+                extraParams: legacyExtraParams,
+                bodyJson: currentOrderIdListBodyJson),
+            currentOrderIdListBodyJson,
+            AllowFallbackOnFailure: false,
+            AllowFallbackOnEmptyItems: false);
+    }
+
     private async Task<HttpResponseMessage> SendSignedRequestAsync(
         string path,
         HttpMethod method,
@@ -660,6 +766,12 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         var response = await _httpClient.SendAsync(request, cancellationToken);
         await EnsureSuccessOrThrowAsync(response, operation, cancellationToken);
         return response;
+    }
+
+    private static bool OrdersContainNoLineItems(TikTokShopApiResponse<TikTokShopOrderDetailData>? payload)
+    {
+        var orders = payload?.Data?.Orders;
+        return orders is { Count: > 0 } && orders.All(order => order.LineItems.Count == 0);
     }
 
     private async Task<IReadOnlyList<TikTokShopAuthorizedShop>> ExecuteAuthorizedShopsRequestAsync(
@@ -1010,4 +1122,12 @@ public sealed class TikTokShopApiClient : ITikTokShopApiClient
         string Path,
         Dictionary<string, string> QueryParams,
         bool AllowFallbackOnFailure);
+
+    private sealed record OrderDetailAttempt(
+        string Path,
+        HttpMethod Method,
+        Dictionary<string, string> QueryParams,
+        string? BodyJson,
+        bool AllowFallbackOnFailure,
+        bool AllowFallbackOnEmptyItems);
 }

@@ -15,6 +15,7 @@ namespace Phub.Application.Services;
 public sealed class TikTokShopSyncService
 {
     private const int SaveBatchSize = 25;
+    private const int DetailBatchSize = 50;
 
     private readonly IAppDbContext _dbContext;
     private readonly ITikTokShopApiClient _apiClient;
@@ -218,11 +219,22 @@ public sealed class TikTokShopSyncService
                 "TikTok Shop indisponivel no momento. Tente novamente.");
         }
 
+        var repairedItems = 0;
         if (summaries.Count == 0)
         {
+            repairedItems = await RecoverOrdersWithMissingItemsAsync(
+                tenantId,
+                clientId,
+                connection,
+                accessToken,
+                cancellationToken);
+
             connection.LastSyncAt = to;
             await _dbContext.SaveChangesAsync(cancellationToken);
-            return ServiceResult<TikTokShopSyncResult>.Success(new TikTokShopSyncResult());
+            return ServiceResult<TikTokShopSyncResult>.Success(new TikTokShopSyncResult
+            {
+                ItemsUpserted = repairedItems
+            });
         }
 
         List<TikTokShopOrderDetail> details;
@@ -232,6 +244,7 @@ public sealed class TikTokShopSyncService
             details = await FetchOrderDetailsInBatchesAsync(
                 accessToken,
                 connection.ShopCipher,
+                connection.SellerId > 0 ? connection.SellerId.ToString() : null,
                 summaries.Select(s => s.OrderId).Where(id => !string.IsNullOrWhiteSpace(id)).ToArray(),
                 cancellationToken);
         }
@@ -416,6 +429,13 @@ public sealed class TikTokShopSyncService
             }
         }
 
+        repairedItems += await RecoverOrdersWithMissingItemsAsync(
+            tenantId,
+            clientId,
+            connection,
+            accessToken,
+            cancellationToken);
+
         await TrySyncShipmentsAsync(
             tenantId,
             clientId,
@@ -430,14 +450,41 @@ public sealed class TikTokShopSyncService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation(
-            "TikTok Shop sync completed. tenantId={TenantId} clientId={ClientId} ordersUpserted={Orders} itemsUpserted={Items} mappingsCreated={MappingsCreated} sellerId={SellerId}",
-            tenantId, clientId, ordersUpserted, itemsUpserted, 0, connection.SellerId);
+            "TikTok Shop sync completed. tenantId={TenantId} clientId={ClientId} ordersUpserted={Orders} itemsUpserted={Items} repairedItems={RepairedItems} mappingsCreated={MappingsCreated} sellerId={SellerId}",
+            tenantId, clientId, ordersUpserted, itemsUpserted, repairedItems, 0, connection.SellerId);
 
         return ServiceResult<TikTokShopSyncResult>.Success(new TikTokShopSyncResult
         {
             OrdersUpserted = ordersUpserted,
-            ItemsUpserted = itemsUpserted
+            ItemsUpserted = itemsUpserted + repairedItems
         });
+    }
+
+    public async Task SyncAllConnectionsAsync(CancellationToken cancellationToken = default)
+    {
+        var connections = await _dbContext.TenantMarketplaceConnections
+            .AsNoTracking()
+            .Where(c => c.Provider == MarketplaceProvider.TikTokShop
+                        && ((c.AccessToken != null && c.AccessToken != string.Empty)
+                            || (c.RefreshToken != null && c.RefreshToken != string.Empty)))
+            .Select(c => new { c.TenantId, c.ClientId })
+            .ToListAsync(cancellationToken);
+
+        foreach (var connection in connections)
+        {
+            try
+            {
+                await SyncOrdersAsync(connection.TenantId, connection.ClientId, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "TikTok Shop sync-all failed for connection. tenantId={TenantId} clientId={ClientId}",
+                    connection.TenantId,
+                    connection.ClientId);
+            }
+        }
     }
 
     private async Task<ServiceResult<List<TikTokShopOrderSummary>>> RetryFetchAllOrderSummariesAsync(
@@ -552,8 +599,9 @@ public sealed class TikTokShopSyncService
             }
             else
             {
-                order.Items.Add(new MarketplaceOrderItem
+                var newItem = new MarketplaceOrderItem
                 {
+                    MarketplaceOrderId = order.Id,
                     TenantId = tenantId,
                     ClientId = clientId,
                     Provider = MarketplaceProvider.TikTokShop,
@@ -563,13 +611,120 @@ public sealed class TikTokShopSyncService
                     SabrVariantSku = resolution.SabrVariantSku,
                     Quantity = lineItem.Quantity,
                     MappingState = resolution.MappingState,
-                    RawJson = JsonSerializer.Serialize(lineItem)
-                });
+                    RawJson = JsonSerializer.Serialize(lineItem),
+                    MarketplaceOrder = order
+                };
+
+                order.Items.Add(newItem);
+                _dbContext.MarketplaceOrderItems.Add(newItem);
                 itemsUpserted++;
             }
         }
 
+        if (detail.LineItems.Count == 0)
+        {
+            _logger.LogWarning(
+                "TikTok Shop order detail returned no line items. tenantId={TenantId} clientId={ClientId} orderId={OrderId} provider={Provider} sellerId={SellerId} importedItemCount={ImportedItemCount}",
+                tenantId,
+                clientId,
+                detail.OrderId,
+                MarketplaceProvider.TikTokShop,
+                sellerId,
+                itemsUpserted);
+        }
+
         return itemsUpserted;
+    }
+
+    private async Task<int> RecoverOrdersWithMissingItemsAsync(
+        string tenantId,
+        Guid clientId,
+        TenantMarketplaceConnection connection,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(connection.ShopCipher))
+        {
+            return 0;
+        }
+
+        var brokenOrders = await _dbContext.MarketplaceOrders
+            .Include(order => order.Items)
+            .Where(order => order.TenantId == tenantId
+                            && order.ClientId == clientId
+                            && order.Provider == MarketplaceProvider.TikTokShop
+                            && !order.Items.Any())
+            .OrderByDescending(order => order.ImportedAt)
+            .ToListAsync(cancellationToken);
+
+        if (brokenOrders.Count == 0)
+        {
+            return 0;
+        }
+
+        var repairedItems = 0;
+        var pendingPersistedOrders = 0;
+        var orderLookup = brokenOrders.ToDictionary(order => order.MlOrderId, StringComparer.Ordinal);
+
+        foreach (var batch in orderLookup.Keys.Chunk(DetailBatchSize))
+        {
+            var response = await _apiClient.GetOrderDetailAsync(
+                accessToken,
+                _options.AppKey,
+                _options.AppSecret,
+                batch,
+                connection.ShopCipher,
+                connection.SellerId > 0 ? connection.SellerId.ToString() : null,
+                cancellationToken);
+
+            foreach (var detail in response.Data?.Orders ?? [])
+            {
+                if (!orderLookup.TryGetValue(detail.OrderId, out var order))
+                {
+                    continue;
+                }
+
+                repairedItems += await UpsertOrderItemsAsync(
+                    order,
+                    detail,
+                    tenantId,
+                    clientId,
+                    connection.SellerId,
+                    cancellationToken);
+
+                await _inventoryService.ReconcileReservationsAsync(
+                    order,
+                    connection.SellerId,
+                    reservationTtlHours: 24,
+                    cancellationToken);
+                order.UpdatedAt = DateTimeOffset.UtcNow;
+
+                pendingPersistedOrders++;
+                if (pendingPersistedOrders >= SaveBatchSize)
+                {
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+                    pendingPersistedOrders = 0;
+                }
+            }
+        }
+
+        if (pendingPersistedOrders > 0)
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        if (repairedItems > 0)
+        {
+            _logger.LogInformation(
+                "TikTok Shop repaired orders without imported items. tenantId={TenantId} clientId={ClientId} sellerId={SellerId} brokenOrders={BrokenOrders} repairedItems={RepairedItems}",
+                tenantId,
+                clientId,
+                connection.SellerId,
+                brokenOrders.Count,
+                repairedItems);
+        }
+
+        return repairedItems;
     }
 
     private static long TryParseSellerId(string? rawShopId)
@@ -761,18 +916,28 @@ public sealed class TikTokShopSyncService
     private async Task<List<TikTokShopOrderDetail>> FetchOrderDetailsInBatchesAsync(
         string accessToken,
         string? shopCipher,
+        string? shopId,
         string[] orderIds,
         CancellationToken cancellationToken)
     {
         var all = new List<TikTokShopOrderDetail>();
 
-        foreach (var batch in orderIds.Chunk(50))
+        foreach (var batch in orderIds.Chunk(DetailBatchSize))
         {
             var response = await _apiClient.GetOrderDetailAsync(
-                accessToken, _options.AppKey, _options.AppSecret, batch, shopCipher, cancellationToken);
+                accessToken, _options.AppKey, _options.AppSecret, batch, shopCipher, shopId, cancellationToken);
 
             if (response.IsSuccess && response.Data?.Orders != null)
             {
+                if (response.Data.Orders.Count > 0 && response.Data.Orders.All(order => order.LineItems.Count == 0))
+                {
+                    _logger.LogWarning(
+                        "TikTok Shop GetOrderDetail returned orders without imported items. requestId={RequestId} orderCount={OrderCount} provider={Provider}",
+                        response.RequestId,
+                        response.Data.Orders.Count,
+                        MarketplaceProvider.TikTokShop);
+                }
+
                 all.AddRange(response.Data.Orders);
             }
             else

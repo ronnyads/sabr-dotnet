@@ -180,6 +180,164 @@ public sealed class TikTokShopApiClientTests
             "cursor-1");
     }
 
+    [Fact]
+    public async Task GetOrderDetailAsync_UsesPostBody_AndParsesAlternateLineItemPayload()
+    {
+        var handler = new RecordingHttpMessageHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/order/202309/orders", request.RequestUri!.AbsolutePath);
+            Assert.Equal("test-access", ReadQueryParam(request.RequestUri, "access_token"));
+            Assert.Equal("202309", ReadQueryParam(request.RequestUri, "version"));
+            Assert.Equal("cipher-123", ReadQueryParam(request.RequestUri, "shop_cipher"));
+
+            var bodyJson = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            Assert.Equal("{\"ids\":[\"576461413038785752\"]}", bodyJson);
+            Assert.Equal(
+                ComputeExpectedSign("app-secret", request.RequestUri.AbsolutePath, request.RequestUri, bodyJson),
+                ReadQueryParam(request.RequestUri, "sign"));
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "code": 0,
+                      "message": "Success",
+                      "request_id": "req-order-detail",
+                      "data": {
+                        "order_list": [
+                          {
+                            "order_id": "576461413038785752",
+                            "order_status": "AWAITING_SHIPMENT",
+                            "create_time": 1714850000,
+                            "update_time": 1714850600,
+                            "shop_id": "1979655640",
+                            "line_item_list": [
+                              {
+                                "id": "line-1",
+                                "product_id": "prod-1",
+                                "sku_id": "sku-1",
+                                "product_name": "Produto 1",
+                                "sku_name": "Cor Azul",
+                                "seller_sku": "SELLER-001",
+                                "quantity": 2
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        });
+
+        var client = CreateApiClient(handler);
+        var response = await client.GetOrderDetailAsync(
+            "test-access",
+            "app-key",
+            "app-secret",
+            ["576461413038785752"],
+            "cipher-123");
+
+        var order = Assert.Single(response.Data!.Orders);
+        var lineItem = Assert.Single(order.LineItems);
+        Assert.Equal("576461413038785752", order.OrderId);
+        Assert.Equal("prod-1", lineItem.ProductId);
+        Assert.Equal("sku-1", lineItem.SkuId);
+        Assert.Equal("SELLER-001", lineItem.SellerSku);
+        Assert.Equal(2, lineItem.Quantity);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task GetOrderDetailAsync_RetriesWithLegacyBodyShape_WhenFirstPayloadHasNoItems()
+    {
+        var handler = new RecordingHttpMessageHandler(request =>
+        {
+            var bodyJson = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+
+            if (bodyJson.Contains("\"ids\"", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """
+                        {
+                          "code": 0,
+                          "message": "Success",
+                          "request_id": "req-empty-items",
+                          "data": {
+                            "orders": [
+                              {
+                                "order_id": "576461413038785752",
+                                "order_status": "AWAITING_SHIPMENT",
+                                "create_time": 1714850000,
+                                "update_time": 1714850600,
+                                "shop_id": "1979655640",
+                                "line_items": []
+                              }
+                            ]
+                          }
+                        }
+                        """,
+                        Encoding.UTF8,
+                        "application/json")
+                };
+            }
+
+            Assert.Equal("{\"order_id_list\":[\"576461413038785752\"]}", bodyJson);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "code": 0,
+                      "message": "Success",
+                      "request_id": "req-fallback-items",
+                      "data": {
+                        "orders": [
+                          {
+                            "order_id": "576461413038785752",
+                            "order_status": "AWAITING_SHIPMENT",
+                            "create_time": 1714850000,
+                            "update_time": 1714850600,
+                            "shop_id": "1979655640",
+                            "line_items": [
+                              {
+                                "id": "line-2",
+                                "product_id": "prod-2",
+                                "sku_id": "sku-2",
+                                "seller_sku": "SELLER-002",
+                                "quantity": 1
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        });
+
+        var client = CreateApiClient(handler);
+        var response = await client.GetOrderDetailAsync(
+            "test-access",
+            "app-key",
+            "app-secret",
+            ["576461413038785752"],
+            "cipher-123",
+            "1979655640");
+
+        var order = Assert.Single(response.Data!.Orders);
+        Assert.Single(order.LineItems);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
     private static TikTokShopApiClient CreateApiClient(HttpMessageHandler handler)
     {
         var options = Microsoft.Extensions.Options.Options.Create(new TikTokShopOptions

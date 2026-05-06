@@ -149,6 +149,27 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
         return Ok(result.Data);
     }
 
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> DeleteMapping(Guid id, CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+        {
+            return error!;
+        }
+
+        var result = await _mappingService.DeleteMappingAsync(
+            tenantId!,
+            clientId,
+            id,
+            cancellationToken);
+        if (!result.Succeeded)
+        {
+            return MapValidationErrors(result.Errors, result.ErrorCode);
+        }
+
+        return NoContent();
+    }
+
     private bool TryGetClientContext(
         out string? tenantId,
         out Guid clientId,

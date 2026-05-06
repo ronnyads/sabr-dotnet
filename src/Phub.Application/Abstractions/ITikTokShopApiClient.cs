@@ -32,6 +32,7 @@ public interface ITikTokShopApiClient
         string appSecret,
         string[] orderIds,
         string? shopCipher = null,
+        string? shopId = null,
         CancellationToken cancellationToken = default);
 
     Task<TikTokShopApiResponse<TikTokShopPackageSearchData>> SearchPackagesAsync(
@@ -201,14 +202,18 @@ public sealed class TikTokShopOrderSearchData
 
 public sealed class TikTokShopOrderSummary
 {
+    private string? _alternateId;
+
     [JsonPropertyName("order_id")]
     public string OrderId { get; set; } = string.Empty;
 
     [JsonPropertyName("id")]
     public string? AlternateId
     {
+        get => _alternateId;
         set
         {
+            _alternateId = value;
             if (!string.IsNullOrWhiteSpace(value))
             {
                 OrderId = value;
@@ -229,20 +234,42 @@ public sealed class TikTokShopOrderSummary
 // Order detail
 public sealed class TikTokShopOrderDetailData
 {
+    private List<TikTokShopOrderDetail>? _alternateOrders;
+
     [JsonPropertyName("orders")]
     public List<TikTokShopOrderDetail> Orders { get; set; } = [];
+
+    [JsonPropertyName("order_list")]
+    public List<TikTokShopOrderDetail>? AlternateOrders
+    {
+        get => _alternateOrders;
+        set
+        {
+            _alternateOrders = value;
+            if (value is { Count: > 0 })
+            {
+                Orders = value;
+            }
+        }
+    }
 }
 
 public sealed class TikTokShopOrderDetail
 {
+    private string? _alternateId;
+    private List<TikTokShopOrderLineItem>? _alternateLineItems;
+    private List<TikTokShopOrderLineItem>? _itemList;
+
     [JsonPropertyName("order_id")]
     public string OrderId { get; set; } = string.Empty;
 
     [JsonPropertyName("id")]
     public string? AlternateId
     {
+        get => _alternateId;
         set
         {
+            _alternateId = value;
             if (!string.IsNullOrWhiteSpace(value))
             {
                 OrderId = value;
@@ -270,6 +297,34 @@ public sealed class TikTokShopOrderDetail
 
     [JsonPropertyName("line_items")]
     public List<TikTokShopOrderLineItem> LineItems { get; set; } = [];
+
+    [JsonPropertyName("line_item_list")]
+    public List<TikTokShopOrderLineItem>? AlternateLineItems
+    {
+        get => _alternateLineItems;
+        set
+        {
+            _alternateLineItems = value;
+            if (value is { Count: > 0 })
+            {
+                LineItems = value;
+            }
+        }
+    }
+
+    [JsonPropertyName("item_list")]
+    public List<TikTokShopOrderLineItem>? ItemList
+    {
+        get => _itemList;
+        set
+        {
+            _itemList = value;
+            if (value is { Count: > 0 })
+            {
+                LineItems = value;
+            }
+        }
+    }
 
     [JsonPropertyName("payment")]
     public TikTokShopOrderPayment? Payment { get; set; }

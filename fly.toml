@@ -12,6 +12,8 @@ primary_region = "gru"
 [env]
   ASPNETCORE_ENVIRONMENT = "Production"
   ASPNETCORE_URLS        = "http://+:8080"
+  BackgroundWorkers__Enabled = "true"
+  TikTokShop__Features__Webhook = "true"
 
 [http_service]
   internal_port        = 8080

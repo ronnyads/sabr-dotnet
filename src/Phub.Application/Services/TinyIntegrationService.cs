@@ -258,6 +258,33 @@ public sealed class TinyIntegrationService
         return ServiceResult<TinySyncResult>.Success(result);
     }
 
+    public async Task SyncAllConnectionsAsync(CancellationToken cancellationToken = default)
+    {
+        var connections = await _dbContext.TenantMarketplaceConnections
+            .AsNoTracking()
+            .Where(c => c.Provider == MarketplaceProvider.TinyErp
+                        && ((c.AccessToken != null && c.AccessToken != string.Empty)
+                            || (c.RefreshToken != null && c.RefreshToken != string.Empty)))
+            .Select(c => new { c.TenantId, c.ClientId })
+            .ToListAsync(cancellationToken);
+
+        foreach (var connection in connections)
+        {
+            try
+            {
+                await SyncOrdersAsync(connection.TenantId, connection.ClientId, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Tiny ERP sync-all failed for connection. tenantId={TenantId} clientId={ClientId}",
+                    connection.TenantId,
+                    connection.ClientId);
+            }
+        }
+    }
+
     private async Task UpsertOrderAsync(
         string tenantId,
         Guid clientId,

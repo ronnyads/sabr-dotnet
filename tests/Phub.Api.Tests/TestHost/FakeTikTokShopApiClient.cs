@@ -161,6 +161,7 @@ public sealed class FakeTikTokShopApiClient : ITikTokShopApiClient
         string appSecret,
         string[] orderIds,
         string? shopCipher = null,
+        string? shopId = null,
         CancellationToken cancellationToken = default)
     {
         GetOrderDetailCalls++;
