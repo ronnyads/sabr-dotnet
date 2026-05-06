@@ -129,6 +129,7 @@ try
     builder.Services.AddScoped<MarketplaceOrderPaymentService>();
     builder.Services.AddScoped<MarketplaceShipmentLabelService>();
     builder.Services.AddScoped<StockAvailabilityService>();
+    builder.Services.AddScoped<CatalogAuthorizationService>();
     builder.Services.AddScoped<ProductVariantBackfillService>();
     builder.Services.AddScoped<MarketplaceCategoryResolver>();
     builder.Services.AddScoped<ShopifyOAuthService>();
