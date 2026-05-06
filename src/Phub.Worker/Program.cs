@@ -31,13 +31,11 @@ try
     // ── Options ───────────────────────────────────────────────────────────────
     builder.Services.AddOptions<DatabaseOptions>()
         .Bind(builder.Configuration.GetSection("Database"))
-        .ValidateDataAnnotations()
-        .ValidateOnStart();
+        .ValidateDataAnnotations();
 
     builder.Services.AddOptions<ProtheusOptions>()
         .Bind(builder.Configuration.GetSection("Protheus"))
-        .ValidateDataAnnotations()
-        .ValidateOnStart();
+        .ValidateDataAnnotations();
 
     builder.Services.AddOptions<MercadoLivreOptions>()
         .Bind(builder.Configuration.GetSection(MercadoLivreOptions.SectionName))
@@ -57,7 +55,7 @@ try
 
     var connectionString = hasValidConnStr
         ? configuredConnectionString!
-        : databaseOptions is not null
+        : IsUsableDatabaseOptions(databaseOptions)
             ? databaseOptions.BuildConnectionString()
             : throw new InvalidOperationException(
                 "Database connection is not configured. Set ConnectionStrings__Default.");
@@ -131,4 +129,13 @@ catch (Exception ex) when (ex is not OperationCanceledException)
 finally
 {
     await Log.CloseAndFlushAsync();
+}
+
+static bool IsUsableDatabaseOptions(DatabaseOptions? options)
+{
+    return options is not null
+           && !string.IsNullOrWhiteSpace(options.Host)
+           && !string.IsNullOrWhiteSpace(options.Name)
+           && !string.IsNullOrWhiteSpace(options.User)
+           && !string.IsNullOrWhiteSpace(options.Password);
 }
