@@ -5,10 +5,12 @@ mode="${1:-api}"
 
 case "$mode" in
   api)
-    exec dotnet /app/api/Phub.Api.dll
+    cd /app/api
+    exec dotnet Phub.Api.dll
     ;;
   worker)
-    exec dotnet /app/worker/Phub.Worker.dll
+    cd /app/worker
+    exec dotnet Phub.Worker.dll
     ;;
   *)
     exec "$@"
