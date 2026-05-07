@@ -132,6 +132,74 @@ public sealed class ClientServiceCnpjWarningTests
     }
 
     [Fact]
+    public async Task CompleteProfile_WithLookupUfDifferentFromAddressState_KeepsAddressStateAndUsesFiscalUf()
+    {
+        await using var db = CreateDb();
+        var client = await SeedClientAsync(db);
+
+        var service = CreateService(db);
+        var result = await service.CompleteProfileAsync(
+            client.Id,
+            BuildCnpjRequest(
+                client.Email,
+                "11222333000181",
+                "SP",
+                outOfSpCnpjWarningAccepted: true));
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(result.Data);
+        Assert.Equal("SP", result.Data!.State);
+        Assert.Equal("RJ", result.Data.CnpjUf);
+        Assert.True(result.Data.IsCnpjOutsideSp);
+    }
+
+    [Fact]
+    public async Task CompleteProfile_WithLookupUfDifferentFromAddressState_UsesFiscalUfForIeValidation()
+    {
+        await using var db = CreateDb();
+        var client = await SeedClientAsync(db);
+
+        var service = CreateService(db);
+        var result = await service.CompleteProfileAsync(
+            client.Id,
+            BuildCnpjRequest(
+                client.Email,
+                "11222333000181",
+                "SP",
+                stateRegistration: "123456789",
+                isStateRegistrationExempt: false));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(
+            result.Errors,
+            error => string.Equals(error.Field, "stateRegistration", StringComparison.OrdinalIgnoreCase) &&
+                     error.Message.Contains("fiscal UF RJ", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CompleteProfile_WhenLookupIsUnavailable_UsesAddressStateForIeValidation()
+    {
+        await using var db = CreateDb();
+        var client = await SeedClientAsync(db);
+
+        var service = CreateService(db);
+        var result = await service.CompleteProfileAsync(
+            client.Id,
+            BuildCnpjRequest(
+                client.Email,
+                "33444555000181",
+                "MG",
+                stateRegistration: "123456789",
+                isStateRegistrationExempt: false));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(
+            result.Errors,
+            error => string.Equals(error.Field, "stateRegistration", StringComparison.OrdinalIgnoreCase) &&
+                     error.Message.Contains("fiscal UF MG", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task RegisterPublic_WithOutsideSpCnpj_RequiresAcceptance_AndPersistsWhenAccepted()
     {
         await using var db = CreateDb();
@@ -234,7 +302,9 @@ public sealed class ClientServiceCnpjWarningTests
         string email,
         string document,
         string state,
-        bool outOfSpCnpjWarningAccepted = false)
+        bool outOfSpCnpjWarningAccepted = false,
+        string stateRegistration = "ISENTO",
+        bool isStateRegistrationExempt = true)
     {
         return new ClientUpdateRequest
         {
@@ -242,8 +312,8 @@ public sealed class ClientServiceCnpjWarningTests
             LegalName = "Cliente PJ Teste LTDA",
             TradeName = "Cliente PJ Teste",
             Document = document,
-            StateRegistration = "ISENTO",
-            IsStateRegistrationExempt = true,
+            StateRegistration = stateRegistration,
+            IsStateRegistrationExempt = isStateRegistrationExempt,
             OutOfSpCnpjWarningAccepted = outOfSpCnpjWarningAccepted,
             Email = email,
             Whatsapp = "11999999999",

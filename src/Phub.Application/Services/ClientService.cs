@@ -37,6 +37,18 @@ public sealed class ClientService
         var errors = ValidateClientRequest(request);
         var normalizedDocument = BrazilValidators.OnlyDigits(request.Document);
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var resolvedFiscalUf = await ResolveFiscalUfForRequestAsync(
+            request.PersonType,
+            normalizedDocument,
+            request.State,
+            cancellationToken);
+
+        ValidateStateRegistration(
+            request.PersonType,
+            request.StateRegistration,
+            request.IsStateRegistrationExempt,
+            resolvedFiscalUf,
+            errors);
 
         if (await _dbContext.Clients.AnyAsync(c => c.Document == normalizedDocument, cancellationToken))
         {
@@ -109,14 +121,13 @@ public sealed class ClientService
             ProtheusOperation = ProtheusOperationType.CREATE
         };
 
-        await ApplyCnpjOutsideSpWarningAsync(
+        ApplyCnpjOutsideSpWarning(
             client,
             request.PersonType,
             normalizedDocument,
-            request.State,
+            resolvedFiscalUf,
             request.OutOfSpCnpjWarningAccepted,
-            errors,
-            cancellationToken);
+            errors);
 
         if (errors.Count > 0)
         {
@@ -459,6 +470,18 @@ public sealed class ClientService
         var errors = ValidateClientRequest(request);
         var normalizedDocument = BrazilValidators.OnlyDigits(request.Document);
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var resolvedFiscalUf = await ResolveFiscalUfForRequestAsync(
+            request.PersonType,
+            normalizedDocument,
+            request.State,
+            cancellationToken);
+
+        ValidateStateRegistration(
+            request.PersonType,
+            request.StateRegistration,
+            request.IsStateRegistrationExempt,
+            resolvedFiscalUf,
+            errors);
 
         var client = await _dbContext.Clients.FirstOrDefaultAsync(s => s.Id == clientId, cancellationToken);
         if (client == null)
@@ -491,14 +514,13 @@ public sealed class ClientService
             return ServiceResult<ClientResult>.Failure(errors);
         }
 
-        await ApplyCnpjOutsideSpWarningAsync(
+        ApplyCnpjOutsideSpWarning(
             client,
             request.PersonType,
             normalizedDocument,
-            request.State,
+            resolvedFiscalUf,
             request.OutOfSpCnpjWarningAccepted,
-            errors,
-            cancellationToken);
+            errors);
 
         if (errors.Count > 0)
         {
@@ -553,6 +575,18 @@ public sealed class ClientService
         var errors = ValidateClientRequest(request);
         var normalizedDocument = BrazilValidators.OnlyDigits(request.Document);
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var resolvedFiscalUf = await ResolveFiscalUfForRequestAsync(
+            request.PersonType,
+            normalizedDocument,
+            request.State,
+            cancellationToken);
+
+        ValidateStateRegistration(
+            request.PersonType,
+            request.StateRegistration,
+            request.IsStateRegistrationExempt,
+            resolvedFiscalUf,
+            errors);
 
         var client = await _dbContext.Clients.FirstOrDefaultAsync(s => s.Id == clientId, cancellationToken);
         if (client == null || client.Status == ClientStatus.Inactive)
@@ -585,14 +619,13 @@ public sealed class ClientService
             return ServiceResult<ClientResult>.Failure(errors);
         }
 
-        await ApplyCnpjOutsideSpWarningAsync(
+        ApplyCnpjOutsideSpWarning(
             client,
             request.PersonType,
             normalizedDocument,
-            request.State,
+            resolvedFiscalUf,
             request.OutOfSpCnpjWarningAccepted,
-            errors,
-            cancellationToken);
+            errors);
 
         if (errors.Count > 0)
         {
@@ -810,11 +843,8 @@ public sealed class ClientService
         {
             if (!BrazilValidators.IsValidCnpj(request.Document))
                 errors.Add(new ValidationError("document", "Invalid CNPJ"));
-            var isExempt = request.IsStateRegistrationExempt || IsIsento(request.StateRegistration);
             if (string.IsNullOrWhiteSpace(request.StateRegistration))
                 errors.Add(new ValidationError("stateRegistration", "State registration is required"));
-            else if (!isExempt && !BrazilValidators.IsValidInscricaoEstadual(request.StateRegistration, request.State, false))
-                errors.Add(new ValidationError("stateRegistration", $"Invalid IE for UF {request.State}"));
         }
 
         return errors;
@@ -871,11 +901,8 @@ public sealed class ClientService
         {
             if (!BrazilValidators.IsValidCnpj(request.Document))
                 errors.Add(new ValidationError("document", "Invalid CNPJ"));
-            var isExempt = request.IsStateRegistrationExempt || IsIsento(request.StateRegistration);
             if (string.IsNullOrWhiteSpace(request.StateRegistration))
                 errors.Add(new ValidationError("stateRegistration", "State registration is required"));
-            else if (!isExempt && !BrazilValidators.IsValidInscricaoEstadual(request.StateRegistration, request.State, false))
-                errors.Add(new ValidationError("stateRegistration", $"Invalid IE for UF {request.State}"));
         }
 
         return errors;
@@ -899,14 +926,57 @@ public sealed class ClientService
         }
     }
 
-    private async Task ApplyCnpjOutsideSpWarningAsync(
-        Client client,
+    private async Task<string?> ResolveFiscalUfForRequestAsync(
         PersonType personType,
         string normalizedDocument,
         string? fallbackState,
-        bool warningAcceptedRequested,
-        List<ValidationError> errors,
         CancellationToken cancellationToken)
+    {
+        if (personType != PersonType.CNPJ || !BrazilValidators.IsValidCnpj(normalizedDocument))
+        {
+            return null;
+        }
+
+        return await ResolveCnpjUfAsync(normalizedDocument, fallbackState, cancellationToken);
+    }
+
+    private static void ValidateStateRegistration(
+        PersonType personType,
+        string? stateRegistration,
+        bool isStateRegistrationExempt,
+        string? resolvedFiscalUf,
+        List<ValidationError> errors)
+    {
+        if (personType != PersonType.CNPJ || string.IsNullOrWhiteSpace(stateRegistration))
+        {
+            return;
+        }
+
+        var isExempt = isStateRegistrationExempt || IsIsento(stateRegistration);
+        if (isExempt)
+        {
+            return;
+        }
+
+        var validationUf = NormalizeUf(resolvedFiscalUf);
+        if (string.IsNullOrWhiteSpace(validationUf))
+        {
+            return;
+        }
+
+        if (!BrazilValidators.IsValidInscricaoEstadual(stateRegistration, validationUf, false))
+        {
+            errors.Add(new ValidationError("stateRegistration", $"Invalid IE for fiscal UF {validationUf}"));
+        }
+    }
+
+    private static void ApplyCnpjOutsideSpWarning(
+        Client client,
+        PersonType personType,
+        string normalizedDocument,
+        string? resolvedUf,
+        bool warningAcceptedRequested,
+        List<ValidationError> errors)
     {
         var previousPersonType = client.PersonType;
         var previousDocument = client.Document;
@@ -924,9 +994,9 @@ public sealed class ClientService
             return;
         }
 
-        var resolvedUf = await ResolveCnpjUfAsync(normalizedDocument, fallbackState, cancellationToken);
-        var isCnpjOutsideSp = !string.Equals(resolvedUf, "SP", StringComparison.OrdinalIgnoreCase);
-        client.CnpjUf = resolvedUf;
+        var normalizedResolvedUf = NormalizeUf(resolvedUf) ?? string.Empty;
+        var isCnpjOutsideSp = !string.Equals(normalizedResolvedUf, "SP", StringComparison.OrdinalIgnoreCase);
+        client.CnpjUf = normalizedResolvedUf;
         client.IsCnpjOutsideSp = isCnpjOutsideSp;
 
         if (!isCnpjOutsideSp)
@@ -940,7 +1010,7 @@ public sealed class ClientService
             previousPersonType == PersonType.CNPJ &&
             previousIsCnpjOutsideSp &&
             string.Equals(previousDocument, normalizedDocument, StringComparison.Ordinal) &&
-            string.Equals(previousCnpjUf, resolvedUf, StringComparison.OrdinalIgnoreCase);
+            string.Equals(previousCnpjUf, normalizedResolvedUf, StringComparison.OrdinalIgnoreCase);
 
         var hasAccepted = warningAcceptedRequested || (sameScenario && previousWarningAccepted);
         if (!hasAccepted)
