@@ -7,6 +7,7 @@ using Phub.Application.Services;
 using Phub.Domain.Protheus;
 using Phub.Infrastructure.Integrations.Mabang;
 using Phub.Infrastructure.Integrations.MercadoLivre;
+using Phub.Infrastructure.Integrations.Shopee;
 using Phub.Infrastructure.Integrations.Shopify;
 using Phub.Infrastructure.Integrations.TikTokShop;
 using Phub.Infrastructure.Integrations.TinyErp;
@@ -50,6 +51,11 @@ try
         .ValidateDataAnnotations()
         .ValidateOnStart();
 
+    builder.Services.AddOptions<ShopeeOptions>()
+        .Bind(builder.Configuration.GetSection(ShopeeOptions.SectionName))
+        .ValidateDataAnnotations()
+        .ValidateOnStart();
+
     builder.Services.AddOptions<ProductVariantBackfillOptions>()
         .Bind(builder.Configuration.GetSection(ProductVariantBackfillOptions.SectionName))
         .ValidateOnStart();
@@ -64,7 +70,7 @@ try
     var connectionString = hasValidConnStr
         ? configuredConnectionString!
         : IsUsableDatabaseOptions(databaseOptions)
-            ? databaseOptions.BuildConnectionString()
+            ? databaseOptions!.BuildConnectionString()
             : throw new InvalidOperationException(
                 "Database connection is not configured. Set ConnectionStrings__Default.");
 
@@ -112,6 +118,13 @@ try
         client.Timeout = TimeSpan.FromSeconds(30);
     });
 
+    builder.Services.AddHttpClient<IShopeeApiClient, ShopeeApiClient>((sp, client) =>
+    {
+        var options = sp.GetRequiredService<IOptions<ShopeeOptions>>().Value;
+        client.BaseAddress = new Uri(options.ApiBaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
+
     // ── Application Services ──────────────────────────────────────────────────
     builder.Services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
     builder.Services.AddScoped<MercadoLivreSyncService>();
@@ -132,6 +145,7 @@ try
     builder.Services.AddScoped<CatalogAuthorizationService>();
     builder.Services.AddScoped<ProductVariantBackfillService>();
     builder.Services.AddScoped<MarketplaceCategoryResolver>();
+    builder.Services.AddScoped<ShopeeOAuthService>();
     builder.Services.AddScoped<ShopifyOAuthService>();
     builder.Services.AddScoped<TikTokShopOAuthService>();
     builder.Services.AddScoped<TikTokShopSyncService>();

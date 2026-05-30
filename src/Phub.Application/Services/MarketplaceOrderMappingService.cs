@@ -783,6 +783,10 @@ public sealed class MarketplaceOrderMappingService
                     ChannelSku: ReadString(root, "seller_sku") ?? ReadString(root, "SellerSku"),
                     ProductName: ReadString(root, "product_name") ?? ReadString(root, "ProductName"),
                     VariantName: ReadString(root, "sku_name") ?? ReadString(root, "SkuName")),
+                MarketplaceProvider.Shopee => new ChannelMetadata(
+                    ChannelSku: ReadString(root, "model_sku") ?? ReadString(root, "item_sku"),
+                    ProductName: ReadString(root, "item_name"),
+                    VariantName: ReadString(root, "model_name") ?? ReadString(root, "item_name")),
                 MarketplaceProvider.Shopify => new ChannelMetadata(
                     ChannelSku: ReadString(root, "Sku") ?? ReadString(root, "sku"),
                     ProductName: ReadString(root, "Title") ?? ReadString(root, "title"),
@@ -832,7 +836,7 @@ public sealed class MarketplaceOrderMappingService
 
         return provider switch
         {
-            MarketplaceProvider.MercadoLivre or MarketplaceProvider.TikTokShop or MarketplaceProvider.TinyErp
+            MarketplaceProvider.MercadoLivre or MarketplaceProvider.TikTokShop or MarketplaceProvider.TinyErp or MarketplaceProvider.Shopee
                 when long.TryParse(sellerId.Trim(), out var parsed) => parsed,
             MarketplaceProvider.Shopify => null,
             _ => null

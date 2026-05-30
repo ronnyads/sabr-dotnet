@@ -32,6 +32,7 @@ using Phub.Api.Tenant;
 using Phub.Domain.Protheus;
 using Phub.Infrastructure.Integrations.Mabang;
 using Phub.Infrastructure.Integrations.MercadoLivre;
+using Phub.Infrastructure.Integrations.Shopee;
 using Phub.Infrastructure.Integrations.TinyErp;
 using Phub.Infrastructure.Integrations.Shopify;
 using Phub.Infrastructure.Integrations.TikTokShop;
@@ -153,6 +154,11 @@ builder.Services.AddOptions<MercadoLivreOptions>()
 
 builder.Services.AddOptions<TikTokShopOptions>()
     .Bind(builder.Configuration.GetSection(TikTokShopOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddOptions<ShopeeOptions>()
+    .Bind(builder.Configuration.GetSection(ShopeeOptions.SectionName))
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
@@ -396,6 +402,7 @@ builder.Services.AddScoped<DevInitialSeeder>();
 builder.Services.AddSingleton<LoginAttemptService>();
 builder.Services.AddSingleton<MercadoLivreOAuthStateService>();
 builder.Services.AddSingleton<TikTokShopOAuthStateService>();
+builder.Services.AddSingleton<ShopeeOAuthStateService>();
 builder.Services.AddScoped<IProtheusOutboxProcessor, MockProtheusOutboxProcessor>();
 // Workers are disabled in the API by default — they run in Phub.Worker.
 // Set BackgroundWorkers:Enabled=true in appsettings to run both in a single process (dev only).
@@ -460,6 +467,13 @@ builder.Services.Configure<TinyErpOptions>(builder.Configuration.GetSection("Tin
 builder.Services.AddHttpClient<ITinyErpApiClient, TinyErpApiClient>();
 builder.Services.AddScoped<TinyOAuthService>();
 builder.Services.AddScoped<TinyIntegrationService>();
+builder.Services.AddHttpClient<IShopeeApiClient, ShopeeApiClient>((sp, client) =>
+{
+    var options = sp.GetRequiredService<IOptions<ShopeeOptions>>().Value;
+    client.BaseAddress = new Uri(options.ApiBaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<ShopeeOAuthService>();
 
 // ── Shopify ───────────────────────────────────────────────────────────────────
 builder.Services.Configure<ShopifyOptions>(builder.Configuration.GetSection(ShopifyOptions.SectionName));

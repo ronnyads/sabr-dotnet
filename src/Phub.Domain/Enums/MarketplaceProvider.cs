@@ -5,5 +5,6 @@ public enum MarketplaceProvider
     MercadoLivre = 1,
     TinyErp = 2,
     Shopify = 3,
-    TikTokShop = 4
+    TikTokShop = 4,
+    Shopee = 5
 }

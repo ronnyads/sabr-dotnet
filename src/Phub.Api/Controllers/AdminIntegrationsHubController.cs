@@ -56,6 +56,11 @@ public sealed class AdminIntegrationsHubController : ControllerBase
                     MarketplaceProvider.TikTokShop,
                     "TikTok Shop",
                     "Conecte contas TikTok Shop e prepare a operacao para sincronizacao futura.",
+                    counts),
+                BuildIntegrationCard(
+                    MarketplaceProvider.Shopee,
+                    "Shopee",
+                    "Conecte contas Shopee com OAuth oficial e sincronizacao de pedidos.",
                     counts)
             };
 
@@ -112,6 +117,17 @@ public sealed class AdminIntegrationsHubController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("shopee/clients")]
+    public async Task<IActionResult> GetShopeeClients(
+        [FromQuery] int skip = 0,
+        [FromQuery] int limit = 20,
+        [FromQuery] string? search = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await GetClientsByProvider(MarketplaceProvider.Shopee, skip, limit, search, cancellationToken);
+        return Ok(result);
+    }
+
     [HttpDelete("mercadolivre/clients/{clientId:guid}")]
     public Task<IActionResult> DisconnectMercadoLivre([FromRoute] Guid clientId, CancellationToken cancellationToken)
     {
@@ -134,6 +150,12 @@ public sealed class AdminIntegrationsHubController : ControllerBase
     public Task<IActionResult> DisconnectTikTokShop([FromRoute] Guid clientId, CancellationToken cancellationToken)
     {
         return DisconnectByProvider(MarketplaceProvider.TikTokShop, clientId, cancellationToken);
+    }
+
+    [HttpDelete("shopee/clients/{clientId:guid}")]
+    public Task<IActionResult> DisconnectShopee([FromRoute] Guid clientId, CancellationToken cancellationToken)
+    {
+        return DisconnectByProvider(MarketplaceProvider.Shopee, clientId, cancellationToken);
     }
 
     private static IntegrationCardResult BuildIntegrationCard(

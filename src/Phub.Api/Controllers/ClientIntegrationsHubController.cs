@@ -51,6 +51,7 @@ public sealed class ClientIntegrationsHubController : ControllerBase
             var tinyConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.TinyErp);
             var shopifyConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.Shopify);
             var tikTokConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.TikTokShop);
+            var shopeeConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.Shopee);
 
             var result = new List<ClientIntegrationCardResult>
             {
@@ -93,6 +94,16 @@ public sealed class ClientIntegrationsHubController : ControllerBase
                     ConnectedAt = tikTokConn?.CreatedAt.UtcDateTime,
                     LastSyncAt = tikTokConn?.LastSyncAt?.UtcDateTime,
                     Details = tikTokConn?.Nickname
+                },
+                new()
+                {
+                    Provider = (int)MarketplaceProvider.Shopee,
+                    Name = "Shopee",
+                    Description = "Conecte sua conta Shopee para sincronizar autorizacao oficial e pedidos.",
+                    IsConnected = shopeeConn != null,
+                    ConnectedAt = shopeeConn?.CreatedAt.UtcDateTime,
+                    LastSyncAt = shopeeConn?.LastSyncAt?.UtcDateTime,
+                    Details = shopeeConn?.Nickname
                 }
             };
 

@@ -43,6 +43,7 @@ public sealed class MarketplaceSyncWorker : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var mlSyncService = scope.ServiceProvider.GetRequiredService<MercadoLivreSyncService>();
+        var shopeeSyncService = scope.ServiceProvider.GetRequiredService<ShopeeOAuthService>();
         var shopifySyncService = scope.ServiceProvider.GetRequiredService<ShopifyOAuthService>();
         var tikTokShopSyncService = scope.ServiceProvider.GetRequiredService<TikTokShopSyncService>();
         var tinyIntegrationService = scope.ServiceProvider.GetRequiredService<TinyIntegrationService>();
@@ -54,6 +55,10 @@ public sealed class MarketplaceSyncWorker : BackgroundService
                 await mlSyncService.SyncAllConnectionsAsync(cancellationToken: cancellationToken);
                 await mlSyncService.ExpireReservationsAsync(cancellationToken);
             });
+
+        await RunProviderSyncAsync(
+            "Shopee",
+            () => shopeeSyncService.SyncAllConnectionsAsync(cancellationToken));
 
         await RunProviderSyncAsync(
             "Shopify",
