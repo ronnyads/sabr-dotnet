@@ -34,6 +34,7 @@ updated: 2026-09-07
 - [[01 - Dashboard de Vendas]]
 - [[02 - Linha do Tempo de Pedidos]]
 - [[03 - Deploy e Operação]]
+- [[04 - Onboarding de Clientes]]
 
 ## Regra de atualização deste vault
 

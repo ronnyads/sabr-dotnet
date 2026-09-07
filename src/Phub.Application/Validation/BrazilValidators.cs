@@ -34,7 +34,18 @@ public static class BrazilValidators
         if (string.Equals(value?.Trim(), "ISENTO", StringComparison.OrdinalIgnoreCase)) return true;
         var digits = OnlyDigits(value ?? string.Empty);
         if (string.IsNullOrWhiteSpace(digits)) return false;
-        return InscricaoEstadual.Validate(digits, uf, isExempt);
+
+        if (InscricaoEstadual.Validate(digits, uf, isExempt))
+        {
+            return true;
+        }
+
+        // The SP checksum table in Brazil.Data can lag behind numbers already issued by
+        // the state registry. Onboarding captures the IE for later document/admin review,
+        // so a structurally valid SP number must not be blocked only by that heuristic.
+        return string.Equals(uf?.Trim(), "SP", StringComparison.OrdinalIgnoreCase) &&
+               digits.Length == 12 &&
+               digits.Distinct().Count() > 1;
     }
 
     public static bool IsValidResponsibleDocument(string value)
