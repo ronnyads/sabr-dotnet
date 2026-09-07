@@ -35,6 +35,7 @@ updated: 2026-09-07
 - [[02 - Linha do Tempo de Pedidos]]
 - [[03 - Deploy e Operação]]
 - [[04 - Onboarding de Clientes]]
+- [[05 - Carteira e Depósitos]]
 
 ## Regra de atualização deste vault
 

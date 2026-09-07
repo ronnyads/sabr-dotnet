@@ -18,6 +18,8 @@ public interface IAppDbContext
     DbSet<ProtheusOutboxEvent> ProtheusOutboxEvents { get; }
     DbSet<WalletAccount> WalletAccounts { get; }
     DbSet<WalletLedgerEntry> WalletLedgerEntries { get; }
+    DbSet<WalletDepositRequest> WalletDepositRequests { get; }
+    DbSet<WalletDepositProof> WalletDepositProofs { get; }
     DbSet<IdempotencyKey> IdempotencyKeys { get; }
     DbSet<AuditEvent> AuditEvents { get; }
     DbSet<Product> Products { get; }

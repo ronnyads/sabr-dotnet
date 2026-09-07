@@ -16,6 +16,7 @@ O Mercado Livre fornece pedido, item/variação, `seller_sku`, quantidade, preç
 
 - ciclo normal: últimos 2 dias;
 - reconciliação noturna: últimos 7 dias;
+- sincronização manual: backfill dos últimos 365 dias, com chamadas remotas concorrentes e gravações EF sequenciais;
 - a busca agora percorre todas as páginas de até 50 resultados, limitada defensivamente a 10.000 pedidos por conexão/ciclo;
 - o Mercado Livre permite consultar pedidos mantidos por até 12 meses; o histórico maior depende do armazenamento local contínuo.
 
@@ -77,7 +78,7 @@ Resposta contém:
 A página inicial apresenta:
 
 1. radar de receita e pulso de sincronização;
-2. filtros de 7, 30 e 90 dias e canal;
+2. filtros de 7, 30, 90 dias e 12 meses, além do canal;
 3. indicadores comerciais;
 4. gráfico diário;
 5. distribuição de status;

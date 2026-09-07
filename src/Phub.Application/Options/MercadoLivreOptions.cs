@@ -31,6 +31,14 @@ public sealed class MercadoLivreOptions
     [Range(1, 30)]
     public int SyncLookbackDays { get; set; } = 2;
 
+    // Explicit client-initiated sync/backfill. Mercado Livre exposes order history
+    // for a much wider window than the incremental worker needs.
+    [Range(1, 730)]
+    public int ManualSyncLookbackDays { get; set; } = 365;
+
+    [Range(1, 12)]
+    public int SyncFetchConcurrency { get; set; } = 6;
+
     [Range(1, 30)]
     public int NightlyReconcileLookbackDays { get; set; } = 7;
 

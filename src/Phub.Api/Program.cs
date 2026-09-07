@@ -384,6 +384,7 @@ builder.Services.AddScoped<OrderFulfillmentService>();
 builder.Services.AddScoped<ClientSalesDashboardService>();
 builder.Services.AddScoped<ClientStoreService>();
 builder.Services.AddScoped<WalletService>();
+builder.Services.AddScoped<WalletDepositService>();
 builder.Services.AddScoped<CatalogAuthorizationService>();
 builder.Services.AddScoped<CatalogService>();
 builder.Services.AddScoped<CatalogSnapshotService>();

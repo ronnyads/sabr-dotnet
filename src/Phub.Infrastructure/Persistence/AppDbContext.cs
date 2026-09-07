@@ -28,6 +28,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<ProtheusOutboxEvent> ProtheusOutboxEvents => Set<ProtheusOutboxEvent>();
     public DbSet<WalletAccount> WalletAccounts => Set<WalletAccount>();
     public DbSet<WalletLedgerEntry> WalletLedgerEntries => Set<WalletLedgerEntry>();
+    public DbSet<WalletDepositRequest> WalletDepositRequests => Set<WalletDepositRequest>();
+    public DbSet<WalletDepositProof> WalletDepositProofs => Set<WalletDepositProof>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<Product> Products => Set<Product>();
@@ -1237,6 +1239,45 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasIndex(e => e.InternalOrderNumber)
                 .IsUnique()
                 .HasDatabaseName("ux_marketplace_orders_internal_order_number");
+        });
+
+        modelBuilder.Entity<WalletDepositRequest>(entity =>
+        {
+            entity.ToTable("wallet_deposit_requests", table =>
+            {
+                table.HasCheckConstraint("ck_wallet_deposit_amount_positive", "amount_cents > 0");
+                table.HasCheckConstraint("ck_wallet_deposit_proof_size", "proof_size_bytes > 0 AND proof_size_bytes <= 10485760");
+            });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.AmountCents).HasColumnName("amount_cents").IsRequired();
+            entity.Property(e => e.Method).HasColumnName("method").HasConversion<string>().HasMaxLength(24).IsRequired();
+            entity.Property(e => e.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(e => e.ProofFileName).HasColumnName("proof_file_name").HasMaxLength(180).IsRequired();
+            entity.Property(e => e.ProofContentType).HasColumnName("proof_content_type").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.ProofSizeBytes).HasColumnName("proof_size_bytes").IsRequired();
+            entity.Property(e => e.ClientNote).HasColumnName("client_note").HasMaxLength(500);
+            entity.Property(e => e.ReviewNote).HasColumnName("review_note").HasMaxLength(500);
+            entity.Property(e => e.ReviewedByUserId).HasColumnName("reviewed_by_user_id");
+            entity.Property(e => e.ReviewedAt).HasColumnName("reviewed_at");
+            entity.Property(e => e.LedgerEntryId).HasColumnName("ledger_entry_id");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.CreatedAt }).HasDatabaseName("ix_wallet_deposit_client_history");
+            entity.HasIndex(e => new { e.Status, e.CreatedAt }).HasDatabaseName("ix_wallet_deposit_review_queue");
+            entity.HasIndex(e => e.LedgerEntryId).IsUnique().HasFilter("ledger_entry_id IS NOT NULL");
+            entity.HasOne<Client>().WithMany().HasForeignKey(e => e.ClientId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<WalletLedgerEntry>().WithMany().HasForeignKey(e => e.LedgerEntryId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<WalletDepositProof>(entity =>
+        {
+            entity.ToTable("wallet_deposit_proofs");
+            entity.HasKey(e => e.DepositRequestId);
+            entity.Property(e => e.DepositRequestId).HasColumnName("deposit_request_id");
+            entity.Property(e => e.Content).HasColumnName("content").HasColumnType("bytea").IsRequired();
+            entity.HasOne(e => e.DepositRequest).WithOne(e => e.Proof).HasForeignKey<WalletDepositProof>(e => e.DepositRequestId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<MarketplaceOrderNumberSequence>(entity =>

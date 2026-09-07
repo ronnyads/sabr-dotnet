@@ -11,6 +11,7 @@ updated: 2026-09-07
 - Depois da troca obrigatória, cliente aprovado segue diretamente ao dashboard.
 - Cliente com cadastro incompleto continua pelas etapas Empresa, Contato/Endereço, Responsável e Documentos.
 - O status retornado por `GET /client/profile` é a fonte atualizada usada pelo frontend antes de decidir o destino.
+- “Salvar depois / Voltar ao login” executa logout real antes da navegação; apenas trocar a rota mantinha a sessão e o guard devolvia o cliente ao onboarding.
 
 ## Inscrição estadual
 

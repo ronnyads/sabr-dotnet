@@ -99,6 +99,73 @@ public sealed class MercadoLivreSyncService
         return ServiceResult<MercadoLivreSyncNowResult>.Success(aggregate);
     }
 
+    public Task<ServiceResult<MercadoLivreSyncNowResult>> SyncHistoryNowAsync(
+        string tenantId,
+        Guid clientId,
+        string? sellerId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return SyncScopedAsync(
+            tenantId,
+            clientId,
+            sellerId,
+            Math.Max(1, _options.ManualSyncLookbackDays),
+            cancellationToken);
+    }
+
+    private async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncScopedAsync(
+        string tenantId,
+        Guid clientId,
+        string? sellerId,
+        int lookbackDays,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
+        {
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(new[]
+            {
+                new ValidationError("context", "Invalid tenant/client context")
+            });
+        }
+
+        if (!MercadoLivreSellerIdParser.TryParseOptional(sellerId, out var normalizedSeller))
+        {
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(new[]
+            {
+                new ValidationError("sellerId", "SellerId must be numeric")
+            });
+        }
+
+        var query = _dbContext.TenantMarketplaceConnections
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == MarketplaceProvider.MercadoLivre);
+        if (normalizedSeller.HasValue)
+        {
+            query = query.Where(item => item.SellerId == normalizedSeller.Value);
+        }
+
+        var connections = await query.ToListAsync(cancellationToken);
+        if (connections.Count == 0)
+        {
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(new[]
+            {
+                new ValidationError("sellerId", "No active Mercado Livre connection found")
+            });
+        }
+
+        var aggregate = new MercadoLivreSyncNowResult();
+        foreach (var connection in connections)
+        {
+            var result = await SyncConnectionAsync(connection, lookbackDays, cancellationToken);
+            aggregate.OrdersUpserted += result.OrdersUpserted;
+            aggregate.ItemsUpserted += result.ItemsUpserted;
+            aggregate.ReservationsCreated += result.ReservationsCreated;
+        }
+
+        return ServiceResult<MercadoLivreSyncNowResult>.Success(aggregate);
+    }
+
     public async Task SyncAllConnectionsAsync(
         int? lookbackDaysOverride = null,
         CancellationToken cancellationToken = default)
@@ -220,9 +287,38 @@ public sealed class MercadoLivreSyncService
 
         var result = new MercadoLivreSyncNowResult();
         var changedSkus = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var orderId in orderIds.Distinct(StringComparer.Ordinal))
+        // Fetch remote details in parallel, but keep EF writes sequential because
+        // a DbContext is intentionally not thread-safe.
+        using var fetchGate = new SemaphoreSlim(Math.Clamp(_options.SyncFetchConcurrency, 1, 12));
+        var fetchTasks = orderIds
+            .Distinct(StringComparer.Ordinal)
+            .Select(async orderId =>
+            {
+                await fetchGate.WaitAsync(cancellationToken);
+                try
+                {
+                    var details = await _mercadoLivreApiClient.GetOrderAsync(orderId, accessToken, cancellationToken);
+                    MercadoLivreShipmentDetails? shipment = null;
+                    if (details != null && !string.IsNullOrWhiteSpace(details.ShipmentId))
+                    {
+                        shipment = await _mercadoLivreApiClient.GetShipmentAsync(
+                            details.ShipmentId,
+                            accessToken,
+                            cancellationToken);
+                    }
+
+                    return (details, shipment);
+                }
+                finally
+                {
+                    fetchGate.Release();
+                }
+            });
+        var remoteOrders = await Task.WhenAll(fetchTasks);
+
+        foreach (var remoteOrder in remoteOrders)
         {
-            var details = await _mercadoLivreApiClient.GetOrderAsync(orderId, accessToken, cancellationToken);
+            var details = remoteOrder.details;
             if (details == null)
             {
                 continue;
@@ -231,7 +327,7 @@ public sealed class MercadoLivreSyncService
             if (!string.IsNullOrWhiteSpace(details.ShipmentId))
             {
                 MercadoLivreShipmentDetails? shipmentDetails = null;
-                var shipment = await _mercadoLivreApiClient.GetShipmentAsync(details.ShipmentId, accessToken, cancellationToken);
+                var shipment = remoteOrder.shipment;
                 if (shipment != null)
                 {
                     shipmentDetails = shipment;

@@ -9,6 +9,7 @@ namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize]
+[Authorize(Roles = "Admin,SuperAdmin,Finance")]
 [Route("api/v1/wallet")]
 public sealed class WalletController : ControllerBase
 {
