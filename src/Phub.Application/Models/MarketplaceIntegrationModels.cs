@@ -360,6 +360,9 @@ public sealed class ClientSalesDashboardResult
     public decimal OrdersChangePercent { get; set; }
     public decimal RevenueChangePercent { get; set; }
     public List<ClientSalesDailyResult> DailySales { get; set; } = new();
+    public int TotalProducts { get; set; }
+    public List<ClientSalesSkuResult> Products { get; set; } = new();
+    // Compatibilidade com consumidores que ainda exibem somente o ranking.
     public List<ClientSalesSkuResult> TopSkus { get; set; } = new();
     public List<ClientSalesStatusResult> Statuses { get; set; } = new();
 }
@@ -374,6 +377,8 @@ public sealed class ClientSalesDailyResult
 
 public sealed class ClientSalesSkuResult
 {
+    public string ChannelItemId { get; set; } = string.Empty;
+    public string? ChannelVariationId { get; set; }
     public string Sku { get; set; } = string.Empty;
     public string? ProductName { get; set; }
     public int Orders { get; set; }

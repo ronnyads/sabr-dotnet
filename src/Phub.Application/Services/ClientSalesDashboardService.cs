@@ -73,12 +73,14 @@ public sealed class ClientSalesDashboardService
         var fees = currentPaid.SelectMany(order => order.Items).Sum(item => item.SaleFee ?? 0m);
         var totalUnits = currentPaid.SelectMany(order => order.Items).Sum(item => item.Quantity);
 
-        var topSkus = currentPaid
+        var products = currentPaid
             .SelectMany(order => order.Items.Select(item => new { order.Id, Item = item }))
-            .GroupBy(row => ResolveSku(row.Item), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(row => ResolveProductKey(row.Item), StringComparer.OrdinalIgnoreCase)
             .Select(group => new ClientSalesSkuResult
             {
-                Sku = group.Key,
+                ChannelItemId = group.First().Item.MlItemId,
+                ChannelVariationId = group.First().Item.MlVariationId,
+                Sku = ResolveDisplaySku(group.First().Item),
                 ProductName = group.Select(row => row.Item.ProductName).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
                 Orders = group.Select(row => row.Id).Distinct().Count(),
                 Units = group.Sum(row => row.Item.Quantity),
@@ -87,7 +89,7 @@ public sealed class ClientSalesDashboardService
             })
             .OrderByDescending(row => row.Units)
             .ThenByDescending(row => row.Revenue)
-            .Take(10)
+            .ThenBy(row => row.ProductName)
             .ToList();
 
         var dailyLookup = currentPaid
@@ -148,7 +150,9 @@ public sealed class ClientSalesDashboardService
             OrdersChangePercent = PercentageChange(current.Count, previous.Count),
             RevenueChangePercent = PercentageChange(grossRevenue, previousRevenue),
             DailySales = dailySales,
-            TopSkus = topSkus,
+            TotalProducts = products.Count,
+            Products = products,
+            TopSkus = products.Take(10).ToList(),
             Statuses = statuses
         };
     }
@@ -163,10 +167,17 @@ public sealed class ClientSalesDashboardService
     private static decimal ItemRevenue(MarketplaceOrderItem item)
         => (item.UnitPrice ?? item.FullUnitPrice ?? 0m) * item.Quantity;
 
-    private static string ResolveSku(MarketplaceOrderItem item)
+    private static string ResolveProductKey(MarketplaceOrderItem item)
+        => !string.IsNullOrWhiteSpace(item.SabrVariantSku)
+            ? $"sabr:{item.SabrVariantSku.Trim()}"
+            : !string.IsNullOrWhiteSpace(item.ChannelSku)
+                ? $"channel:{item.ChannelSku.Trim()}"
+                : $"item:{item.MlItemId.Trim()}:{item.MlVariationId?.Trim() ?? "base"}";
+
+    private static string ResolveDisplaySku(MarketplaceOrderItem item)
         => item.SabrVariantSku?.Trim()
            ?? item.ChannelSku?.Trim()
-           ?? "SEM-SKU";
+           ?? $"SEM SKU · {item.MlItemId}{(string.IsNullOrWhiteSpace(item.MlVariationId) ? string.Empty : $"/{item.MlVariationId}")}";
 
     private static string NormalizeStatus(string? status)
         => string.IsNullOrWhiteSpace(status) ? "unknown" : status.Trim().ToLowerInvariant();

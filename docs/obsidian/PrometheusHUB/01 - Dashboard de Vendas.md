@@ -100,6 +100,8 @@ A página inicial apresenta:
 - agregar apenas pedidos do cliente autenticado;
 - excluir outro cliente mesmo no mesmo tenant;
 - quantidade e receita por SKU;
+- lista completa de todos os produtos vendidos no período, com busca e paginação;
+- itens sem SKU permanecem separados por `item_id` e variação do canal, evitando totais agrupados incorretamente em uma única linha;
 - taxas e líquido;
 - status cancelado;
 - build cliente/admin;
