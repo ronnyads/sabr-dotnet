@@ -2,6 +2,10 @@
 
 Minimal start to get the new system online.
 
+## Contexto do produto e decisões
+
+O mapa vivo do PrometheusHUB fica em [`docs/obsidian/PrometheusHUB`](docs/obsidian/PrometheusHUB/00%20-%20Mapa%20do%20Sistema.md). A pasta pode ser aberta diretamente como um vault do Obsidian e registra arquitetura, dashboard de vendas, fluxo operacional de pedidos e deploy.
+
 ## Prerequisites
 - .NET 8 SDK
 
