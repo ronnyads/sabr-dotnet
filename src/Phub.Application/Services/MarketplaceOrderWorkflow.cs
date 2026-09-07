@@ -39,6 +39,7 @@ internal static class MarketplaceOrderWorkflow
         => internalStage is MarketplaceInternalStages.Pending
             or MarketplaceInternalStages.Received
             or MarketplaceInternalStages.Paid
+            or MarketplaceInternalStages.LabelGenerated
             or MarketplaceInternalStages.ProcessingStarted;
 
     public static MarketplaceCancellationRequestResult BuildCancellationRequest(MarketplaceOrder order)

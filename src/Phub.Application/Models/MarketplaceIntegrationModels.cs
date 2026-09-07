@@ -436,9 +436,12 @@ public sealed class MarketplaceShipmentMilestonesResult
 {
     public DateTimeOffset? ReceivedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
+    public DateTimeOffset? LabelGeneratedAt { get; set; }
+    // Compatibilidade temporaria com consumidores anteriores.
     public DateTimeOffset? ProcessingStartedAt { get; set; }
     public DateTimeOffset? LabelPrintedAt { get; set; }
     public DateTimeOffset? SeparatedAt { get; set; }
+    public DateTimeOffset? ProcessedAt { get; set; }
     public DateTimeOffset? DispatchedAt { get; set; }
 }
 
@@ -535,8 +538,10 @@ public sealed class MarketplaceShipmentMilestoneAdvanceRequest
 public static class MarketplaceShipmentMilestones
 {
     public const string ProcessingStarted = "processing_started";
+    public const string LabelGenerated = "label_generated";
     public const string LabelPrinted = "label_printed";
     public const string Separated = "separated";
+    public const string Processed = "processed";
     public const string Dispatched = "dispatched";
 }
 
@@ -545,9 +550,11 @@ public static class MarketplaceInternalStages
     public const string Pending = "pending";
     public const string Received = "received";
     public const string Paid = "paid";
+    public const string LabelGenerated = MarketplaceShipmentMilestones.LabelGenerated;
     public const string ProcessingStarted = MarketplaceShipmentMilestones.ProcessingStarted;
     public const string LabelPrinted = MarketplaceShipmentMilestones.LabelPrinted;
     public const string Separated = MarketplaceShipmentMilestones.Separated;
+    public const string Processed = MarketplaceShipmentMilestones.Processed;
     public const string Dispatched = MarketplaceShipmentMilestones.Dispatched;
 }
 
@@ -688,6 +695,7 @@ public static class MarketplaceEventTopics
     public const string AuditFulfillmentProcessingStarted = "audit.fulfillment.processing_started";
     public const string AuditFulfillmentLabelPrinted      = "audit.fulfillment.label_printed";
     public const string AuditFulfillmentSeparated         = "audit.fulfillment.separated";
+    public const string AuditFulfillmentProcessed         = "audit.fulfillment.processed";
     public const string AuditFulfillmentDispatched        = "audit.fulfillment.dispatched";
 }
 

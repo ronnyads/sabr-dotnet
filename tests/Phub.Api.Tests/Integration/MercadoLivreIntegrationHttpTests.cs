@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Phub.Api.Tests.TestHost;
 using Phub.Application.Models;
 using Phub.Application.Services;
+using Phub.Application.Validation;
 using Phub.Domain.Entities;
 using Phub.Domain.Enums;
 using Phub.Domain.Protheus;
@@ -954,6 +955,111 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(bytes.Length, shipment.LabelContentBytes!.Length);
         Assert.False(string.IsNullOrWhiteSpace(shipment.LabelSourceUrl));
         Assert.False(string.IsNullOrWhiteSpace(shipment.LabelSha256));
+    }
+
+    [Fact]
+    public async Task FulfillmentTimeline_RequiresStrictSequence_AndDoesNotProcessOnPayment()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-timeline-01";
+        const string tenantSlug = "mltimeline";
+        var clientId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        const string sellerId = "1001350";
+        const string shipmentId = "SHIPMENT-TIMELINE-01";
+        const string marketplaceOrderId = "ORDER-TIMELINE-01";
+        const string variantSku = "SKU-VAR-TIMELINE-01";
+
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+        await SeedVariantAsync("SKU-BASE-TIMELINE-01", variantSku, physicalStock: 5, reservedStock: 0);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var order = new MarketplaceOrder
+            {
+                Id = orderId,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlOrderId = marketplaceOrderId,
+                ShipmentId = shipmentId,
+                Status = MarketplaceOrderStatuses.Paid,
+                ImportedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+                SabrPaymentConfirmedAt = DateTimeOffset.UtcNow
+            };
+            order.Items.Add(new MarketplaceOrderItem
+            {
+                Id = Guid.NewGuid(),
+                MarketplaceOrderId = orderId,
+                MlItemId = "ITEM-TIMELINE-01",
+                SabrVariantSku = variantSku,
+                Quantity = 1,
+                MappingState = MarketplaceMappingStates.Mapped
+            });
+            db.MarketplaceOrders.Add(order);
+            db.MarketplaceShipments.Add(new MarketplaceShipment
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                ShipmentId = shipmentId,
+                MlOrderId = marketplaceOrderId,
+                Status = "ready_to_ship"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var labelBytes = System.Text.Encoding.UTF8.GetBytes("timeline-label");
+        _factory.FakeMercadoLivreApiClient.ShipmentLabelsById[shipmentId] = new MercadoLivreShipmentLabelResult
+        {
+            ShipmentId = shipmentId,
+            SourceUrl = $"https://api.mercadolibre.com/shipment_labels/{shipmentId}",
+            ContentType = "application/pdf",
+            Content = labelBytes,
+            Sha256 = "timeline-sha"
+        };
+
+        using var timelineScope = _factory.Services.CreateScope();
+        var fulfillmentService = timelineScope.ServiceProvider.GetRequiredService<OrderFulfillmentService>();
+        var labelService = timelineScope.ServiceProvider.GetRequiredService<MarketplaceShipmentLabelService>();
+
+        var fulfillmentBeforeLabel = await fulfillmentService.ListFulfillmentAsync(0, 20);
+        Assert.Contains(fulfillmentBeforeLabel.Items, item => item.Id == orderId && !item.HasLabel);
+
+        var labelResult = await labelService.GetOrFetchAsync(
+            tenantId, clientId, MarketplaceProvider.MercadoLivre, shipmentId);
+        Assert.True(labelResult.Succeeded);
+
+        var beforeManualSteps = await fulfillmentService.GetAdminOrderAsync(orderId);
+        Assert.True(beforeManualSteps.Succeeded);
+        Assert.NotNull(beforeManualSteps.Data!.InternalFulfillmentSummary?.Milestones.LabelGeneratedAt);
+        Assert.Null(beforeManualSteps.Data.InternalFulfillmentSummary?.Milestones.ProcessingStartedAt);
+        Assert.Null(beforeManualSteps.Data.InternalFulfillmentSummary?.Milestones.ProcessedAt);
+
+        Task<ServiceResult<OrderActionResult>> AdvanceAsync(string milestone) => fulfillmentService.AdvanceShipmentMilestoneAsync(
+            orderId, shipmentId, milestone, "timeline-admin");
+
+        Assert.False((await AdvanceAsync(MarketplaceShipmentMilestones.Separated)).Succeeded);
+        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.LabelPrinted)).Succeeded);
+        Assert.False((await AdvanceAsync(MarketplaceShipmentMilestones.Processed)).Succeeded);
+        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.Separated)).Succeeded);
+        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.Processed)).Succeeded);
+        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.Dispatched)).Succeeded);
+
+        var completed = await fulfillmentService.GetAdminOrderAsync(orderId);
+        Assert.True(completed.Succeeded);
+        var milestones = completed.Data!.InternalFulfillmentSummary!.Milestones;
+        Assert.NotNull(milestones.LabelPrintedAt);
+        Assert.NotNull(milestones.SeparatedAt);
+        Assert.NotNull(milestones.ProcessedAt);
+        Assert.NotNull(milestones.DispatchedAt);
+        Assert.Equal(MarketplaceInternalStages.Dispatched, completed.Data.CurrentInternalStage);
     }
 
     [Fact]

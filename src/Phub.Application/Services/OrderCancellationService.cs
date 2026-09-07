@@ -288,20 +288,28 @@ public sealed class OrderCancellationService
                            && item.ClientId == order.ClientId
                            && item.Provider == order.Provider
                            && shipmentIds.Contains(item.ResourceId)
-                           && (item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted
+                           && (item.Topic == MarketplaceEventTopics.AuditLabelGenerated
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted
                                || item.Topic == MarketplaceEventTopics.AuditFulfillmentLabelPrinted
                                || item.Topic == MarketplaceEventTopics.AuditFulfillmentSeparated
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessed
                                || item.Topic == MarketplaceEventTopics.AuditFulfillmentDispatched))
             .ToListAsync(cancellationToken);
 
         if (logs.Any(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentDispatched))
             return MarketplaceInternalStages.Dispatched;
+        if (logs.Any(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessed))
+            return MarketplaceInternalStages.Processed;
         if (logs.Any(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentSeparated))
             return MarketplaceInternalStages.Separated;
         if (logs.Any(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentLabelPrinted))
             return MarketplaceInternalStages.LabelPrinted;
-        if (logs.Any(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted) || order.SabrPaymentConfirmedAt.HasValue)
+        if (logs.Any(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted))
             return MarketplaceInternalStages.ProcessingStarted;
+        if (logs.Any(item => item.Topic == MarketplaceEventTopics.AuditLabelGenerated))
+            return MarketplaceInternalStages.LabelGenerated;
+        if (order.SabrPaymentConfirmedAt.HasValue)
+            return MarketplaceInternalStages.Paid;
         if (order.ImportedAt != default)
             return MarketplaceInternalStages.Received;
 

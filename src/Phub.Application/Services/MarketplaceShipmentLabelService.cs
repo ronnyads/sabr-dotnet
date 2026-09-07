@@ -81,6 +81,29 @@ public sealed class MarketplaceShipmentLabelService
 
         if (shipment.LabelContentBytes != null && shipment.LabelContentBytes.Length > 0)
         {
+            var hasGeneratedAudit = await _dbContext.MarketplaceEventLogs
+                .AsNoTracking()
+                .AnyAsync(item => item.TenantId == shipment.TenantId
+                                  && item.ClientId == shipment.ClientId
+                                  && item.Provider == shipment.Provider
+                                  && item.ResourceId == shipment.ShipmentId
+                                  && item.Topic == MarketplaceEventTopics.AuditLabelGenerated,
+                    cancellationToken);
+            if (!hasGeneratedAudit)
+            {
+                await _auditLogService.RecordAsync(
+                    shipment.TenantId,
+                    shipment.ClientId,
+                    shipment.Provider,
+                    shipment.SellerId,
+                    MarketplaceEventTopics.AuditLabelGenerated,
+                    shipment.ShipmentId,
+                    new { shipmentId = shipment.ShipmentId, restoredFromCache = true },
+                    "v1",
+                    cancellationToken);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+
             return ServiceResult<MarketplaceShipmentLabelDownloadResult>.Success(ToDownloadResult(shipment));
         }
 

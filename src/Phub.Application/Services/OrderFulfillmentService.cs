@@ -131,7 +131,7 @@ public sealed class OrderFulfillmentService
         var shipmentLookup = await BuildShipmentLookupAsync([order], cancellationToken);
         var orderShipments = GetOrderShipments(order, shipmentLookup);
         var view = await BuildOrderViewAsync(order, orderShipments, cancellationToken);
-        var shipments = orderShipments.Select(MapShipmentResult).ToList();
+        var shipments = orderShipments.Select(shipment => MapShipmentResult(shipment, order)).ToList();
         var inventoryByItemId = view.InventorySummary.Items.ToDictionary(item => item.OrderItemId);
         var result = MapClientOrderDetail(view, shipments, order.Items.Select(i =>
         {
@@ -645,6 +645,24 @@ public sealed class OrderFulfillmentService
             return await MarkSingleShipmentDispatchedAsync(order, normalizedShipmentId, advancedByAdminId, cancellationToken);
         }
 
+        var milestones = await GetShipmentMilestonesAsync(order, normalizedShipmentId, cancellationToken);
+        if (IsMilestoneCompleted(normalizedMilestone, milestones))
+        {
+            return ServiceResult<OrderActionResult>.Success(new OrderActionResult
+            {
+                OrderId = order.Id,
+                Status = order.Status,
+                Action = normalizedMilestone,
+                UpdatedAt = order.UpdatedAt
+            });
+        }
+
+        var sequenceError = ValidateMilestoneSequence(order, normalizedMilestone, milestones);
+        if (sequenceError != null)
+        {
+            return ServiceResult<OrderActionResult>.Failure([sequenceError]);
+        }
+
         var topic = GetMilestoneTopic(normalizedMilestone);
         if (topic == null)
         {
@@ -703,6 +721,19 @@ public sealed class OrderFulfillmentService
         order.UpdatedAt = nowUtc;
 
         var shipmentIds = await GetConcreteShipmentIdsAsync(order, cancellationToken);
+        foreach (var shipmentId in shipmentIds)
+        {
+            var milestones = await GetShipmentMilestonesAsync(order, shipmentId, cancellationToken);
+            if (!milestones.DispatchedAt.HasValue)
+            {
+                var sequenceError = ValidateMilestoneSequence(order, MarketplaceShipmentMilestones.Dispatched, milestones);
+                if (sequenceError != null)
+                {
+                    return ServiceResult<OrderActionResult>.Failure([sequenceError]);
+                }
+            }
+        }
+
         foreach (var shipmentId in shipmentIds)
         {
             await _auditLogService.RecordAsync(
@@ -820,7 +851,7 @@ public sealed class OrderFulfillmentService
                         StockStatus = inventory?.StockStatus ?? MarketplaceOrderItemStockStatuses.Unmapped
                     };
                 }).ToList(),
-                Shipments = view.Shipments.Select(MapShipmentResult).ToList(),
+                Shipments = view.Shipments.Select(shipment => MapShipmentResult(shipment, view.Order)).ToList(),
                 ChannelStatus = view.ChannelStatus,
                 CancellationRequest = view.CancellationRequest,
                 InternalFulfillmentSummary = view.InternalSummary
@@ -1177,9 +1208,11 @@ public sealed class OrderFulfillmentService
                            && tenantIds.Contains(item.TenantId)
                            && clientIds.Contains(item.ClientId)
                            && providers.Contains(item.Provider)
-                           && (item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted
+                           && (item.Topic == MarketplaceEventTopics.AuditLabelGenerated
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted
                                || item.Topic == MarketplaceEventTopics.AuditFulfillmentLabelPrinted
                                || item.Topic == MarketplaceEventTopics.AuditFulfillmentSeparated
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessed
                                || item.Topic == MarketplaceEventTopics.AuditFulfillmentDispatched))
             .ToListAsync(cancellationToken);
 
@@ -1195,6 +1228,11 @@ public sealed class OrderFulfillmentService
 
             result[key] = new MarketplaceShipmentMilestonesResult
             {
+                LabelGeneratedAt = shipmentLogs
+                    .Where(item => item.Topic == MarketplaceEventTopics.AuditLabelGenerated)
+                    .Select(item => (DateTimeOffset?)item.CreatedAt)
+                    .OrderByDescending(item => item)
+                    .FirstOrDefault(),
                 ProcessingStartedAt = shipmentLogs
                     .Where(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted)
                     .Select(item => (DateTimeOffset?)item.CreatedAt)
@@ -1207,6 +1245,12 @@ public sealed class OrderFulfillmentService
                     .FirstOrDefault(),
                 SeparatedAt = shipmentLogs
                     .Where(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentSeparated)
+                    .Select(item => (DateTimeOffset?)item.CreatedAt)
+                    .OrderByDescending(item => item)
+                    .FirstOrDefault(),
+                ProcessedAt = shipmentLogs
+                    .Where(item => item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessed
+                                   || item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted)
                     .Select(item => (DateTimeOffset?)item.CreatedAt)
                     .OrderByDescending(item => item)
                     .FirstOrDefault(),
@@ -1231,8 +1275,11 @@ public sealed class OrderFulfillmentService
             : [];
     }
 
-    private static MarketplaceShipmentResult MapShipmentResult(OrderShipmentSnapshot shipment)
+    private static MarketplaceShipmentResult MapShipmentResult(OrderShipmentSnapshot shipment, MarketplaceOrder order)
     {
+        shipment.Milestones.ReceivedAt = order.ImportedAt;
+        shipment.Milestones.PaidAt = order.SabrPaymentConfirmedAt;
+
         return new MarketplaceShipmentResult
         {
             ShipmentId = shipment.Shipment.ShipmentId,
@@ -1322,37 +1369,42 @@ public sealed class OrderFulfillmentService
         {
             ReceivedAt = order.ImportedAt,
             PaidAt = order.SabrPaymentConfirmedAt,
-            ProcessingStartedAt = GetLatest(shipment => shipment.Milestones.ProcessingStartedAt, shipments) ?? order.SabrPaymentConfirmedAt,
-            LabelPrintedAt = GetLatest(shipment => shipment.Milestones.LabelPrintedAt, shipments),
-            SeparatedAt = GetLatest(shipment => shipment.Milestones.SeparatedAt, shipments),
-            DispatchedAt = GetLatest(shipment => shipment.Milestones.DispatchedAt, shipments)
+            LabelGeneratedAt = GetLatestWhenAll(shipment => shipment.Milestones.LabelGeneratedAt, shipments),
+            ProcessingStartedAt = GetLatestWhenAll(shipment => shipment.Milestones.ProcessingStartedAt, shipments),
+            LabelPrintedAt = GetLatestWhenAll(shipment => shipment.Milestones.LabelPrintedAt, shipments),
+            SeparatedAt = GetLatestWhenAll(shipment => shipment.Milestones.SeparatedAt, shipments),
+            ProcessedAt = GetLatestWhenAll(shipment => shipment.Milestones.ProcessedAt, shipments),
+            DispatchedAt = GetLatestWhenAll(shipment => shipment.Milestones.DispatchedAt, shipments)
         };
 
         var stage = milestones.DispatchedAt.HasValue
             ? MarketplaceInternalStages.Dispatched
-            : milestones.SeparatedAt.HasValue
-                ? MarketplaceInternalStages.Separated
-                : milestones.LabelPrintedAt.HasValue
-                    ? MarketplaceInternalStages.LabelPrinted
-                    : milestones.ProcessingStartedAt.HasValue
-                        ? MarketplaceInternalStages.ProcessingStarted
-                        : milestones.PaidAt.HasValue
-                            ? MarketplaceInternalStages.Paid
-                            : milestones.ReceivedAt.HasValue
-                                ? MarketplaceInternalStages.Received
-                                : MarketplaceInternalStages.Pending;
+            : milestones.ProcessedAt.HasValue
+                ? MarketplaceInternalStages.Processed
+                : milestones.SeparatedAt.HasValue
+                    ? MarketplaceInternalStages.Separated
+                    : milestones.LabelPrintedAt.HasValue
+                        ? MarketplaceInternalStages.LabelPrinted
+                        : milestones.LabelGeneratedAt.HasValue
+                            ? MarketplaceInternalStages.LabelGenerated
+                            : milestones.PaidAt.HasValue
+                                ? MarketplaceInternalStages.Paid
+                                : milestones.ReceivedAt.HasValue
+                                    ? MarketplaceInternalStages.Received
+                                    : MarketplaceInternalStages.Pending;
 
         return new MarketplaceInternalFulfillmentSummaryResult
         {
             Stage = stage,
             Label = stage switch
             {
-                MarketplaceInternalStages.Dispatched => "Pedido enviado",
+                MarketplaceInternalStages.Dispatched => "Pedido despachado",
+                MarketplaceInternalStages.Processed => "Pedido processado",
                 MarketplaceInternalStages.Separated => "Pedido separado",
                 MarketplaceInternalStages.LabelPrinted => "Etiqueta impressa",
-                MarketplaceInternalStages.ProcessingStarted => "Em processamento",
+                MarketplaceInternalStages.LabelGenerated => "Etiqueta gerada",
                 MarketplaceInternalStages.Paid => "Pedido pago",
-                MarketplaceInternalStages.Received => "Pedido recebido",
+                MarketplaceInternalStages.Received => "Pedido baixado",
                 _ => "Aguardando processamento"
             },
             Milestones = milestones
@@ -1409,6 +1461,13 @@ public sealed class OrderFulfillmentService
                 Action = MarketplaceShipmentMilestones.Dispatched,
                 UpdatedAt = order.UpdatedAt
             });
+        }
+
+        var milestones = await GetShipmentMilestonesAsync(order, shipmentId, cancellationToken);
+        var sequenceError = ValidateMilestoneSequence(order, MarketplaceShipmentMilestones.Dispatched, milestones);
+        if (sequenceError != null)
+        {
+            return ServiceResult<OrderActionResult>.Failure([sequenceError]);
         }
 
         await _auditLogService.RecordAsync(
@@ -1672,6 +1731,91 @@ public sealed class OrderFulfillmentService
         return values.Count == 0 ? null : values[0];
     }
 
+    private static DateTimeOffset? GetLatestWhenAll(
+        Func<OrderShipmentSnapshot, DateTimeOffset?> selector,
+        IReadOnlyCollection<OrderShipmentSnapshot> shipments)
+    {
+        if (shipments.Count == 0 || shipments.Any(shipment => !selector(shipment).HasValue))
+        {
+            return null;
+        }
+
+        return GetLatest(selector, shipments);
+    }
+
+    private async Task<MarketplaceShipmentMilestonesResult> GetShipmentMilestonesAsync(
+        MarketplaceOrder order,
+        string shipmentId,
+        CancellationToken cancellationToken)
+    {
+        var logs = await _dbContext.MarketplaceEventLogs
+            .AsNoTracking()
+            .Where(item => item.TenantId == order.TenantId
+                           && item.ClientId == order.ClientId
+                           && item.Provider == order.Provider
+                           && item.ResourceId == shipmentId
+                           && (item.Topic == MarketplaceEventTopics.AuditLabelGenerated
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessingStarted
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentLabelPrinted
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentSeparated
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentProcessed
+                               || item.Topic == MarketplaceEventTopics.AuditFulfillmentDispatched))
+            .ToListAsync(cancellationToken);
+
+        DateTimeOffset? Latest(params string[] topics) => logs
+            .Where(item => topics.Contains(item.Topic, StringComparer.Ordinal))
+            .Select(item => (DateTimeOffset?)item.CreatedAt)
+            .OrderByDescending(item => item)
+            .FirstOrDefault();
+
+        var legacyProcessingAt = Latest(MarketplaceEventTopics.AuditFulfillmentProcessingStarted);
+        return new MarketplaceShipmentMilestonesResult
+        {
+            ReceivedAt = order.ImportedAt,
+            PaidAt = order.SabrPaymentConfirmedAt,
+            LabelGeneratedAt = Latest(MarketplaceEventTopics.AuditLabelGenerated),
+            ProcessingStartedAt = legacyProcessingAt,
+            LabelPrintedAt = Latest(MarketplaceEventTopics.AuditFulfillmentLabelPrinted),
+            SeparatedAt = Latest(MarketplaceEventTopics.AuditFulfillmentSeparated),
+            ProcessedAt = Latest(MarketplaceEventTopics.AuditFulfillmentProcessed) ?? legacyProcessingAt,
+            DispatchedAt = Latest(MarketplaceEventTopics.AuditFulfillmentDispatched)
+        };
+    }
+
+    private static ValidationError? ValidateMilestoneSequence(
+        MarketplaceOrder order,
+        string milestone,
+        MarketplaceShipmentMilestonesResult milestones)
+    {
+        if (!order.SabrPaymentConfirmedAt.HasValue)
+        {
+            return new ValidationError("milestone", "MILESTONE_SEQUENCE_INVALID: PAYMENT_REQUIRED");
+        }
+
+        var required = milestone switch
+        {
+            MarketplaceShipmentMilestones.LabelPrinted when !milestones.LabelGeneratedAt.HasValue => "LABEL_GENERATED_REQUIRED",
+            MarketplaceShipmentMilestones.Separated when !milestones.LabelPrintedAt.HasValue => "LABEL_PRINTED_REQUIRED",
+            MarketplaceShipmentMilestones.Processed when !milestones.SeparatedAt.HasValue => "SEPARATED_REQUIRED",
+            MarketplaceShipmentMilestones.Dispatched when !milestones.ProcessedAt.HasValue => "PROCESSED_REQUIRED",
+            _ => null
+        };
+
+        return required == null
+            ? null
+            : new ValidationError("milestone", $"MILESTONE_SEQUENCE_INVALID: {required}");
+    }
+
+    private static bool IsMilestoneCompleted(string milestone, MarketplaceShipmentMilestonesResult milestones)
+        => milestone switch
+        {
+            MarketplaceShipmentMilestones.LabelPrinted => milestones.LabelPrintedAt.HasValue,
+            MarketplaceShipmentMilestones.Separated => milestones.SeparatedAt.HasValue,
+            MarketplaceShipmentMilestones.Processed => milestones.ProcessedAt.HasValue,
+            MarketplaceShipmentMilestones.Dispatched => milestones.DispatchedAt.HasValue,
+            _ => false
+        };
+
     private static bool MatchesInternalStatus(OrderView view, string? filter)
         => string.IsNullOrWhiteSpace(filter)
            || string.Equals(view.CurrentInternalStage, filter, StringComparison.OrdinalIgnoreCase);
@@ -1701,9 +1845,10 @@ public sealed class OrderFulfillmentService
     private static string? NormalizeMilestone(string? milestone)
         => milestone?.Trim().ToLowerInvariant() switch
         {
-            MarketplaceShipmentMilestones.ProcessingStarted => MarketplaceShipmentMilestones.ProcessingStarted,
+            MarketplaceShipmentMilestones.ProcessingStarted => MarketplaceShipmentMilestones.Processed,
             MarketplaceShipmentMilestones.LabelPrinted => MarketplaceShipmentMilestones.LabelPrinted,
             MarketplaceShipmentMilestones.Separated => MarketplaceShipmentMilestones.Separated,
+            MarketplaceShipmentMilestones.Processed => MarketplaceShipmentMilestones.Processed,
             MarketplaceShipmentMilestones.Dispatched => MarketplaceShipmentMilestones.Dispatched,
             _ => null
         };
@@ -1711,9 +1856,9 @@ public sealed class OrderFulfillmentService
     private static string? GetMilestoneTopic(string? milestone)
         => milestone switch
         {
-            MarketplaceShipmentMilestones.ProcessingStarted => MarketplaceEventTopics.AuditFulfillmentProcessingStarted,
             MarketplaceShipmentMilestones.LabelPrinted => MarketplaceEventTopics.AuditFulfillmentLabelPrinted,
             MarketplaceShipmentMilestones.Separated => MarketplaceEventTopics.AuditFulfillmentSeparated,
+            MarketplaceShipmentMilestones.Processed => MarketplaceEventTopics.AuditFulfillmentProcessed,
             MarketplaceShipmentMilestones.Dispatched => MarketplaceEventTopics.AuditFulfillmentDispatched,
             _ => null
         };
