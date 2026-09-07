@@ -37,6 +37,8 @@ public class AdminOrderListItemResult
     public string SellerId { get; set; } = string.Empty;
     public string MlOrderId { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string? CurrencyId { get; set; }
+    public decimal? TotalAmount { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
     public string? ShipmentId { get; set; }
@@ -187,7 +189,14 @@ public sealed class MercadoLivreOrderItemDetails
 {
     public string MlItemId { get; set; } = string.Empty;
     public string? MlVariationId { get; set; }
+    public string? ChannelSku { get; set; }
+    public string? ProductName { get; set; }
     public int Quantity { get; set; }
+    public string? CurrencyId { get; set; }
+    public decimal? UnitPrice { get; set; }
+    public decimal? FullUnitPrice { get; set; }
+    public decimal? GrossPrice { get; set; }
+    public decimal? SaleFee { get; set; }
     public string RawJson { get; set; } = "{}";
 }
 
@@ -196,7 +205,11 @@ public sealed class MercadoLivreOrderDetails
     public string MlOrderId { get; set; } = string.Empty;
     public string? SellerId { get; set; }
     public string Status { get; set; } = string.Empty;
+    public DateTimeOffset? ChannelCreatedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
+    public string? CurrencyId { get; set; }
+    public decimal? TotalAmount { get; set; }
+    public decimal? PaidAmount { get; set; }
     public string? ShipmentId { get; set; }
     public string? ShippingMode { get; set; }
     public string? LogisticType { get; set; }
@@ -328,6 +341,54 @@ public sealed class MercadoLivreSyncNowResult
     public int ReservationsCreated { get; set; }
 }
 
+public sealed class ClientSalesDashboardResult
+{
+    public DateTimeOffset From { get; set; }
+    public DateTimeOffset To { get; set; }
+    public DateTimeOffset GeneratedAt { get; set; }
+    public DateTimeOffset? LastSyncedAt { get; set; }
+    public string CurrencyId { get; set; } = "BRL";
+    public int TotalOrders { get; set; }
+    public int PaidOrders { get; set; }
+    public int TotalUnits { get; set; }
+    public decimal GrossRevenue { get; set; }
+    public decimal MarketplaceFees { get; set; }
+    public decimal NetRevenue { get; set; }
+    public decimal AverageTicket { get; set; }
+    public int CancelledOrders { get; set; }
+    public int UnmappedUnits { get; set; }
+    public decimal OrdersChangePercent { get; set; }
+    public decimal RevenueChangePercent { get; set; }
+    public List<ClientSalesDailyResult> DailySales { get; set; } = new();
+    public List<ClientSalesSkuResult> TopSkus { get; set; } = new();
+    public List<ClientSalesStatusResult> Statuses { get; set; } = new();
+}
+
+public sealed class ClientSalesDailyResult
+{
+    public DateOnly Date { get; set; }
+    public int Orders { get; set; }
+    public int Units { get; set; }
+    public decimal Revenue { get; set; }
+}
+
+public sealed class ClientSalesSkuResult
+{
+    public string Sku { get; set; } = string.Empty;
+    public string? ProductName { get; set; }
+    public int Orders { get; set; }
+    public int Units { get; set; }
+    public decimal Revenue { get; set; }
+    public bool IsMapped { get; set; }
+}
+
+public sealed class ClientSalesStatusResult
+{
+    public string Status { get; set; } = string.Empty;
+    public int Orders { get; set; }
+    public decimal Percentage { get; set; }
+}
+
 public sealed class MarketplaceOrderListItemResult
 {
     public Guid Id { get; set; }
@@ -336,6 +397,10 @@ public sealed class MarketplaceOrderListItemResult
     public string SellerId { get; set; } = string.Empty;
     public string MlOrderId { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public DateTimeOffset? ChannelCreatedAt { get; set; }
+    public string? CurrencyId { get; set; }
+    public decimal? TotalAmount { get; set; }
+    public decimal? PaidAmount { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
     public string? ShippingMode { get; set; }
@@ -372,6 +437,10 @@ public sealed class MarketplaceOrderDetailResult
     public string SellerId { get; set; } = string.Empty;
     public string MlOrderId { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public DateTimeOffset? ChannelCreatedAt { get; set; }
+    public string? CurrencyId { get; set; }
+    public decimal? TotalAmount { get; set; }
+    public decimal? PaidAmount { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
     public string? ShipmentId { get; set; }
@@ -405,6 +474,9 @@ public sealed class MarketplaceOrderItemDetailResult
     public string? SabrVariantSku { get; set; }
     public string? ProductName { get; set; }
     public int Quantity { get; set; }
+    public string? CurrencyId { get; set; }
+    public decimal? UnitPrice { get; set; }
+    public decimal? SaleFee { get; set; }
     public int ReservedQuantity { get; set; }
     public int MissingQuantity { get; set; }
     public int? AvailableStock { get; set; }

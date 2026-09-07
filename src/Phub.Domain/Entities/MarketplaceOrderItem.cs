@@ -12,8 +12,15 @@ public sealed class MarketplaceOrderItem
     public long SellerId { get; set; }
     public string MlItemId { get; set; } = string.Empty;
     public string? MlVariationId { get; set; }
+    public string? ChannelSku { get; set; }
     public string? SabrVariantSku { get; set; }
+    public string? ProductName { get; set; }
     public int Quantity { get; set; }
+    public string? CurrencyId { get; set; }
+    public decimal? UnitPrice { get; set; }
+    public decimal? FullUnitPrice { get; set; }
+    public decimal? GrossPrice { get; set; }
+    public decimal? SaleFee { get; set; }
     public int ReservedQuantity { get; set; }
     public string MappingState { get; set; } = "UNMAPPED";
     public string? RawJson { get; set; }

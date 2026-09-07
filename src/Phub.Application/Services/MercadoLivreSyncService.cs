@@ -313,7 +313,11 @@ public sealed class MercadoLivreSyncService
         }
 
         order.Status = details.Status;
+        order.ChannelCreatedAt = details.ChannelCreatedAt;
         order.PaidAt = details.PaidAt;
+        order.CurrencyId = details.CurrencyId;
+        order.TotalAmount = details.TotalAmount;
+        order.PaidAmount = details.PaidAmount;
         order.ShipmentId = details.ShipmentId;
         order.ShippingMode = details.ShippingMode;
         order.LogisticType = details.LogisticType;
@@ -358,11 +362,18 @@ public sealed class MercadoLivreSyncService
                 connection.Id,
                 incomingItem.MlItemId,
                 incomingItem.MlVariationId,
-                channelSku: null,
+                channelSku: incomingItem.ChannelSku,
                 cancellationToken);
             orderItem.Quantity = incomingItem.Quantity;
+            orderItem.ChannelSku = incomingItem.ChannelSku;
             orderItem.MappingState = resolution.MappingState;
             orderItem.SabrVariantSku = resolution.SabrVariantSku;
+            orderItem.ProductName = incomingItem.ProductName;
+            orderItem.CurrencyId = incomingItem.CurrencyId;
+            orderItem.UnitPrice = incomingItem.UnitPrice;
+            orderItem.FullUnitPrice = incomingItem.FullUnitPrice;
+            orderItem.GrossPrice = incomingItem.GrossPrice;
+            orderItem.SaleFee = incomingItem.SaleFee;
             orderItem.RawJson = incomingItem.RawJson;
             orderItem.UpdatedAt = nowUtc;
             itemsTouched++;

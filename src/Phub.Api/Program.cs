@@ -381,6 +381,7 @@ builder.Services.AddScoped<MarketplaceOrderPaymentService>();
 builder.Services.AddScoped<MarketplaceShipmentLabelService>();
 builder.Services.AddScoped<OrderCancellationService>();
 builder.Services.AddScoped<OrderFulfillmentService>();
+builder.Services.AddScoped<ClientSalesDashboardService>();
 builder.Services.AddScoped<ClientStoreService>();
 builder.Services.AddScoped<WalletService>();
 builder.Services.AddScoped<CatalogAuthorizationService>();

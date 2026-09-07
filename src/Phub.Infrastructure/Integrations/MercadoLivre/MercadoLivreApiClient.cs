@@ -122,30 +122,41 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
     {
         return await ExecuteWithResilienceAsync(async ct =>
         {
-            var requestUri =
-                $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
-                $"&order.date_created.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
-                $"&order.date_created.to={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}";
-
-            using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
-            using var response = await _httpClient.SendAsync(request, ct);
-            response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
+            const int pageSize = 50;
+            const int maxOrdersPerCycle = 10_000;
             var orderIds = new List<string>();
-            if (doc.RootElement.TryGetProperty("results", out var resultsElement) && resultsElement.ValueKind == JsonValueKind.Array)
+            for (var offset = 0; offset < maxOrdersPerCycle; offset += pageSize)
             {
-                foreach (var entry in resultsElement.EnumerateArray())
+                var requestUri =
+                    $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
+                    $"&order.date_created.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+                    $"&order.date_created.to={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+                    $"&sort=date_asc&limit={pageSize}&offset={offset}";
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                using var response = await _httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
+                var json = await response.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(json);
+
+                var received = 0;
+                if (doc.RootElement.TryGetProperty("results", out var resultsElement)
+                    && resultsElement.ValueKind == JsonValueKind.Array)
                 {
-                    var id = GetOptionalString(entry, "id");
-                    if (!string.IsNullOrWhiteSpace(id))
+                    foreach (var entry in resultsElement.EnumerateArray())
                     {
-                        orderIds.Add(id);
+                        received++;
+                        var id = GetOptionalString(entry, "id");
+                        if (!string.IsNullOrWhiteSpace(id)) orderIds.Add(id);
                     }
                 }
+
+                var total = doc.RootElement.TryGetProperty("paging", out var paging)
+                            && paging.TryGetProperty("total", out var totalElement)
+                    ? ParseInt(totalElement)
+                    : offset + received;
+                if (received < pageSize || offset + received >= total) break;
             }
 
             return (IReadOnlyList<string>)orderIds;
@@ -220,7 +231,16 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                     {
                         MlItemId = itemId,
                         MlVariationId = GetOptionalString(itemElement, "variation_id"),
+                        ChannelSku = GetOptionalString(itemElement, "seller_sku")
+                                     ?? GetOptionalString(itemElement, "seller_custom_field")
+                                     ?? ExtractVariationSku(itemElement),
+                        ProductName = GetOptionalString(itemElement, "title"),
                         Quantity = quantity,
+                        CurrencyId = GetOptionalString(orderItem, "currency_id"),
+                        UnitPrice = GetOptionalDecimal(orderItem, "unit_price"),
+                        FullUnitPrice = GetOptionalDecimal(orderItem, "full_unit_price"),
+                        GrossPrice = GetOptionalDecimal(orderItem, "gross_price"),
+                        SaleFee = GetOptionalDecimal(orderItem, "sale_fee"),
                         RawJson = orderItem.GetRawText()
                     });
                 }
@@ -231,7 +251,11 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 MlOrderId = GetOptionalString(root, "id") ?? orderId,
                 SellerId = ResolveOrderSellerId(root),
                 Status = GetOptionalString(root, "status") ?? string.Empty,
+                ChannelCreatedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_created")),
                 PaidAt = paidAt,
+                CurrencyId = GetOptionalString(root, "currency_id"),
+                TotalAmount = GetOptionalDecimal(root, "total_amount"),
+                PaidAmount = GetOptionalDecimal(root, "paid_amount"),
                 ShipmentId = shipmentId,
                 ShippingMode = shippingMode,
                 LogisticType = logisticType,

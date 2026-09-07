@@ -1206,7 +1206,11 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.InternalOrderNumber).HasColumnName("internal_order_number").HasMaxLength(32);
             entity.Property(e => e.MlOrderId).HasColumnName("ml_order_id").HasMaxLength(80).IsRequired();
             entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.ChannelCreatedAt).HasColumnName("channel_created_at");
             entity.Property(e => e.PaidAt).HasColumnName("paid_at");
+            entity.Property(e => e.CurrencyId).HasColumnName("currency_id").HasMaxLength(3);
+            entity.Property(e => e.TotalAmount).HasColumnName("total_amount").HasPrecision(18, 2);
+            entity.Property(e => e.PaidAmount).HasColumnName("paid_amount").HasPrecision(18, 2);
             entity.Property(e => e.ShipmentId).HasColumnName("shipment_id").HasMaxLength(80);
             entity.Property(e => e.ShippingMode).HasColumnName("shipping_mode").HasMaxLength(80);
             entity.Property(e => e.LogisticType).HasColumnName("logistic_type").HasMaxLength(80);
@@ -1228,6 +1232,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .HasDatabaseName("ux_marketplace_orders_scope_provider_ml_order");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.Status, e.ImportedAt })
                 .HasDatabaseName("ix_marketplace_orders_scope_status_imported");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.ChannelCreatedAt })
+                .HasDatabaseName("ix_marketplace_orders_scope_channel_created");
             entity.HasIndex(e => e.InternalOrderNumber)
                 .IsUnique()
                 .HasDatabaseName("ux_marketplace_orders_internal_order_number");
@@ -1254,8 +1260,15 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
             entity.Property(e => e.MlItemId).HasColumnName("ml_item_id").HasMaxLength(80).IsRequired();
             entity.Property(e => e.MlVariationId).HasColumnName("ml_variation_id").HasMaxLength(80);
+            entity.Property(e => e.ChannelSku).HasColumnName("channel_sku").HasMaxLength(120);
             entity.Property(e => e.SabrVariantSku).HasColumnName("sabr_variant_sku").HasMaxLength(Sku.MaxLength);
+            entity.Property(e => e.ProductName).HasColumnName("product_name").HasMaxLength(300);
             entity.Property(e => e.Quantity).HasColumnName("quantity").IsRequired();
+            entity.Property(e => e.CurrencyId).HasColumnName("currency_id").HasMaxLength(3);
+            entity.Property(e => e.UnitPrice).HasColumnName("unit_price").HasPrecision(18, 2);
+            entity.Property(e => e.FullUnitPrice).HasColumnName("full_unit_price").HasPrecision(18, 2);
+            entity.Property(e => e.GrossPrice).HasColumnName("gross_price").HasPrecision(18, 2);
+            entity.Property(e => e.SaleFee).HasColumnName("sale_fee").HasPrecision(18, 2);
             entity.Property(e => e.ReservedQuantity).HasColumnName("reserved_quantity").IsRequired();
             entity.Property(e => e.MappingState).HasColumnName("mapping_state").HasMaxLength(40).IsRequired();
             entity.Property(e => e.RawJson).HasColumnName("raw_json").HasColumnType("jsonb");
@@ -1263,12 +1276,15 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
             entity.HasCheckConstraint("ck_marketplace_order_items_quantity_positive", "\"quantity\" > 0");
             entity.HasCheckConstraint("ck_marketplace_order_items_reserved_non_negative", "\"reserved_quantity\" >= 0");
+            entity.HasCheckConstraint("ck_marketplace_order_items_prices_non_negative", "(\"unit_price\" IS NULL OR \"unit_price\" >= 0) AND (\"full_unit_price\" IS NULL OR \"full_unit_price\" >= 0) AND (\"gross_price\" IS NULL OR \"gross_price\" >= 0) AND (\"sale_fee\" IS NULL OR \"sale_fee\" >= 0)");
             entity.HasCheckConstraint("ck_marketplace_order_items_sku_format", "\"sabr_variant_sku\" IS NULL OR \"sabr_variant_sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");
             entity.HasIndex(e => new { e.MarketplaceOrderId, e.MlItemId, e.MlVariationId })
                 .IsUnique()
                 .HasDatabaseName("ux_marketplace_order_items_order_item_variation");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.MappingState })
                 .HasDatabaseName("ix_marketplace_order_items_scope_mapping_state");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.SabrVariantSku })
+                .HasDatabaseName("ix_marketplace_order_items_scope_sku");
             entity.HasOne(e => e.MarketplaceOrder)
                 .WithMany(o => o.Items)
                 .HasForeignKey(e => e.MarketplaceOrderId)
