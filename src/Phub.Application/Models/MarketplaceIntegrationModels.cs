@@ -432,6 +432,7 @@ public sealed class MarketplaceShipmentResult
     public MarketplaceShipmentMilestonesResult Milestones { get; set; } = new();
 }
 
+/// <summary>Shared per-shipment operational timeline exposed to admin and client applications.</summary>
 public sealed class MarketplaceShipmentMilestonesResult
 {
     public DateTimeOffset? ReceivedAt { get; set; }
