@@ -7,6 +7,11 @@ public interface IMercadoLivreApiClient
     Task<MercadoLivreTokenResponse> ExchangeCodeAsync(string code, CancellationToken cancellationToken = default);
     Task<MercadoLivreTokenResponse> RefreshTokenAsync(string refreshToken, CancellationToken cancellationToken = default);
     Task<MercadoLivreUserMeResponse> GetUserMeAsync(string accessToken, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchSellerItemsAsync(
+        string sellerId,
+        string query,
+        string accessToken,
+        CancellationToken cancellationToken = default);
     Task<IReadOnlyList<string>> SearchOrdersAsync(
         string sellerId,
         DateTimeOffset from,

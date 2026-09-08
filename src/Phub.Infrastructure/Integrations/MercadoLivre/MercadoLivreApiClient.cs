@@ -113,6 +113,112 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchSellerItemsAsync(
+        string sellerId,
+        string query,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = await ExecuteWithResilienceAsync(async ct =>
+        {
+            const int pageSize = 50;
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var offset = 0; offset < 1000; offset += pageSize)
+            {
+                var uri = $"/users/{Uri.EscapeDataString(sellerId)}/items/search?limit={pageSize}&offset={offset}";
+                if (!string.IsNullOrWhiteSpace(query))
+                {
+                    uri += $"&q={Uri.EscapeDataString(query.Trim())}";
+                }
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                using var response = await _httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
+                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                var received = 0;
+                if (doc.RootElement.TryGetProperty("results", out var entries) && entries.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var entry in entries.EnumerateArray())
+                    {
+                        received++;
+                        var id = entry.ValueKind == JsonValueKind.String ? entry.GetString() : GetOptionalString(entry, "id");
+                        if (!string.IsNullOrWhiteSpace(id)) result.Add(id);
+                    }
+                }
+
+                var total = doc.RootElement.TryGetProperty("paging", out var paging) && paging.TryGetProperty("total", out var totalNode)
+                    ? ParseInt(totalNode)
+                    : offset + received;
+                if (received < pageSize || offset + received >= total) break;
+            }
+            return result.ToList();
+        }, cancellationToken);
+
+        var items = new List<MercadoLivreSellerItemDetails>();
+        foreach (var id in ids)
+        {
+            var item = await GetSellerItemAsync(id, accessToken, cancellationToken);
+            if (item != null) items.Add(item);
+        }
+        return items;
+    }
+
+    private async Task<MercadoLivreSellerItemDetails?> GetSellerItemAsync(
+        string itemId,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"/items/{Uri.EscapeDataString(itemId)}?include_attributes=all");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            using var response = await _httpClient.SendAsync(request, ct);
+            if (response.StatusCode == HttpStatusCode.NotFound) return null;
+            response.EnsureSuccessStatusCode();
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var root = doc.RootElement;
+
+            static string? Attribute(JsonElement node, params string[] ids)
+            {
+                if (!node.TryGetProperty("attributes", out var attributes) || attributes.ValueKind != JsonValueKind.Array) return null;
+                foreach (var attribute in attributes.EnumerateArray())
+                {
+                    var id = GetOptionalString(attribute, "id");
+                    if (!ids.Any(expected => string.Equals(id, expected, StringComparison.OrdinalIgnoreCase))) continue;
+                    return GetOptionalString(attribute, "value_name") ?? GetOptionalString(attribute, "value_id");
+                }
+                return null;
+            }
+
+            var variations = new List<MercadoLivreSellerVariationDetails>();
+            if (root.TryGetProperty("variations", out var variationNodes) && variationNodes.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var variation in variationNodes.EnumerateArray())
+                {
+                    variations.Add(new MercadoLivreSellerVariationDetails
+                    {
+                        VariationId = GetOptionalString(variation, "id") ?? string.Empty,
+                        SellerSku = GetOptionalString(variation, "seller_custom_field") ?? Attribute(variation, "SELLER_SKU")
+                    });
+                }
+            }
+
+            return new MercadoLivreSellerItemDetails
+            {
+                ItemId = GetOptionalString(root, "id") ?? itemId,
+                Title = GetOptionalString(root, "title") ?? string.Empty,
+                SellerSku = GetOptionalString(root, "seller_custom_field") ?? Attribute(root, "SELLER_SKU"),
+                Brand = Attribute(root, "BRAND"),
+                Ean = Attribute(root, "GTIN", "EAN"),
+                ThumbnailUrl = GetOptionalString(root, "thumbnail"),
+                Price = GetOptionalDecimal(root, "price") ?? 0m,
+                Status = GetOptionalString(root, "status") ?? string.Empty,
+                Variations = variations
+            };
+        }, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<string>> SearchOrdersAsync(
         string sellerId,
         DateTimeOffset from,

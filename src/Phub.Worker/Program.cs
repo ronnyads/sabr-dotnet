@@ -132,6 +132,7 @@ try
     builder.Services.AddScoped<MercadoLivreMappingService>();
     builder.Services.AddScoped<MercadoLivreOAuthService>();
     builder.Services.AddScoped<MercadoLivrePublishService>();
+    builder.Services.AddScoped<MercadoLivreCatalogImportService>();
     builder.Services.AddScoped<MercadoLivrePublishValidationService>();
     builder.Services.AddScoped<MercadoLivreIntegrationService>();
     builder.Services.AddScoped<MarketplaceMabangDispatchService>();

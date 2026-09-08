@@ -36,6 +36,7 @@ updated: 2026-09-07
 - [[03 - Deploy e Operação]]
 - [[04 - Onboarding de Clientes]]
 - [[05 - Carteira e Depósitos]]
+- [[06 - Importação de Catálogo do Mercado Livre]]
 
 ## Regra de atualização deste vault
 

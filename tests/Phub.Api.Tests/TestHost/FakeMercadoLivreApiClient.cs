@@ -30,6 +30,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
     };
 
     public Dictionary<string, List<string>> SearchOrdersBySeller { get; } = new(StringComparer.Ordinal);
+    public List<MercadoLivreSellerItemDetails> SellerItems { get; } = new();
     public Dictionary<string, MercadoLivreOrderDetails> OrdersById { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, MercadoLivreShipmentDetails> ShipmentsById { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, MercadoLivreShipmentLabelResult> ShipmentLabelsById { get; } = new(StringComparer.Ordinal);
@@ -105,6 +106,13 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
     {
         return Task.FromResult(UserMeResponse);
     }
+
+    public Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchSellerItemsAsync(
+        string sellerId,
+        string query,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<MercadoLivreSellerItemDetails>>(SellerItems);
 
     public Task<IReadOnlyList<string>> SearchOrdersAsync(
         string sellerId,

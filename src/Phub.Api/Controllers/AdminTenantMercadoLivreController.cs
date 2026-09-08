@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Application.Services;
@@ -16,15 +17,34 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
     private readonly MercadoLivreIntegrationService _integrationService;
     private readonly IAppDbContext _dbContext;
     private readonly MarketplaceShipmentLabelService _shipmentLabelService;
+    private readonly MercadoLivreCatalogImportService _catalogImportService;
 
     public AdminTenantMercadoLivreController(
         MercadoLivreIntegrationService integrationService,
         IAppDbContext dbContext,
-        MarketplaceShipmentLabelService shipmentLabelService)
+        MarketplaceShipmentLabelService shipmentLabelService,
+        MercadoLivreCatalogImportService catalogImportService)
     {
         _integrationService = integrationService;
         _dbContext = dbContext;
         _shipmentLabelService = shipmentLabelService;
+        _catalogImportService = catalogImportService;
+    }
+
+    [HttpPost("catalog/import")]
+    public async Task<IActionResult> ImportCatalog(
+        [FromRoute] string tenantSlug,
+        [FromRoute] Guid clientId,
+        [FromBody] MercadoLivreCatalogImportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var claim = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(claim, out var actorId))
+            return Unauthorized(CreateApiError("INVALID_ACTOR", "Invalid actor"));
+
+        var result = await _catalogImportService.ImportAsync(tenantSlug, clientId, request, actorId, cancellationToken);
+        if (!result.Succeeded || result.Data == null) return MapValidationError(result.Errors);
+        return Ok(result.Data);
     }
 
     [HttpGet("status")]

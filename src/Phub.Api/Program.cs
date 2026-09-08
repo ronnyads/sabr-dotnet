@@ -361,6 +361,7 @@ builder.Services.AddScoped<MercadoLivreSyncService>();
 builder.Services.AddScoped<MercadoLivreWebhookService>();
 builder.Services.AddScoped<MercadoLivrePublishValidationService>();
 builder.Services.AddScoped<MercadoLivrePublishService>();
+builder.Services.AddScoped<MercadoLivreCatalogImportService>();
 // ListingDraftService registrado como concreto + todas as interfaces segregadas (ISP).
 // Controllers/consumers que precisam de apenas uma responsabilidade injetam a interface minimal.
 builder.Services.AddScoped<ListingDraftService>();
