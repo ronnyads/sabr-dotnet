@@ -1034,7 +1034,12 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         // /sites/MLB is a public endpoint that requires no authentication.
         using var request = new HttpRequestMessage(HttpMethod.Get, "/sites/MLB");
         using var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        // The public edge may answer 401/403 to anonymous probes depending on
+        // anti-bot policy. Any non-5xx response still proves DNS/TLS/API reachability.
+        if ((int)response.StatusCode >= 500)
+        {
+            response.EnsureSuccessStatusCode();
+        }
     }
 
     private async Task<T> ExecuteWithResilienceAsync<T>(
