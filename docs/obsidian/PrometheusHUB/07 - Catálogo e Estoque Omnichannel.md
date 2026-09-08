@@ -28,6 +28,14 @@ updated: 2026-09-08
 
 `Public` fica disponível para qualquer cliente aprovado. `PlanRestricted` exige catálogo ligado a plano e assinatura válida. A migration cria o Catálogo Público padrão e associa produtos ativos.
 
+## Vínculo pendente e pagamento
+
+- O editor de vínculo é oferecido dentro do item do pedido para Mercado Livre e demais providers normalizados; o cliente escolhe uma variante autorizada do catálogo sem editar o SKU mestre.
+- Ao criar um vínculo manual, somente itens ainda não resolvidos com a mesma identidade externa recebem o snapshot do mapping. Itens já resolvidos e pedidos históricos permanecem imutáveis.
+- Pedidos pendentes afetados são reconciliados imediatamente para criar a reserva de estoque. O pagamento repete a reconciliação de forma idempotente antes de consumir o saldo, cobrindo pedidos importados antes do vínculo.
+- Pagamento permanece bloqueado para item sem mapping, falta de estoque ou cancelamento pendente. No portal, os bloqueadores são apresentados antes da ação.
+- Ao consumir reservas duplicadas ou antigas, o débito físico é limitado à quantidade efetiva dos itens do pedido; todo excesso reservado é liberado e não pode baixar estoque duas vezes.
+
 ## Anúncios normalizados e Capability Engine
 
 - `MarketplaceListingIdentity` reúne `itemId`, `variationId`, `userProductId`, seller, integração e provider sem expor o JSON bruto do canal.

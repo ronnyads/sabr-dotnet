@@ -8,8 +8,8 @@ namespace Phub.Api.Tests.TestHost;
 
 public static class TestJwtFactory
 {
-    private const string Issuer = "SABR3";
-    private const string Audience = "SABR3";
+    private const string Issuer = "PHUB3";
+    private const string Audience = "PHUB3";
 
     /// <summary>
     /// Chave de assinatura usada pelos testes.

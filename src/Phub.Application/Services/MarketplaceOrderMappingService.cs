@@ -364,6 +364,69 @@ public sealed class MarketplaceOrderMappingService
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        // A new mapping is also an explicit resolution for orders that are still
+        // pending mapping. Already resolved items keep their immutable snapshot,
+        // so remaps only affect future imports plus currently unresolved items.
+        var pendingItems = await _dbContext.MarketplaceOrderItems
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == request.Provider
+                           && item.SellerId == connection.Data.SellerId
+                           && item.MlItemId == normalizedItemId
+                           && item.MlVariationId == normalizedVariationId
+                           && (item.SabrVariantSku == null
+                               || item.MappingState == MarketplaceMappingStates.Unmapped
+                               || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
+                               || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized))
+            .ToListAsync(cancellationToken);
+
+        var ordersAffected = 0;
+        if (pendingItems.Count > 0)
+        {
+            var resolvedAt = DateTimeOffset.UtcNow;
+            foreach (var item in pendingItems)
+            {
+                ApplyResolutionSnapshot(
+                    item,
+                    new MarketplaceItemResolutionResult(
+                        existing.SabrVariantSku,
+                        MarketplaceMappingStates.MappedByListingMap,
+                        MarketplaceMappingReasonCodes.MappedByListingMap,
+                        item.ChannelSku,
+                        "manual_listing_mapping",
+                        existing.Id,
+                        existing.MappingVersion),
+                    resolvedAt);
+                item.UpdatedAt = resolvedAt;
+            }
+
+            var orderIds = pendingItems.Select(item => item.MarketplaceOrderId).Distinct().ToList();
+            ordersAffected = orderIds.Count;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            var pendingOrders = await _dbContext.MarketplaceOrders
+                .Where(item => orderIds.Contains(item.Id))
+                .ToListAsync(cancellationToken);
+            var allOrderItems = await _dbContext.MarketplaceOrderItems
+                .Where(item => orderIds.Contains(item.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            foreach (var pendingOrder in pendingOrders.Where(item => !item.SabrPaymentConfirmedAt.HasValue))
+            {
+                pendingOrder.Items = allOrderItems
+                    .Where(item => item.MarketplaceOrderId == pendingOrder.Id)
+                    .ToList();
+                await _inventoryService.ReconcileReservationsAsync(
+                    pendingOrder,
+                    pendingOrder.SellerId,
+                    reservationTtlHours: 24,
+                    cancellationToken: cancellationToken);
+            }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
         var channelMetadata = new ChannelMetadata(existing.ChannelSku);
 
         return ServiceResult<MarketplaceMappingListItemDto>.Success(new MarketplaceMappingListItemDto
@@ -380,7 +443,7 @@ public sealed class MarketplaceOrderMappingService
             VariantName = resolvedVariant.Data.Name,
             ChannelSku = channelMetadata.ChannelSku,
             Action = action,
-            OrdersAffected = 0,
+            OrdersAffected = ordersAffected,
             CreatedAt = existing.CreatedAt,
             UpdatedAt = existing.UpdatedAt
         });

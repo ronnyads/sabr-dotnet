@@ -132,6 +132,27 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         return File(result.Data.Content, result.Data.ContentType, result.Data.FileName);
     }
 
+    [HttpGet("marketplace/{orderId:guid}/packing-labels/{shipmentId}")]
+    public async Task<IActionResult> GetPackingLabel(
+        [FromRoute] Guid orderId,
+        [FromRoute] string shipmentId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+            return error!;
+
+        var result = await _orderFulfillmentService.GetPackingLabelAsync(
+            orderId,
+            shipmentId,
+            tenantId,
+            clientId,
+            cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return File(result.Data.Content, result.Data.ContentType, result.Data.FileName);
+    }
+
     [HttpPost("marketplace/{orderId:guid}/labels/pull")]
     public async Task<IActionResult> PullOrderLabel(
         [FromRoute] Guid orderId,

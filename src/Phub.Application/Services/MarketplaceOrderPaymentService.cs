@@ -89,6 +89,21 @@ public sealed class MarketplaceOrderPaymentService
                            && item.MlOrderId == order.MlOrderId)
             .ToListAsync(cancellationToken);
 
+        // Reconcile immediately before payment so an order resolved manually
+        // cannot consume stock without an atomic reservation. This also repairs
+        // older pending orders that were imported before their listing was mapped.
+        if (orderItems.Count > 0
+            && orderItems.All(item => !MarketplaceMappingStates.IsUnmapped(item.MappingState)))
+        {
+            order.Items = orderItems;
+            await _inventoryService.ReconcileReservationsAsync(
+                order,
+                order.SellerId,
+                reservationTtlHours: 24,
+                cancellationToken: cancellationToken);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
         var inventorySummary = MarketplaceOrderInventoryService.BuildSummary(
             order,
             shipments,
@@ -147,27 +162,40 @@ public sealed class MarketplaceOrderPaymentService
             .OrderBy(item => item.ReservedAt)
             .ToListAsync(cancellationToken);
 
+        var requiredBySku = orderItems
+            .Where(item => MarketplaceMappingStates.IsMapped(item.MappingState)
+                           && !string.IsNullOrWhiteSpace(item.SabrVariantSku))
+            .GroupBy(item => item.SabrVariantSku!, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Sum(item => Math.Max(0, item.Quantity)),
+                StringComparer.Ordinal);
         var consumedBySku = new Dictionary<string, int>(StringComparer.Ordinal);
+        var clearedReservationsBySku = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var reservation in reservations)
         {
-            reservation.Status = StockReservationStatus.Consumed;
+            var originalQuantity = Math.Max(0, reservation.Quantity);
+            var requiredQuantity = requiredBySku.GetValueOrDefault(reservation.SabrVariantSku);
+            var alreadyConsumed = consumedBySku.GetValueOrDefault(reservation.SabrVariantSku);
+            var quantityToConsume = Math.Min(originalQuantity, Math.Max(0, requiredQuantity - alreadyConsumed));
+
+            reservation.Quantity = quantityToConsume;
+            reservation.Status = quantityToConsume > 0
+                ? StockReservationStatus.Consumed
+                : StockReservationStatus.Released;
             reservation.UpdatedAt = nowUtc;
-
-            if (!consumedBySku.TryGetValue(reservation.SabrVariantSku, out var qty))
-            {
-                qty = 0;
-            }
-
-            consumedBySku[reservation.SabrVariantSku] = qty + reservation.Quantity;
+            consumedBySku[reservation.SabrVariantSku] = alreadyConsumed + quantityToConsume;
+            clearedReservationsBySku[reservation.SabrVariantSku] =
+                clearedReservationsBySku.GetValueOrDefault(reservation.SabrVariantSku) + originalQuantity;
         }
 
         foreach (var item in orderItems)
         {
-            item.ReservedQuantity = Math.Max(0, item.ReservedQuantity);
+            item.ReservedQuantity = 0;
             item.UpdatedAt = nowUtc;
         }
 
-        foreach (var (sku, quantity) in consumedBySku)
+        foreach (var sku in consumedBySku.Keys.Union(clearedReservationsBySku.Keys, StringComparer.Ordinal))
         {
             var variant = await _dbContext.ProductVariants.FirstOrDefaultAsync(
                 item => item.VariantSku == sku,
@@ -177,8 +205,8 @@ public sealed class MarketplaceOrderPaymentService
                 continue;
             }
 
-            variant.PhysicalStock = Math.Max(0, variant.PhysicalStock - quantity);
-            variant.ReservedStock = Math.Max(0, variant.ReservedStock - quantity);
+            variant.PhysicalStock = Math.Max(0, variant.PhysicalStock - consumedBySku.GetValueOrDefault(sku));
+            variant.ReservedStock = Math.Max(0, variant.ReservedStock - clearedReservationsBySku.GetValueOrDefault(sku));
             variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
         }
 

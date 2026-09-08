@@ -1013,12 +1013,20 @@ public sealed class OrderFulfillmentService
     public async Task<ServiceResult<MarketplacePackingLabelDownloadResult>> GetPackingLabelAsync(
         Guid orderId,
         string shipmentId,
+        string? tenantId = null,
+        Guid? clientId = null,
         CancellationToken cancellationToken = default)
     {
-        var order = await _dbContext.MarketplaceOrders
+        var orderQuery = _dbContext.MarketplaceOrders
             .AsNoTracking()
             .Include(item => item.Items)
-            .FirstOrDefaultAsync(item => item.Id == orderId, cancellationToken);
+            .Where(item => item.Id == orderId);
+        if (!string.IsNullOrWhiteSpace(tenantId))
+            orderQuery = orderQuery.Where(item => item.TenantId == tenantId);
+        if (clientId.HasValue && clientId.Value != Guid.Empty)
+            orderQuery = orderQuery.Where(item => item.ClientId == clientId.Value);
+
+        var order = await orderQuery.FirstOrDefaultAsync(cancellationToken);
         if (order == null)
         {
             return ServiceResult<MarketplacePackingLabelDownloadResult>.Failure([
@@ -1057,42 +1065,48 @@ public sealed class OrderFulfillmentService
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        var itemsHtml = string.Join("", order.Items.Select(item =>
-            $"<li><strong>{System.Net.WebUtility.HtmlEncode(item.SabrVariantSku ?? "SEM-SKU")}</strong> - {System.Net.WebUtility.HtmlEncode(products.GetValueOrDefault(item.SabrVariantSku ?? string.Empty) ?? "Item")} x {item.Quantity}</li>"));
+        var itemRows = string.Join("", order.Items.Select(item =>
+            $"<tr><td><strong>{System.Net.WebUtility.HtmlEncode(item.SabrVariantSku ?? item.ChannelSku ?? "SEM-SKU")}</strong><br><span>{System.Net.WebUtility.HtmlEncode(products.GetValueOrDefault(item.SabrVariantSku ?? string.Empty) ?? item.ProductName ?? "Item")}</span></td><td>{item.Quantity}</td></tr>"));
 
         var html = $@"
 <!DOCTYPE html>
 <html lang=""pt-BR"">
 <head>
   <meta charset=""utf-8"" />
-  <title>Packing Label {System.Net.WebUtility.HtmlEncode(order.InternalOrderNumber ?? order.MlOrderId)}</title>
+  <title>Declaracao de conteudo {System.Net.WebUtility.HtmlEncode(order.InternalOrderNumber ?? order.MlOrderId)}</title>
   <style>
-    body {{ font-family: Arial, sans-serif; padding: 24px; color: #111827; }}
-    .sheet {{ border: 2px solid #111827; padding: 20px; max-width: 760px; }}
-    h1 {{ margin: 0 0 8px; font-size: 28px; }}
-    .meta {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin: 16px 0; }}
-    .code {{ font-family: 'Courier New', monospace; font-size: 24px; padding: 12px; border: 1px dashed #111827; margin: 12px 0; word-break: break-all; }}
-    .tracking {{ font-family: 'Courier New', monospace; font-size: 20px; padding: 12px; border: 1px solid #2563eb; margin: 12px 0; }}
-    ul {{ margin: 12px 0 0; padding-left: 20px; }}
-    .hint {{ color: #4b5563; font-size: 12px; margin-top: 12px; }}
+    @page {{ size: A4; margin: 12mm; }}
+    body {{ font-family: Arial, sans-serif; padding: 0; color: #111; }}
+    .sheet {{ border: 2px solid #111; padding: 18px; max-width: 760px; margin: 0 auto; }}
+    .eyebrow {{ font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }}
+    h1 {{ margin: 6px 0 16px; font-size: 25px; text-align: center; }}
+    .meta {{ display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #111; margin: 14px 0; }}
+    .meta div {{ padding: 9px 10px; border-bottom: 1px solid #bbb; }}
+    .meta div:nth-child(odd) {{ border-right: 1px solid #bbb; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 14px; }}
+    th, td {{ border: 1px solid #111; padding: 10px; text-align: left; vertical-align: top; }}
+    th:last-child, td:last-child {{ width: 72px; text-align: center; }}
+    td span {{ font-size: 12px; }}
+    .code {{ font-family: 'Courier New', monospace; font-size: 19px; font-weight: 700; padding: 12px; border: 1px dashed #111; margin-top: 14px; text-align: center; word-break: break-all; }}
+    .tracking {{ font-family: 'Courier New', monospace; font-size: 16px; padding: 10px; border: 1px solid #111; margin-top: 14px; text-align: center; }}
+    .hint {{ color: #444; font-size: 11px; margin-top: 14px; text-align: center; }}
+    @media print {{ .no-print {{ display: none; }} body {{ print-color-adjust: exact; }} }}
   </style>
 </head>
 <body>
   <div class=""sheet"">
-    <h1>{System.Net.WebUtility.HtmlEncode(order.InternalOrderNumber ?? order.MlOrderId)}</h1>
-    <div>Pedido marketplace: <strong>{System.Net.WebUtility.HtmlEncode(order.MlOrderId)}</strong></div>
-    <div>Shipment: <strong>{System.Net.WebUtility.HtmlEncode(shipment.ShipmentId)}</strong></div>
+    <div class=""eyebrow"">PrometheusHUB · documento operacional</div>
+    <h1>DECLARACAO DE CONTEUDO</h1>
     <div class=""meta"">
-      <div>Canal: {System.Net.WebUtility.HtmlEncode(order.Provider.ToString())}</div>
-      <div>Cliente: {System.Net.WebUtility.HtmlEncode(order.TenantId)}</div>
-      <div>Status hub: Pedido enviado por scan/expedicao</div>
-      <div>Gerado em: {DateTimeOffset.UtcNow:dd/MM/yyyy HH:mm}</div>
+      <div>Pedido HUB<br><strong>{System.Net.WebUtility.HtmlEncode(order.InternalOrderNumber ?? order.MlOrderId)}</strong></div>
+      <div>Pedido marketplace<br><strong>{System.Net.WebUtility.HtmlEncode(order.MlOrderId)}</strong></div>
+      <div>Shipment<br><strong>{System.Net.WebUtility.HtmlEncode(shipment.ShipmentId)}</strong></div>
+      <div>Gerado em<br><strong>{DateTimeOffset.UtcNow:dd/MM/yyyy HH:mm}</strong></div>
     </div>
-    <div class=""tracking"">Tracking para bipa: {System.Net.WebUtility.HtmlEncode(shipment.TrackingNumber ?? "N/A")}</div>
-    <div class=""code"">Codigo PHUB: {System.Net.WebUtility.HtmlEncode(shipment.ShipmentScanCode)}</div>
-    <h3>Itens para separacao</h3>
-    <ul>{itemsHtml}</ul>
-    <div class=""hint"">Use o tracking do marketplace quando existir. Se nao existir ou houver conflito, use o codigo PHUB acima no scanner/campo de bipagem.</div>
+    <table><thead><tr><th>PRODUTO / SKU</th><th>QTD</th></tr></thead><tbody>{itemRows}</tbody></table>
+    <div class=""tracking"">TRACKING: {System.Net.WebUtility.HtmlEncode(shipment.TrackingNumber ?? "PENDENTE")}</div>
+    <div class=""code"">{System.Net.WebUtility.HtmlEncode(shipment.ShipmentScanCode)}</div>
+    <div class=""hint"">Imprima esta declaracao junto da etiqueta oficial de envio do marketplace.</div>
   </div>
 </body>
 </html>";
@@ -1100,7 +1114,7 @@ public sealed class OrderFulfillmentService
         return ServiceResult<MarketplacePackingLabelDownloadResult>.Success(new MarketplacePackingLabelDownloadResult
         {
             ContentType = "text/html",
-            FileName = $"packing-label-{order.InternalOrderNumber ?? order.MlOrderId}-{shipment.ShipmentId}.html",
+            FileName = $"declaracao-conteudo-{order.InternalOrderNumber ?? order.MlOrderId}-{shipment.ShipmentId}.html",
             Content = System.Text.Encoding.UTF8.GetBytes(html)
         });
     }

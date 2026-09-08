@@ -270,7 +270,10 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         [FromRoute] string shipmentId,
         CancellationToken cancellationToken = default)
     {
-        var result = await _fulfillmentService.GetPackingLabelAsync(orderId, shipmentId, cancellationToken);
+        var result = await _fulfillmentService.GetPackingLabelAsync(
+            orderId,
+            shipmentId,
+            cancellationToken: cancellationToken);
         if (!result.Succeeded || result.Data == null)
             return MapValidationError(result.Errors);
 

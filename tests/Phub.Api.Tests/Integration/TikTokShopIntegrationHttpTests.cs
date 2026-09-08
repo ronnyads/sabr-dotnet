@@ -886,7 +886,7 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
     }
 
     [Fact]
-    public async Task MarketplaceMappingsEndpoint_UpsertAndDelete_ReprocessTikTokOrderItems()
+    public async Task MarketplaceMappingsEndpoint_ResolvesPendingItems_AndDeletePreservesOrderSnapshot()
     {
         await _factory.ResetDatabaseAsync();
 
@@ -916,6 +916,7 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
         var created = await createResponse.Content.ReadFromJsonAsync<MarketplaceMappingListItemDto>();
         Assert.NotNull(created);
         Assert.Equal("created", created!.Action);
+        Assert.Equal(1, created.OrdersAffected);
 
         var deleteResponse = await client.DeleteAsync($"/api/v1/client/marketplace-mappings/{created.Id}");
         Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
@@ -927,8 +928,9 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
             .Include(item => item.Items)
             .SingleAsync(item => item.Id == order.Id);
         var refreshedItem = Assert.Single(refreshedOrder.Items);
-        Assert.Null(refreshedItem.SabrVariantSku);
-        Assert.Equal(MarketplaceMappingStates.UnmappedMissingChannelSku, refreshedItem.MappingState);
+        Assert.Equal("VAR-GENERIC", refreshedItem.SabrVariantSku);
+        Assert.Equal(MarketplaceMappingStates.MappedByListingMap, refreshedItem.MappingState);
+        Assert.NotNull(refreshedItem.MappingSnapshotId);
     }
 
     [Fact]

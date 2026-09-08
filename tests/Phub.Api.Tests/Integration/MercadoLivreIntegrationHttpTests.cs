@@ -341,6 +341,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
         await SeedVariantAsync(baseSku, variantSku, physicalStock: 10, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
         await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, "ITEM-ML-04", null, variantSku);
 
         _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = new List<string> { "ORDER-ML-04" };
@@ -364,18 +365,34 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var sync = await client.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId });
         Assert.Equal(HttpStatusCode.OK, sync.StatusCode);
 
+        var mapping = await client.PostAsJsonAsync(
+            "/api/v1/client/marketplace-mappings",
+            new MarketplaceUpsertMappingRequest
+            {
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = sellerId,
+                ExternalItemId = "ITEM-ML-04",
+                SelectedCatalogSku = variantSku
+            });
+        Assert.Equal(HttpStatusCode.OK, mapping.StatusCode);
+
         Guid orderId;
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             orderId = (await db.MarketplaceOrders.SingleAsync()).Id;
+            Assert.Equal(2, await db.MarketplaceOrderItems.SumAsync(item => item.Quantity));
+            Assert.Equal(2, await db.StockReservations.Where(item => item.Status == StockReservationStatus.Reserved).SumAsync(item => item.Quantity));
+            Assert.Equal(10, (await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku)).PhysicalStock);
         }
 
         var first = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
         var second = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
 
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        var firstBody = await first.Content.ReadAsStringAsync();
+        var secondBody = await second.Content.ReadAsStringAsync();
+        Assert.True(first.StatusCode == HttpStatusCode.OK, $"Expected OK, received {first.StatusCode}: {firstBody}");
+        Assert.True(second.StatusCode == HttpStatusCode.OK, $"Expected OK, received {second.StatusCode}: {secondBody}");
 
         var firstPayload = await first.Content.ReadFromJsonAsync<MarketplaceMarkPaidResult>();
         var secondPayload = await second.Content.ReadFromJsonAsync<MarketplaceMarkPaidResult>();
@@ -392,7 +409,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(StockReservationStatus.Consumed, reservation.Status);
         Assert.Equal(8, variant.PhysicalStock);
         Assert.Equal(0, variant.ReservedStock);
-        Assert.Equal(8, variant.AvailableStock);
+        Assert.Equal(6, variant.AvailableStock);
     }
 
     [Fact]
@@ -1032,6 +1049,18 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var fulfillmentBeforeLabel = await fulfillmentService.ListFulfillmentAsync(0, 20);
         Assert.Contains(fulfillmentBeforeLabel.Items, item => item.Id == orderId && !item.HasLabel);
 
+        var declaration = await fulfillmentService.GetPackingLabelAsync(
+            orderId, shipmentId, tenantId, clientId);
+        Assert.True(declaration.Succeeded);
+        var declarationHtml = System.Text.Encoding.UTF8.GetString(declaration.Data!.Content);
+        Assert.Contains("DECLARACAO DE CONTEUDO", declarationHtml);
+        Assert.Contains(variantSku, declarationHtml);
+        Assert.Contains("<td>1</td>", declarationHtml);
+
+        var crossClientDeclaration = await fulfillmentService.GetPackingLabelAsync(
+            orderId, shipmentId, tenantId, Guid.NewGuid());
+        Assert.False(crossClientDeclaration.Succeeded);
+
         var labelResult = await labelService.GetOrFetchAsync(
             tenantId, clientId, MarketplaceProvider.MercadoLivre, shipmentId);
         Assert.True(labelResult.Succeeded);
@@ -1578,6 +1607,25 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             });
         }
 
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedPublicCatalogAuthorizationAsync(string productSku)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var catalog = new Catalog
+        {
+            Name = $"Public {productSku}",
+            IsActive = true,
+            AccessMode = CatalogAccessMode.Public
+        };
+        db.Catalogs.Add(catalog);
+        db.ProductCatalogs.Add(new ProductCatalog
+        {
+            CatalogId = catalog.Id,
+            ProductSku = productSku
+        });
         await db.SaveChangesAsync();
     }
 
