@@ -155,13 +155,26 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             return result.ToList();
         }, cancellationToken);
 
-        var items = new List<MercadoLivreSellerItemDetails>();
-        foreach (var id in ids)
+        using var gate = new SemaphoreSlim(8);
+        var detailTasks = ids.Select(async (id, index) =>
         {
-            var item = await GetSellerItemAsync(id, accessToken, cancellationToken);
-            if (item != null) items.Add(item);
-        }
-        return items;
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                return (Index: index, Item: await GetSellerItemAsync(id, accessToken, cancellationToken));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        var details = await Task.WhenAll(detailTasks);
+        return details
+            .Where(x => x.Item != null)
+            .OrderBy(x => x.Index)
+            .Select(x => x.Item!)
+            .ToList();
     }
 
     public async Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchPublicSellerItemsAsync(
@@ -170,48 +183,19 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         string accessToken,
         CancellationToken cancellationToken = default)
     {
-        return await ExecuteWithResilienceAsync(async ct =>
-        {
-            const int pageSize = 50;
-            var items = new List<MercadoLivreSellerItemDetails>();
-            for (var offset = 0; offset < 1000; offset += pageSize)
-            {
-                var uri = $"/sites/MLB/search?seller_id={Uri.EscapeDataString(sellerId)}&limit={pageSize}&offset={offset}";
-                if (!string.IsNullOrWhiteSpace(query)) uri += $"&q={Uri.EscapeDataString(query.Trim())}";
-                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-                using var response = await _httpClient.SendAsync(request, ct);
-                response.EnsureSuccessStatusCode();
-                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-                var received = 0;
-                if (doc.RootElement.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in results.EnumerateArray())
-                    {
-                        received++;
-                        string? brand = null;
-                        if (item.TryGetProperty("attributes", out var attributes) && attributes.ValueKind == JsonValueKind.Array)
-                        {
-                            foreach (var attribute in attributes.EnumerateArray())
-                                if (string.Equals(GetOptionalString(attribute, "id"), "BRAND", StringComparison.OrdinalIgnoreCase))
-                                    brand = GetOptionalString(attribute, "value_name");
-                        }
-                        items.Add(new MercadoLivreSellerItemDetails
-                        {
-                            ItemId = GetOptionalString(item, "id") ?? string.Empty,
-                            Title = GetOptionalString(item, "title") ?? string.Empty,
-                            Brand = brand,
-                            ThumbnailUrl = GetOptionalString(item, "thumbnail"),
-                            Price = GetOptionalDecimal(item, "price") ?? 0m,
-                            Status = "active"
-                        });
-                    }
-                }
-                var total = doc.RootElement.TryGetProperty("paging", out var paging) && paging.TryGetProperty("total", out var totalNode) ? ParseInt(totalNode) : offset + received;
-                if (received < pageSize || offset + received >= total) break;
-            }
-            return (IReadOnlyList<MercadoLivreSellerItemDetails>)items;
-        }, cancellationToken);
+        // Mercado Livre deprecated seller searches through /sites/{site}/search.
+        // The supported replacement is /users/{sellerId}/items/search, followed by
+        // item detail reads. The connected seller token is used only for authorization;
+        // the seller being researched remains the sellerId supplied by the admin.
+        var items = await SearchSellerItemsAsync(sellerId, string.Empty, accessToken, cancellationToken);
+        if (string.IsNullOrWhiteSpace(query)) return items;
+
+        var term = query.Trim();
+        return items
+            .Where(item => item.Title.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (item.Brand?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || item.ItemId.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     private async Task<MercadoLivreSellerItemDetails?> GetSellerItemAsync(
