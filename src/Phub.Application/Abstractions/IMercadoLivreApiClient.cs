@@ -12,6 +12,11 @@ public interface IMercadoLivreApiClient
         string query,
         string accessToken,
         CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchPublicSellerItemsAsync(
+        string sellerId,
+        string? query,
+        string accessToken,
+        CancellationToken cancellationToken = default);
     Task<IReadOnlyList<string>> SearchOrdersAsync(
         string sellerId,
         DateTimeOffset from,

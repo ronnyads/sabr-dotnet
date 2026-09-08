@@ -18,17 +18,50 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
     private readonly IAppDbContext _dbContext;
     private readonly MarketplaceShipmentLabelService _shipmentLabelService;
     private readonly MercadoLivreCatalogImportService _catalogImportService;
+    private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
+    private readonly MercadoLivreOAuthService _oauthService;
 
     public AdminTenantMercadoLivreController(
         MercadoLivreIntegrationService integrationService,
         IAppDbContext dbContext,
         MarketplaceShipmentLabelService shipmentLabelService,
-        MercadoLivreCatalogImportService catalogImportService)
+        MercadoLivreCatalogImportService catalogImportService,
+        IMercadoLivreApiClient mercadoLivreApiClient,
+        MercadoLivreOAuthService oauthService)
     {
         _integrationService = integrationService;
         _dbContext = dbContext;
         _shipmentLabelService = shipmentLabelService;
         _catalogImportService = catalogImportService;
+        _mercadoLivreApiClient = mercadoLivreApiClient;
+        _oauthService = oauthService;
+    }
+
+    [HttpGet("catalog/seller-preview")]
+    public async Task<IActionResult> PreviewSellerCatalog(
+        [FromRoute] string tenantSlug,
+        [FromRoute] Guid clientId,
+        [FromQuery] string sellerId,
+        [FromQuery] string? q = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!long.TryParse(sellerId, out var parsedSellerId) || parsedSellerId <= 0)
+            return BadRequest(CreateApiError("VALIDATION_ERROR", "Seller ID inválido"));
+        var tenant = await _dbContext.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Slug == tenantSlug.Trim().ToLowerInvariant(), cancellationToken);
+        if (tenant == null) return NotFound(CreateApiError("TENANT_NOT_FOUND", "Tenant not found"));
+        var connection = await _dbContext.TenantMarketplaceConnections
+            .FirstOrDefaultAsync(x => x.TenantId == tenant.Id && x.ClientId == clientId && x.Provider == Phub.Domain.Enums.MarketplaceProvider.MercadoLivre, cancellationToken);
+        if (connection == null) return NotFound(CreateApiError("CONNECTION_NOT_FOUND", "Mercado Livre connection not found"));
+        var token = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
+        var items = await _mercadoLivreApiClient.SearchPublicSellerItemsAsync(sellerId, q, token, cancellationToken);
+        return Ok(items.Select(item => new
+        {
+            itemId = item.ItemId,
+            title = item.Title,
+            brand = item.Brand,
+            thumbnailUrl = item.ThumbnailUrl,
+            priceCents = checked((long)Math.Round(item.Price * 100m, MidpointRounding.AwayFromZero))
+        }));
     }
 
     [HttpPost("catalog/import")]

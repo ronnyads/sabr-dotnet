@@ -52,7 +52,11 @@ public sealed class MercadoLivreCatalogImportService
         var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
         var listings = await _apiClient.SearchSellerItemsAsync(connection.SellerId.ToString(CultureInfo.InvariantCulture), request.Query, accessToken, cancellationToken);
         var brands = request.Brands.Where(x => !string.IsNullOrWhiteSpace(x)).Select(Normalize).ToHashSet();
-        var selected = listings.Where(x => brands.Count == 0 || brands.Contains(Normalize(ResolveBrand(x)))).ToList();
+        var requestedItemIds = request.ItemIds.Where(x => !string.IsNullOrWhiteSpace(x)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selected = listings
+            .Where(x => brands.Count == 0 || brands.Contains(Normalize(ResolveBrand(x))))
+            .Where(x => requestedItemIds.Count == 0 || requestedItemIds.Contains(x.ItemId))
+            .ToList();
         var result = new MercadoLivreCatalogImportResult { ListingsFound = listings.Count };
 
         var catalogIds = await (
@@ -203,6 +207,7 @@ public sealed class MercadoLivreCatalogImportService
         Title = item.Title,
         Sku = sku,
         Brand = ResolveBrand(item),
+        ThumbnailUrl = item.ThumbnailUrl,
         CatalogPriceCents = checked((long)Math.Round(item.Price * 100m, MidpointRounding.AwayFromZero)),
         Action = action
     };

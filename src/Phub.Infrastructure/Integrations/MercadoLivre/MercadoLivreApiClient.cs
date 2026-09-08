@@ -164,6 +164,56 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         return items;
     }
 
+    public async Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchPublicSellerItemsAsync(
+        string sellerId,
+        string? query,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            const int pageSize = 50;
+            var items = new List<MercadoLivreSellerItemDetails>();
+            for (var offset = 0; offset < 1000; offset += pageSize)
+            {
+                var uri = $"/sites/MLB/search?seller_id={Uri.EscapeDataString(sellerId)}&limit={pageSize}&offset={offset}";
+                if (!string.IsNullOrWhiteSpace(query)) uri += $"&q={Uri.EscapeDataString(query.Trim())}";
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                using var response = await _httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
+                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                var received = 0;
+                if (doc.RootElement.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in results.EnumerateArray())
+                    {
+                        received++;
+                        string? brand = null;
+                        if (item.TryGetProperty("attributes", out var attributes) && attributes.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var attribute in attributes.EnumerateArray())
+                                if (string.Equals(GetOptionalString(attribute, "id"), "BRAND", StringComparison.OrdinalIgnoreCase))
+                                    brand = GetOptionalString(attribute, "value_name");
+                        }
+                        items.Add(new MercadoLivreSellerItemDetails
+                        {
+                            ItemId = GetOptionalString(item, "id") ?? string.Empty,
+                            Title = GetOptionalString(item, "title") ?? string.Empty,
+                            Brand = brand,
+                            ThumbnailUrl = GetOptionalString(item, "thumbnail"),
+                            Price = GetOptionalDecimal(item, "price") ?? 0m,
+                            Status = "active"
+                        });
+                    }
+                }
+                var total = doc.RootElement.TryGetProperty("paging", out var paging) && paging.TryGetProperty("total", out var totalNode) ? ParseInt(totalNode) : offset + received;
+                if (received < pageSize || offset + received >= total) break;
+            }
+            return (IReadOnlyList<MercadoLivreSellerItemDetails>)items;
+        }, cancellationToken);
+    }
+
     private async Task<MercadoLivreSellerItemDetails?> GetSellerItemAsync(
         string itemId,
         string accessToken,

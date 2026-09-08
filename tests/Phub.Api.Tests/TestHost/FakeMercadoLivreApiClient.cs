@@ -114,6 +114,13 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<MercadoLivreSellerItemDetails>>(SellerItems);
 
+    public Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchPublicSellerItemsAsync(
+        string sellerId,
+        string? query,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<MercadoLivreSellerItemDetails>>(SellerItems);
+
     public Task<IReadOnlyList<string>> SearchOrdersAsync(
         string sellerId,
         DateTimeOffset from,

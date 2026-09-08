@@ -19,9 +19,16 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 
 ## Interface e endpoint
 
-- Admin > cliente > integração Mercado Livre > **Importar produtos do ML**.
+- Admin > cliente > integração Mercado Livre > **Buscar produtos do ML** abre uma prévia. O admin filtra, seleciona produtos agrupados por SKU e importa somente os escolhidos.
 - `POST /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import`.
 - O request aceita busca, marcas, estoque e modo de prévia; a interface atual envia a busca vazia, Boca Rosa/Principia e estoque 1.000.
+- `ItemIds` limita a gravação aos anúncios selecionados. A prévia pode consultar tudo, mas nenhuma gravação acontece antes da seleção explícita.
+
+## Inteligência de seller
+
+- O mesmo painel permite consultar anúncios públicos de outro vendedor pelo Seller ID e termo opcional.
+- A consulta usa `/sites/MLB/search?seller_id=...` e exibe título, marca, preço e item ID.
+- É uma operação somente leitura; não acessa dados privados, pedidos, estoque real ou credenciais do seller pesquisado.
 
 ## Observação operacional
 
