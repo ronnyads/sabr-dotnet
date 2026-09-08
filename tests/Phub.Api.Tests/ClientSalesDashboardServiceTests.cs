@@ -98,6 +98,76 @@ public sealed class ClientSalesDashboardServiceTests
         Assert.Equal(12, result.Products.Select(product => product.ChannelItemId).Distinct().Count());
     }
 
+    [Fact]
+    public async Task GetAsync_ListsOnlyPendingShipmentsDueTodayBySku()
+    {
+        await using var db = CreateDb();
+        const string tenantId = "tenant-shipping-today";
+        var clientId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        var timeZone = ResolveSaoPauloTimeZone();
+        var localNow = TimeZoneInfo.ConvertTime(now, timeZone);
+        var todayDeadline = new DateTimeOffset(
+            localNow.Year, localNow.Month, localNow.Day, 18, 0, 0, timeZone.GetUtcOffset(localNow.Date));
+
+        var pending = CreateOrder(tenantId, clientId, "ORDER-TODAY", "paid", now, 30m);
+        pending.ShipmentId = "SHIP-TODAY";
+        pending.ShipByDeadlineAt = todayDeadline;
+        pending.SabrPaymentConfirmedAt = now;
+        pending.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = pending.SellerId,
+            MlItemId = "MLB-TODAY",
+            SabrVariantSku = "SKU-TODAY",
+            ProductName = "Produto para enviar",
+            Quantity = 3,
+            UnitPrice = 10m,
+            MappingState = "MAPPED",
+            RawJson = "{}"
+        });
+
+        var shipped = CreateOrder(tenantId, clientId, "ORDER-SHIPPED", "paid", now, 10m);
+        shipped.ShipmentId = "SHIP-SHIPPED";
+        shipped.ShipByDeadlineAt = todayDeadline;
+        shipped.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = shipped.SellerId,
+            MlItemId = "MLB-SHIPPED",
+            Quantity = 1,
+            RawJson = "{}"
+        });
+
+        db.MarketplaceOrders.AddRange(pending, shipped);
+        db.MarketplaceShipments.Add(new MarketplaceShipment
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = shipped.SellerId,
+            ShipmentId = shipped.ShipmentId,
+            MlOrderId = shipped.MlOrderId,
+            ShipByDeadlineAt = todayDeadline,
+            ShippedAt = now,
+            Status = "shipped"
+        });
+        await db.SaveChangesAsync();
+
+        var result = await new ClientSalesDashboardService(db).GetAsync(
+            tenantId, clientId, now.AddDays(-1), now.AddMinutes(1), MarketplaceProvider.MercadoLivre);
+
+        Assert.Equal(DateOnly.FromDateTime(localNow.Date), result.ShippingToday.DueDate);
+        Assert.Equal(1, result.ShippingToday.TotalOrders);
+        Assert.Equal(1, result.ShippingToday.PaidOrders);
+        Assert.Equal(3, result.ShippingToday.TotalUnits);
+        Assert.Equal("SKU-TODAY", Assert.Single(result.ShippingToday.Products).Sku);
+    }
+
     private static MarketplaceOrder CreateOrder(
         string tenantId,
         Guid clientId,
@@ -126,5 +196,17 @@ public sealed class ClientSalesDashboardServiceTests
             .UseInMemoryDatabase($"sales-dashboard-{Guid.NewGuid():N}")
             .Options;
         return new AppDbContext(options);
+    }
+
+    private static TimeZoneInfo ResolveSaoPauloTimeZone()
+    {
+        foreach (var id in new[] { "America/Sao_Paulo", "E. South America Standard Time" })
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+            catch (TimeZoneNotFoundException) { }
+            catch (InvalidTimeZoneException) { }
+        }
+
+        return TimeZoneInfo.Utc;
     }
 }

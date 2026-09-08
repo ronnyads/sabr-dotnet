@@ -365,6 +365,27 @@ public sealed class ClientSalesDashboardResult
     // Compatibilidade com consumidores que ainda exibem somente o ranking.
     public List<ClientSalesSkuResult> TopSkus { get; set; } = new();
     public List<ClientSalesStatusResult> Statuses { get; set; } = new();
+    public ClientShippingTodayResult ShippingToday { get; set; } = new();
+}
+
+public sealed class ClientShippingTodayResult
+{
+    public DateOnly DueDate { get; set; }
+    public int TotalOrders { get; set; }
+    public int PaidOrders { get; set; }
+    public int PendingPaymentOrders { get; set; }
+    public int TotalUnits { get; set; }
+    public int UnmappedUnits { get; set; }
+    public List<ClientShippingTodaySkuResult> Products { get; set; } = new();
+}
+
+public sealed class ClientShippingTodaySkuResult
+{
+    public string Sku { get; set; } = string.Empty;
+    public string? ProductName { get; set; }
+    public int Orders { get; set; }
+    public int Units { get; set; }
+    public bool IsMapped { get; set; }
 }
 
 public sealed class ClientSalesDailyResult

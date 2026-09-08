@@ -129,6 +129,13 @@ public sealed class ClientSalesDashboardService
             .Where(connection => !provider.HasValue || connection.Provider == provider.Value)
             .MaxAsync(connection => (DateTimeOffset?)connection.LastSyncAt, cancellationToken);
 
+        var shippingToday = await BuildShippingTodayAsync(
+            tenantId,
+            clientId,
+            provider,
+            now,
+            cancellationToken);
+
         return new ClientSalesDashboardResult
         {
             From = rangeFrom,
@@ -153,7 +160,113 @@ public sealed class ClientSalesDashboardService
             TotalProducts = products.Count,
             Products = products,
             TopSkus = products.Take(10).ToList(),
-            Statuses = statuses
+            Statuses = statuses,
+            ShippingToday = shippingToday
+        };
+    }
+
+    private async Task<ClientShippingTodayResult> BuildShippingTodayAsync(
+        string tenantId,
+        Guid clientId,
+        MarketplaceProvider? provider,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var timeZone = ResolveSaoPauloTimeZone();
+        var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(nowUtc, timeZone).Date);
+        var localStart = localDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
+        var localEnd = localDate.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
+        var utcStart = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(localStart, timeZone));
+        var utcEnd = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(localEnd, timeZone));
+
+        var dueQuery = _dbContext.MarketplaceOrders
+            .AsNoTracking()
+            .Include(order => order.Items)
+            .Where(order => order.TenantId == tenantId
+                            && order.ClientId == clientId
+                            && order.ShipByDeadlineAt >= utcStart
+                            && order.ShipByDeadlineAt < utcEnd);
+
+        if (provider.HasValue)
+        {
+            dueQuery = dueQuery.Where(order => order.Provider == provider.Value);
+        }
+
+        var dueOrders = (await dueQuery.ToListAsync(cancellationToken))
+            .Where(order => !IsCancelled(order.Status))
+            .ToList();
+
+        if (dueOrders.Count == 0)
+        {
+            return new ClientShippingTodayResult { DueDate = localDate };
+        }
+
+        var shipmentIds = dueOrders
+            .Select(order => order.ShipmentId)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var orderIds = dueOrders.Select(order => order.MlOrderId).Distinct(StringComparer.Ordinal).ToList();
+
+        var externallyDispatchedShipmentIds = shipmentIds.Count == 0
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : (await _dbContext.MarketplaceShipments
+                .AsNoTracking()
+                .Where(shipment => shipment.TenantId == tenantId
+                                   && shipment.ClientId == clientId
+                                   && shipmentIds.Contains(shipment.ShipmentId))
+                .Where(shipment => shipment.ShippedAt.HasValue
+                                   || shipment.Status == "shipped"
+                                   || shipment.Status == "delivered")
+                .Select(shipment => shipment.ShipmentId)
+                .ToListAsync(cancellationToken))
+                .ToHashSet(StringComparer.Ordinal);
+
+        var dispatchedResources = await _dbContext.MarketplaceEventLogs
+            .AsNoTracking()
+            .Where(log => log.TenantId == tenantId && log.ClientId == clientId)
+            .Where(log => (log.Topic == MarketplaceEventTopics.AuditFulfillmentDispatched
+                           && shipmentIds.Contains(log.ResourceId))
+                          || (log.Topic == MarketplaceEventTopics.AuditOrderDispatched
+                              && orderIds.Contains(log.ResourceId)))
+            .Select(log => log.ResourceId)
+            .ToListAsync(cancellationToken);
+        var dispatched = dispatchedResources.ToHashSet(StringComparer.Ordinal);
+
+        var pendingOrders = dueOrders
+            .Where(order => !externallyDispatchedShipmentIds.Contains(order.ShipmentId ?? string.Empty))
+            .Where(order => !dispatched.Contains(order.ShipmentId ?? string.Empty)
+                            && !dispatched.Contains(order.MlOrderId))
+            .ToList();
+
+        var products = pendingOrders
+            .SelectMany(order => order.Items.Select(item => new { order.Id, Item = item }))
+            .GroupBy(row => ResolveProductKey(row.Item), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ClientShippingTodaySkuResult
+            {
+                Sku = ResolveDisplaySku(group.First().Item),
+                ProductName = group.Select(row => row.Item.ProductName)
+                    .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
+                Orders = group.Select(row => row.Id).Distinct().Count(),
+                Units = group.Sum(row => row.Item.Quantity),
+                IsMapped = group.All(row => !string.IsNullOrWhiteSpace(row.Item.SabrVariantSku))
+            })
+            .OrderByDescending(row => row.Units)
+            .ThenBy(row => row.ProductName)
+            .ToList();
+
+        return new ClientShippingTodayResult
+        {
+            DueDate = localDate,
+            TotalOrders = pendingOrders.Count,
+            PaidOrders = pendingOrders.Count(order => order.SabrPaymentConfirmedAt.HasValue),
+            PendingPaymentOrders = pendingOrders.Count(order => !order.SabrPaymentConfirmedAt.HasValue),
+            TotalUnits = products.Sum(product => product.Units),
+            UnmappedUnits = pendingOrders.SelectMany(order => order.Items)
+                .Where(item => string.IsNullOrWhiteSpace(item.SabrVariantSku))
+                .Sum(item => item.Quantity),
+            Products = products
         };
     }
 
@@ -181,6 +294,30 @@ public sealed class ClientSalesDashboardService
 
     private static string NormalizeStatus(string? status)
         => string.IsNullOrWhiteSpace(status) ? "unknown" : status.Trim().ToLowerInvariant();
+
+    private static bool IsCancelled(string? status)
+        => NormalizeStatus(status).Contains("cancel", StringComparison.Ordinal);
+
+    private static TimeZoneInfo ResolveSaoPauloTimeZone()
+    {
+        foreach (var id in new[] { "America/Sao_Paulo", "E. South America Standard Time" })
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(id);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                // Try the equivalent identifier for the current operating system.
+            }
+            catch (InvalidTimeZoneException)
+            {
+                // Fall back to UTC only when the host has no valid São Paulo zone.
+            }
+        }
+
+        return TimeZoneInfo.Utc;
+    }
 
     private static decimal PercentageChange(decimal current, decimal previous)
     {

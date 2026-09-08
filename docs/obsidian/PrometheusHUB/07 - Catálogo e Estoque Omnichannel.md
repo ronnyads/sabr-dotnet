@@ -70,6 +70,14 @@ Endpoints do portal:
 - Em múltiplos depósitos, a nova quantidade é distribuída proporcionalmente ao saldo local atual, com total exato e desempate determinístico por `store_id`. Zerar o SKU zera todos os depósitos administráveis.
 - Localizações exclusivamente `meli_facility` são observadas como estoque Full gerenciado pelo Mercado Livre e nunca recebem escrita indevida.
 
+## Painel operacional do cliente
+
+- O dashboard retorna `shippingToday`, calculado pelo prazo `ShipByDeadlineAt` no fuso `America/Sao_Paulo`, independentemente do período comercial selecionado.
+- Entram somente pedidos com prazo no dia corrente que ainda não foram cancelados nem despachados no canal ou na operação interna.
+- O resumo separa pedidos, unidades, pagamentos internos confirmados e pedidos aguardando pagamento.
+- A lista agrupa todos os itens por SKU mestre; itens sem vínculo permanecem separados pela identidade externa e são sinalizados para revisão.
+- O portal exibe o painel **Pedidos para enviar hoje** com quantidade por SKU e atalho para **Meus Pedidos**.
+
 ## Rollback
 
 As migrations são aditivas. Em incidente, interromper workers/escrita remota antes de reverter a aplicação. Não apagar snapshots históricos nem diminuir `inventoryVersion`; manter colunas novas até a versão anterior voltar a operar com segurança.
