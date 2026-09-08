@@ -52,7 +52,7 @@ public sealed class MercadoLivreCatalogImportService
         var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
         var listings = await _apiClient.SearchSellerItemsAsync(connection.SellerId.ToString(CultureInfo.InvariantCulture), request.Query, accessToken, cancellationToken);
         var brands = request.Brands.Where(x => !string.IsNullOrWhiteSpace(x)).Select(Normalize).ToHashSet();
-        var selected = listings.Where(x => IsSerum(x.Title) && brands.Contains(Normalize(ResolveBrand(x)))).ToList();
+        var selected = listings.Where(x => brands.Count == 0 || brands.Contains(Normalize(ResolveBrand(x)))).ToList();
         var result = new MercadoLivreCatalogImportResult { ListingsFound = listings.Count };
 
         var catalogIds = await (
@@ -210,9 +210,11 @@ public sealed class MercadoLivreCatalogImportService
     private static string ResolveBrand(MercadoLivreSellerItemDetails item)
     {
         if (!string.IsNullOrWhiteSpace(item.Brand)) return item.Brand.Trim();
-        return Normalize(item.Title).Contains("boca rosa") ? "Boca Rosa" : "Principia";
+        var title = Normalize(item.Title);
+        if (title.Contains("boca rosa")) return "Boca Rosa";
+        if (title.Contains("principia")) return "Principia";
+        return string.Empty;
     }
-    private static bool IsSerum(string value) => Normalize(value).Contains("serum");
     private static string Normalize(string value)
     {
         var decomposed = (value ?? string.Empty).Normalize(NormalizationForm.FormD);

@@ -5,7 +5,7 @@ updated: 2026-09-07
 
 # Importação de catálogo do Mercado Livre
 
-O admin pode importar produtos a partir da integração Mercado Livre de um cliente. A primeira operação foi criada para buscar `serum`, filtrar as marcas Boca Rosa e Principia e definir estoque físico inicial de 1.000 unidades.
+O admin pode importar produtos a partir da integração Mercado Livre de um cliente. A operação inicial filtra as marcas Boca Rosa e Principia e define estoque físico inicial de 1.000 unidades. O nome da ação é genérico porque sérum é apenas uma categoria de produto.
 
 ## Regras
 
@@ -19,9 +19,9 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 
 ## Interface e endpoint
 
-- Admin > cliente > integração Mercado Livre > **Importar séruns do ML**.
+- Admin > cliente > integração Mercado Livre > **Importar produtos do ML**.
 - `POST /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import`.
-- O request aceita busca, marcas, estoque e modo de prévia; a interface atual envia `serum`, Boca Rosa/Principia e estoque 1.000.
+- O request aceita busca, marcas, estoque e modo de prévia; a interface atual envia a busca vazia, Boca Rosa/Principia e estoque 1.000.
 
 ## Observação operacional
 

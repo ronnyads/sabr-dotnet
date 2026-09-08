@@ -2,7 +2,7 @@ namespace Phub.Application.Models;
 
 public sealed class MercadoLivreCatalogImportRequest
 {
-    public string Query { get; set; } = "serum";
+    public string Query { get; set; } = string.Empty;
     public string[] Brands { get; set; } = ["Boca Rosa", "Principia"];
     public int PhysicalStock { get; set; } = 1000;
     public bool PreviewOnly { get; set; }
