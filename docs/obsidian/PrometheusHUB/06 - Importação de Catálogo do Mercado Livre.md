@@ -9,7 +9,7 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 
 ## Regras
 
-- O SKU vem de `seller_custom_field` ou do atributo `SELLER_SKU`; anúncio sem SKU válido é ignorado e devolvido como aviso.
+- O SKU vem de `seller_custom_field` ou do atributo `SELLER_SKU`. Quando o anúncio não possui SKU, o Item ID `MLB...` vira um SKU interno temporário; o mapping pelo Item ID mantém o reconhecimento do pedido preciso.
 - O produto e a variante usam o mesmo SKU quando o anúncio não possui variações.
 - Produtos já existentes não são duplicados nem têm seus dados comerciais sobrescritos; somente o estoque da variante é atualizado.
 - Novos produtos usam o preço vigente do anúncio como preço inicial de catálogo e custo interno zero, sinalizando que o custo precisa ser revisado no admin.

@@ -194,11 +194,24 @@ public sealed class MercadoLivreCatalogImportService
     {
         if (item.Variations.Count > 0)
         {
+            var emitted = false;
             foreach (var variation in item.Variations)
-                if (Sku.TryParse(variation.SellerSku, out var parsed)) yield return (parsed.Value, variation.VariationId);
+                if (Sku.TryParse(variation.SellerSku, out var parsed))
+                {
+                    emitted = true;
+                    yield return (parsed.Value, variation.VariationId);
+                }
+            if (emitted) yield break;
+        }
+        if (Sku.TryParse(item.SellerSku, out var itemSku))
+        {
+            yield return (itemSku.Value, null);
             yield break;
         }
-        if (Sku.TryParse(item.SellerSku, out var itemSku)) yield return (itemSku.Value, null);
+
+        // Listings without seller SKU still need a stable internal identity. The ML item id
+        // is valid in our SKU format and the explicit listing map keeps order matching precise.
+        if (Sku.TryParse(item.ItemId, out var generatedSku)) yield return (generatedSku.Value, null);
     }
 
     private static MercadoLivreCatalogImportItemResult ToResult(MercadoLivreSellerItemDetails item, string? sku, string action) => new()
