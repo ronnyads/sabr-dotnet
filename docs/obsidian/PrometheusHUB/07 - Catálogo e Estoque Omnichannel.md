@@ -28,6 +28,30 @@ updated: 2026-09-08
 
 `Public` fica disponível para qualquer cliente aprovado. `PlanRestricted` exige catálogo ligado a plano e assinatura válida. A migration cria o Catálogo Público padrão e associa produtos ativos.
 
+## Anúncios normalizados e Capability Engine
+
+- `MarketplaceListingIdentity` reúne `itemId`, `variationId`, `userProductId`, seller, integração e provider sem expor o JSON bruto do canal.
+- `ClientMarketplaceListing` é o contrato comum consumido pelo portal.
+- `MercadoLivreLegacyListingAdapter` e `MercadoLivreUserProductListingAdapter` traduzem os dois modelos para o mesmo domínio.
+- `MarketplaceListingCapabilities` é calculado no backend e informa, por campo, permissão, motivo do bloqueio e valor atual.
+- A interface nunca decide sozinha se pode editar. A sincronização relê o anúncio, recalcula capacidades e compara `mappingVersion` e `evaluationHash`.
+- SKU mestre e estoque nunca são editados como campo de anúncio. SKU usa remapeamento auditado; estoque usa o ledger central.
+- Mudanças autorizadas são registradas como `MarketplaceListing.SynchronizeChanges` em `AuditEvents`.
+
+Endpoints do portal:
+
+- `GET /api/v1/client/marketplace-mappings/{id}/listing`
+- `POST /api/v1/client/marketplace-mappings/{id}/listing/changes`
+
+## Fila de estoque
+
+- Alterações de disponibilidade criam jobs `SYNC_STOCK` em `MarketplaceOperationJob`.
+- `dedupeKey` consolida provider, integração, anúncio, variação e `inventoryVersion` com índice único parcial no PostgreSQL.
+- A inserção usa `ON CONFLICT DO NOTHING`, portanto chamadas concorrentes são idempotentes.
+- O worker relê `inventoryVersion` antes de obter o token e novamente antes da escrita remota.
+- Versão antiga, vínculo removido ou seller fora da liberação gradual termina em `SUPERSEDED` e nunca escreve no canal.
+- `GlobalInventoryWrite=false` permanece como padrão; somente sellers piloto configurados entram na fila de escrita.
+
 ## Rollback
 
 As migrations são aditivas. Em incidente, interromper workers/escrita remota antes de reverter a aplicação. Não apagar snapshots históricos nem diminuir `inventoryVersion`; manter colunas novas até a versão anterior voltar a operar com segurança.

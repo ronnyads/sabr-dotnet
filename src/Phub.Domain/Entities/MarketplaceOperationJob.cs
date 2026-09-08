@@ -9,6 +9,7 @@ public sealed class MarketplaceOperationJob
     public Guid ClientId { get; set; }
     public MarketplaceProvider Provider { get; set; } = MarketplaceProvider.MercadoLivre;
     public string OperationType { get; set; } = string.Empty;
+    public string? DedupeKey { get; set; }
     public string Status { get; set; } = "PENDING";
     public string PayloadJson { get; set; } = "{}";
     public string ResultJson { get; set; } = "{}";

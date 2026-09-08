@@ -198,7 +198,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             .ToList();
     }
 
-    private async Task<MercadoLivreSellerItemDetails?> GetSellerItemAsync(
+    public async Task<MercadoLivreSellerItemDetails?> GetSellerItemAsync(
         string itemId,
         string accessToken,
         CancellationToken cancellationToken)
@@ -247,10 +247,65 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 Ean = Attribute(root, "GTIN", "EAN"),
                 ThumbnailUrl = GetOptionalString(root, "thumbnail"),
                 Price = GetOptionalDecimal(root, "price") ?? 0m,
+                AvailableQuantity = root.TryGetProperty("available_quantity", out var availableQuantity) ? ParseInt(availableQuantity) : 0,
+                SoldQuantity = root.TryGetProperty("sold_quantity", out var soldQuantity) ? ParseInt(soldQuantity) : 0,
                 Status = GetOptionalString(root, "status") ?? string.Empty,
+                ListingTypeId = GetOptionalString(root, "listing_type_id"),
+                UserProductId = GetOptionalString(root, "user_product_id"),
+                Permalink = GetOptionalString(root, "permalink"),
+                IsCatalogListing = root.TryGetProperty("catalog_listing", out var catalogListing) && catalogListing.ValueKind == JsonValueKind.True,
+                HasPriceAutomation = (root.TryGetProperty("price", out var priceNode) && priceNode.ValueKind == JsonValueKind.Object)
+                    || (root.TryGetProperty("sale_price", out var salePriceNode)
+                        && salePriceNode.ValueKind == JsonValueKind.Object
+                        && !string.IsNullOrWhiteSpace(GetOptionalString(salePriceNode, "type"))
+                        && !string.Equals(GetOptionalString(salePriceNode, "type"), "standard", StringComparison.OrdinalIgnoreCase)),
                 Variations = variations
             };
         }, cancellationToken);
+    }
+
+    public async Task UpdateListingAsync(
+        string itemId,
+        MercadoLivreListingUpdateRequest update,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(update.Title) || update.Price.HasValue)
+        {
+            await ExecuteWithResilienceAsync(async ct =>
+            {
+                var fields = new Dictionary<string, object>();
+                if (!string.IsNullOrWhiteSpace(update.Title)) fields["title"] = update.Title.Trim();
+                if (update.Price.HasValue) fields["price"] = decimal.Round(update.Price.Value, 2, MidpointRounding.AwayFromZero);
+
+                using var request = new HttpRequestMessage(HttpMethod.Put, $"/items/{Uri.EscapeDataString(itemId)}")
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(fields), Encoding.UTF8, "application/json")
+                };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                using var response = await _httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
+                return true;
+            }, cancellationToken);
+        }
+
+        if (update.Description is not null)
+        {
+            await ExecuteWithResilienceAsync(async ct =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Put, $"/items/{Uri.EscapeDataString(itemId)}/description")
+                {
+                    Content = new StringContent(
+                        JsonSerializer.Serialize(new { plain_text = update.Description.Trim() }),
+                        Encoding.UTF8,
+                        "application/json")
+                };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                using var response = await _httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
+                return true;
+            }, cancellationToken);
+        }
     }
 
     public async Task<IReadOnlyList<string>> SearchOrdersAsync(

@@ -10,13 +10,16 @@ namespace Phub.Application.Services;
 public sealed class MarketplaceOperationJobService
 {
     public const string PullLabels = "PULL_LABELS";
+    public const string SyncStock = "SYNC_STOCK";
     private readonly IAppDbContext _db;
     private readonly OrderFulfillmentService _fulfillment;
+    private readonly StockAvailabilityService _stock;
 
-    public MarketplaceOperationJobService(IAppDbContext db, OrderFulfillmentService fulfillment)
+    public MarketplaceOperationJobService(IAppDbContext db, OrderFulfillmentService fulfillment, StockAvailabilityService stock)
     {
         _db = db;
         _fulfillment = fulfillment;
+        _stock = stock;
     }
 
     public async Task<MarketplaceOperationJobResult> EnqueueLabelPullAsync(
@@ -48,7 +51,7 @@ public sealed class MarketplaceOperationJobService
     public async Task ProcessPendingAsync(int batchSize, CancellationToken cancellationToken)
     {
         var ids = await _db.MarketplaceOperationJobs.AsNoTracking()
-            .Where(x => x.Status == "PENDING" && x.OperationType == PullLabels)
+            .Where(x => x.Status == "PENDING" && (x.OperationType == PullLabels || x.OperationType == SyncStock))
             .OrderBy(x => x.CreatedAt)
             .Select(x => x.Id)
             .Take(Math.Clamp(batchSize, 1, 25))
@@ -69,17 +72,27 @@ public sealed class MarketplaceOperationJobService
             var job = await _db.MarketplaceOperationJobs.FirstAsync(x => x.Id == id, cancellationToken);
             try
             {
-                var orderIds = JsonSerializer.Deserialize<Guid[]>(job.PayloadJson) ?? [];
-                var result = await _fulfillment.PullLabelsBulkAsync(job.TenantId, job.ClientId, orderIds, cancellationToken);
-                if (!result.Succeeded || result.Data == null)
-                    throw new InvalidOperationException(string.Join("; ", result.Errors));
+                if (job.OperationType == SyncStock)
+                {
+                    job.Status = await _stock.ProcessStockJobAsync(job.PayloadJson, cancellationToken);
+                    job.Processed = 1;
+                    job.Succeeded = job.Status == "COMPLETED" ? 1 : 0;
+                    job.ResultJson = JsonSerializer.Serialize(new { status = job.Status, job.InventoryVersion });
+                }
+                else
+                {
+                    var orderIds = JsonSerializer.Deserialize<Guid[]>(job.PayloadJson) ?? [];
+                    var result = await _fulfillment.PullLabelsBulkAsync(job.TenantId, job.ClientId, orderIds, cancellationToken);
+                    if (!result.Succeeded || result.Data == null)
+                        throw new InvalidOperationException(string.Join("; ", result.Errors));
 
-                job.ResultJson = JsonSerializer.Serialize(result.Data);
-                job.Total = result.Data.Total;
-                job.Processed = result.Data.Total;
-                job.Succeeded = result.Data.Succeeded;
-                job.Failed = result.Data.Failed;
-                job.Status = result.Data.Failed == 0 ? "COMPLETED" : "COMPLETED_WITH_ERRORS";
+                    job.ResultJson = JsonSerializer.Serialize(result.Data);
+                    job.Total = result.Data.Total;
+                    job.Processed = result.Data.Total;
+                    job.Succeeded = result.Data.Succeeded;
+                    job.Failed = result.Data.Failed;
+                    job.Status = result.Data.Failed == 0 ? "COMPLETED" : "COMPLETED_WITH_ERRORS";
+                }
                 job.CompletedAt = DateTimeOffset.UtcNow;
                 job.LastError = null;
             }

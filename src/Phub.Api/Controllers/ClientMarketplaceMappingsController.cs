@@ -16,15 +16,18 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
     private readonly ITenantProvider _tenantProvider;
     private readonly CatalogService _catalogService;
     private readonly MarketplaceOrderMappingService _mappingService;
+    private readonly MarketplaceListingService _listingService;
 
     public ClientMarketplaceMappingsController(
         ITenantProvider tenantProvider,
         CatalogService catalogService,
-        MarketplaceOrderMappingService mappingService)
+        MarketplaceOrderMappingService mappingService,
+        MarketplaceListingService listingService)
     {
         _tenantProvider = tenantProvider;
         _catalogService = catalogService;
         _mappingService = mappingService;
+        _listingService = listingService;
     }
 
     [HttpGet("catalog-options")]
@@ -168,6 +171,41 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
         }
 
         return NoContent();
+    }
+
+    [HttpGet("{id:guid}/listing")]
+    public async Task<IActionResult> GetListing(Guid id, CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        var result = await _listingService.GetAsync(tenantId!, clientId, id, cancellationToken);
+        return MapListingResult(result);
+    }
+
+    [HttpPost("{id:guid}/listing/changes")]
+    public async Task<IActionResult> SynchronizeListingChanges(
+        Guid id,
+        [FromBody] MarketplaceListingChangeSet? request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        if (request == null) return BadRequest(CreateApiError("VALIDATION_ERROR", "Payload is required."));
+        Guid.TryParse(User.FindFirst("sub")?.Value ?? User.FindFirst("userId")?.Value, out var actorId);
+        var result = await _listingService.ApplyAsync(tenantId!, clientId, actorId, id, request, cancellationToken);
+        return MapListingResult(result);
+    }
+
+    private IActionResult MapListingResult(ServiceResult<MarketplaceListingWorkspace> result)
+    {
+        if (result.Succeeded && result.Data != null) return Ok(result.Data);
+        var code = result.ErrorCode ?? ServiceErrorCodes.ValidationError;
+        var payload = CreateApiError(code, "Nao foi possivel processar o anuncio.", result.Errors);
+        return code switch
+        {
+            ServiceErrorCodes.NotFound => NotFound(payload),
+            ServiceErrorCodes.ConcurrencyConflict => Conflict(payload),
+            ServiceErrorCodes.Forbidden => StatusCode(StatusCodes.Status403Forbidden, payload),
+            _ => UnprocessableEntity(payload)
+        };
     }
 
     private bool TryGetClientContext(

@@ -1481,6 +1481,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
             entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
             entity.Property(e => e.OperationType).HasColumnName("operation_type").HasMaxLength(60).IsRequired();
+            entity.Property(e => e.DedupeKey).HasColumnName("dedupe_key").HasMaxLength(300);
             entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(40).IsRequired();
             entity.Property(e => e.PayloadJson).HasColumnName("payload_json").HasColumnType("jsonb").IsRequired();
             entity.Property(e => e.ResultJson).HasColumnName("result_json").HasColumnType("jsonb").IsRequired();
@@ -1497,6 +1498,10 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
             entity.HasIndex(e => new { e.Status, e.CreatedAt }).HasDatabaseName("ix_marketplace_operation_jobs_status_created");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.CreatedAt }).HasDatabaseName("ix_marketplace_operation_jobs_scope_created");
+            entity.HasIndex(e => e.DedupeKey)
+                .IsUnique()
+                .HasFilter("\"dedupe_key\" IS NOT NULL")
+                .HasDatabaseName("ux_marketplace_operation_jobs_dedupe_key");
         });
 
         modelBuilder.Entity<TenantMarketplaceSlaRule>(entity =>

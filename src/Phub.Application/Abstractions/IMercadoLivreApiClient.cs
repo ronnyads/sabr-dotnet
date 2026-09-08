@@ -17,6 +17,17 @@ public interface IMercadoLivreApiClient
         string? query,
         string accessToken,
         CancellationToken cancellationToken = default);
+    Task<MercadoLivreSellerItemDetails?> GetSellerItemAsync(
+        string itemId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Listing detail lookup is not implemented by this client.");
+    Task UpdateListingAsync(
+        string itemId,
+        MercadoLivreListingUpdateRequest request,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Listing updates are not implemented by this client.");
     Task<IReadOnlyList<string>> SearchOrdersAsync(
         string sellerId,
         DateTimeOffset from,
