@@ -70,9 +70,32 @@ public sealed class MarketplaceListingWorkspace
     public MarketplaceListingCapabilities Capabilities { get; set; } = new();
 }
 
+public sealed class MarketplaceListingChangeDraft
+{
+    public Guid DraftId { get; set; }
+    public Guid MappingId { get; set; }
+    public string Status { get; set; } = "DRAFT";
+    public MarketplaceListingChangeSet Changes { get; set; } = new();
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 public sealed class MercadoLivreListingUpdateRequest
 {
     public string? Title { get; set; }
     public decimal? Price { get; set; }
     public string? Description { get; set; }
+}
+
+public sealed class MercadoLivreUserProductStock
+{
+    public long Version { get; set; }
+    public List<MercadoLivreUserProductStockLocation> Locations { get; set; } = new();
+}
+
+public sealed class MercadoLivreUserProductStockLocation
+{
+    public string Type { get; set; } = string.Empty;
+    public string? StoreId { get; set; }
+    public string? NetworkNodeId { get; set; }
+    public int Quantity { get; set; }
 }

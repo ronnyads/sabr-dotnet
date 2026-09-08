@@ -79,6 +79,18 @@ public interface IMercadoLivreApiClient
         int availableQuantity,
         string accessToken,
         CancellationToken cancellationToken = default);
+    Task<MercadoLivreUserProductStock> GetUserProductStockAsync(
+        string userProductId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("User Product stock lookup is not implemented by this client.");
+    Task UpdateUserProductWarehouseStockAsync(
+        string userProductId,
+        long stockVersion,
+        IReadOnlyCollection<MercadoLivreUserProductStockLocation> locations,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("User Product warehouse stock update is not implemented by this client.");
 
     /// <summary>Lightweight connectivity check — hits a public ML endpoint that requires no auth.</summary>
     Task PingAsync(CancellationToken cancellationToken = default);

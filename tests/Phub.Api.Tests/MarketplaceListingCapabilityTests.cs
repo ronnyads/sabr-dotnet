@@ -98,4 +98,35 @@ public sealed class MarketplaceListingCapabilityTests
         Assert.False(result.Fields["price"].Editable);
         Assert.Equal("PRICE_AUTOMATION_ACTIVE", result.Fields["price"].ReasonCode);
     }
+
+    [Fact]
+    public void Capability_hash_is_stable_inside_window_and_rotates_after_expiry()
+    {
+        var source = new MercadoLivreSellerItemDetails { ItemId = "MLB123", Title = "Produto", Status = "active" };
+        var adapter = new MercadoLivreLegacyListingAdapter();
+        var listing = adapter.Normalize(Mapping(), source);
+        var first = adapter.Evaluate(listing, source, DateTimeOffset.FromUnixTimeSeconds(600));
+        var sameWindow = adapter.Evaluate(listing, source, DateTimeOffset.FromUnixTimeSeconds(899));
+        var nextWindow = adapter.Evaluate(listing, source, DateTimeOffset.FromUnixTimeSeconds(900));
+
+        Assert.Equal(first.EvaluationHash, sameWindow.EvaluationHash);
+        Assert.NotEqual(first.EvaluationHash, nextWindow.EvaluationHash);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(900), first.ExpiresAt);
+    }
+
+    [Fact]
+    public void Warehouse_allocation_preserves_total_and_existing_proportion()
+    {
+        var result = StockAvailabilityService.AllocateWarehouseStock(
+            new[]
+            {
+                new MercadoLivreUserProductStockLocation { StoreId = "B", Quantity = 1 },
+                new MercadoLivreUserProductStockLocation { StoreId = "A", Quantity = 3 }
+            },
+            10).OrderBy(item => item.StoreId).ToArray();
+
+        Assert.Equal(10, result.Sum(item => item.Quantity));
+        Assert.Equal(8, result[0].Quantity);
+        Assert.Equal(2, result[1].Quantity);
+    }
 }

@@ -37,11 +37,16 @@ updated: 2026-09-08
 - A interface nunca decide sozinha se pode editar. A sincronização relê o anúncio, recalcula capacidades e compara `mappingVersion` e `evaluationHash`.
 - SKU mestre e estoque nunca são editados como campo de anúncio. SKU usa remapeamento auditado; estoque usa o ledger central.
 - Mudanças autorizadas são registradas como `MarketplaceListing.SynchronizeChanges` em `AuditEvents`.
+- O `evaluationHash` contém uma janela de validade determinística de cinco minutos. Mesmo sem outra alteração, uma avaliação vencida não autoriza escrita.
+- A revisão é persistida como job `LISTING_CHANGE` no estado `DRAFT`. A confirmação só aceita o mesmo tenant, cliente, anúncio e rascunho ainda aberto; depois termina em `COMPLETED`, `SUPERSEDED` ou `FAILED`.
+- Salvar o rascunho registra `MarketplaceListing.SaveChangeDraft`; confirmar registra a auditoria da sincronização.
 
 Endpoints do portal:
 
 - `GET /api/v1/client/marketplace-mappings/{id}/listing`
 - `POST /api/v1/client/marketplace-mappings/{id}/listing/changes`
+- `POST /api/v1/client/marketplace-mappings/{id}/listing/drafts`
+- `POST /api/v1/client/marketplace-mappings/{id}/listing/drafts/{draftId}/apply`
 
 ## Fila de estoque
 
@@ -51,6 +56,9 @@ Endpoints do portal:
 - O worker relê `inventoryVersion` antes de obter o token e novamente antes da escrita remota.
 - Versão antiga, vínculo removido ou seller fora da liberação gradual termina em `SUPERSEDED` e nunca escreve no canal.
 - `GlobalInventoryWrite=false` permanece como padrão; somente sellers piloto configurados entram na fila de escrita.
+- Legacy Item usa `PUT /items/{itemId}` com `available_quantity`; variação Legacy usa o mesmo recurso com `variations: [{ id, available_quantity }]`. User Product consulta primeiro `/user-products/{id}/stock` e exige o `x-version` retornado antes de escrever em `seller_warehouse`.
+- Em múltiplos depósitos, a nova quantidade é distribuída proporcionalmente ao saldo local atual, com total exato e desempate determinístico por `store_id`. Zerar o SKU zera todos os depósitos administráveis.
+- Localizações exclusivamente `meli_facility` são observadas como estoque Full gerenciado pelo Mercado Livre e nunca recebem escrita indevida.
 
 ## Rollback
 

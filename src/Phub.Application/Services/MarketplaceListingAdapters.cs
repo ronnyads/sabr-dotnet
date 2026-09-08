@@ -91,13 +91,14 @@ internal static class MarketplaceListingAdapterSupport
         var mutable = IsMutableStatus(source.Status);
         var isVariation = !string.IsNullOrWhiteSpace(listing.Identity.VariationId);
         var priceEditable = mutable && !source.HasPriceAutomation && !isVariation;
+        var expiresAt = DateTimeOffset.FromUnixTimeSeconds(((now.ToUnixTimeSeconds() / 300) + 1) * 300);
         var capabilities = new MarketplaceListingCapabilities
         {
             MappingId = listing.MappingId,
             MappingVersion = listing.MappingVersion,
             Model = listing.Model,
             EvaluatedAt = now,
-            ExpiresAt = now.AddMinutes(5),
+            ExpiresAt = expiresAt,
             Fields = new Dictionary<string, MarketplaceListingFieldCapability>(StringComparer.OrdinalIgnoreCase)
             {
                 ["masterSku"] = Blocked("MASTER_SKU_IMMUTABLE", "A SKU mestre e imutavel; use o fluxo auditado de remapeamento.", listing.MasterSku),
@@ -121,7 +122,7 @@ internal static class MarketplaceListingAdapterSupport
             }
         };
 
-        capabilities.EvaluationHash = ComputeHash(listing, source);
+        capabilities.EvaluationHash = ComputeHash(listing, source, expiresAt);
         return capabilities;
     }
 
@@ -135,7 +136,7 @@ internal static class MarketplaceListingAdapterSupport
     private static MarketplaceListingFieldCapability Blocked(string code, string reason, object? current)
         => new() { Editable = false, ReasonCode = code, Reason = reason, CurrentValue = current };
 
-    private static string ComputeHash(ClientMarketplaceListing listing, MercadoLivreSellerItemDetails source)
+    private static string ComputeHash(ClientMarketplaceListing listing, MercadoLivreSellerItemDetails source, DateTimeOffset expiresAt)
     {
         var value = string.Join('|',
             listing.MappingId.ToString("N"),
@@ -149,7 +150,8 @@ internal static class MarketplaceListingAdapterSupport
             source.AvailableQuantity.ToString(CultureInfo.InvariantCulture),
             source.IsCatalogListing,
             source.HasPriceAutomation,
-            source.UserProductId);
+            source.UserProductId,
+            expiresAt.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 }

@@ -1064,15 +1064,28 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
     {
         await ExecuteWithResilienceAsync(async ct =>
         {
+            object variationIdentifier = long.TryParse(
+                variationId,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var parsedVariationId)
+                ? parsedVariationId
+                : variationId;
             var payload = JsonSerializer.Serialize(new
             {
-                available_quantity = Math.Max(0, availableQuantity)
+                variations = new[]
+                {
+                    new
+                    {
+                        id = variationIdentifier,
+                        available_quantity = Math.Max(0, availableQuantity)
+                    }
+                }
             });
 
-            // TODO: confirm the exact variation stock update path/payload against Mercado Livre docs.
             using var request = new HttpRequestMessage(
                 HttpMethod.Put,
-                $"/items/{Uri.EscapeDataString(itemId)}/variations/{Uri.EscapeDataString(variationId)}")
+                $"/items/{Uri.EscapeDataString(itemId)}")
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json")
             };
@@ -1080,6 +1093,81 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
 
             using var response = await _httpClient.SendAsync(request, ct);
             response.EnsureSuccessStatusCode();
+            return true;
+        }, cancellationToken);
+    }
+
+    public async Task<MercadoLivreUserProductStock> GetUserProductStockAsync(
+        string userProductId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/user-products/{Uri.EscapeDataString(userProductId)}/stock");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            using var response = await _httpClient.SendAsync(request, ct);
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
+            if (!response.Headers.TryGetValues("x-version", out var versions)
+                || !long.TryParse(versions.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var version))
+            {
+                throw new InvalidOperationException("ML_USER_PRODUCT_STOCK_VERSION_MISSING");
+            }
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            using var document = JsonDocument.Parse(json);
+            var result = new MercadoLivreUserProductStock { Version = version };
+            if (document.RootElement.TryGetProperty("locations", out var locations)
+                && locations.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var location in locations.EnumerateArray())
+                {
+                    result.Locations.Add(new MercadoLivreUserProductStockLocation
+                    {
+                        Type = GetOptionalString(location, "type") ?? string.Empty,
+                        StoreId = GetOptionalString(location, "store_id"),
+                        NetworkNodeId = GetOptionalString(location, "network_node_id"),
+                        Quantity = GetOptionalInt(location, "quantity") ?? 0
+                    });
+                }
+            }
+
+            return result;
+        }, cancellationToken);
+    }
+
+    public async Task UpdateUserProductWarehouseStockAsync(
+        string userProductId,
+        long stockVersion,
+        IReadOnlyCollection<MercadoLivreUserProductStockLocation> locations,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        await ExecuteWithResilienceAsync(async ct =>
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                locations = locations.Select(location => new
+                {
+                    store_id = location.StoreId,
+                    network_node_id = location.NetworkNodeId,
+                    quantity = Math.Max(0, location.Quantity)
+                })
+            });
+            using var request = new HttpRequestMessage(
+                HttpMethod.Put,
+                $"/user-products/{Uri.EscapeDataString(userProductId)}/stock/type/seller_warehouse")
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json")
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Headers.TryAddWithoutValidation("x-version", stockVersion.ToString(CultureInfo.InvariantCulture));
+
+            using var response = await _httpClient.SendAsync(request, ct);
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
             return true;
         }, cancellationToken);
     }

@@ -197,6 +197,34 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
         return MapListingResult(result);
     }
 
+    [HttpPost("{id:guid}/listing/drafts")]
+    public async Task<IActionResult> SaveListingChangeDraft(
+        Guid id,
+        [FromBody] MarketplaceListingChangeSet? request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        if (request == null) return BadRequest(CreateApiError("VALIDATION_ERROR", "Payload is required."));
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
+        var result = await _listingService.SaveDraftAsync(tenantId!, clientId, actorId, id, request, cancellationToken);
+        if (result.Succeeded && result.Data != null) return Ok(result.Data);
+        var code = result.ErrorCode ?? ServiceErrorCodes.ValidationError;
+        var payload = CreateApiError(code, "Nao foi possivel salvar o rascunho.", result.Errors);
+        return code == ServiceErrorCodes.ConcurrencyConflict ? Conflict(payload) : UnprocessableEntity(payload);
+    }
+
+    [HttpPost("{id:guid}/listing/drafts/{draftId:guid}/apply")]
+    public async Task<IActionResult> ApplyListingChangeDraft(
+        Guid id,
+        Guid draftId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
+        var result = await _listingService.ApplyDraftAsync(tenantId!, clientId, actorId, id, draftId, cancellationToken);
+        return MapListingResult(result);
+    }
+
     private IActionResult MapListingResult(ServiceResult<MarketplaceListingWorkspace> result)
     {
         if (result.Succeeded && result.Data != null) return Ok(result.Data);

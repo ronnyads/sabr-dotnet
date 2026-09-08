@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Phub.Application.Abstractions;
+using Phub.Application.Models;
 using Phub.Application.Options;
 using Phub.Domain.Entities;
 using System.Text.Json;
@@ -93,7 +94,10 @@ public sealed class StockAvailabilityService
 
         foreach (var mapping in mappings)
         {
-            var dedupeKey = $"stock:{mapping.Provider}:{mapping.IntegrationId}:{mapping.MlItemId}:{mapping.MlVariationId ?? "item"}:v{expectedInventoryVersion}";
+            var listingIdentity = !string.IsNullOrWhiteSpace(mapping.UserProductId)
+                ? $"up:{mapping.UserProductId}"
+                : $"item:{mapping.MlItemId}:{mapping.MlVariationId ?? "root"}";
+            var dedupeKey = $"stock:{mapping.Provider}:{mapping.IntegrationId}:{listingIdentity}:v{expectedInventoryVersion}";
             var now = DateTimeOffset.UtcNow;
             var payload = JsonSerializer.Serialize(new StockSyncJobPayload(mapping.Id, variantSku, expectedInventoryVersion, variant.AvailableStock));
             const string pendingStatus = "PENDING";
@@ -142,11 +146,92 @@ public sealed class StockAvailabilityService
             .SingleAsync(cancellationToken);
         if (versionBeforeWrite != payload.InventoryVersion) return "SUPERSEDED";
 
+        if (!string.IsNullOrWhiteSpace(mapping.UserProductId))
+        {
+            var stock = await _mercadoLivreApiClient.GetUserProductStockAsync(mapping.UserProductId, token, cancellationToken);
+            var warehouses = stock.Locations
+                .Where(location => string.Equals(location.Type, "seller_warehouse", StringComparison.OrdinalIgnoreCase)
+                                   && !string.IsNullOrWhiteSpace(location.StoreId))
+                .ToList();
+            if (warehouses.Count > 0)
+            {
+                var versionBeforeUserProductWrite = await _dbContext.ProductVariants.AsNoTracking()
+                    .Where(item => item.VariantSku == payload.VariantSku)
+                    .Select(item => item.InventoryVersion)
+                    .SingleAsync(cancellationToken);
+                if (versionBeforeUserProductWrite != payload.InventoryVersion) return "SUPERSEDED";
+
+                var allocation = AllocateWarehouseStock(warehouses, current.Available);
+                await _mercadoLivreApiClient.UpdateUserProductWarehouseStockAsync(
+                    mapping.UserProductId,
+                    stock.Version,
+                    allocation,
+                    token,
+                    cancellationToken);
+                return "COMPLETED";
+            }
+
+            if (stock.Locations.Any(location => string.Equals(location.Type, "meli_facility", StringComparison.OrdinalIgnoreCase))
+                && stock.Locations.All(location => string.Equals(location.Type, "meli_facility", StringComparison.OrdinalIgnoreCase)))
+            {
+                _logger.LogInformation(
+                    "INVENTORY_EXTERNALLY_MANAGED mapping={MappingId} userProduct={UserProductId} sku={Sku}",
+                    mapping.Id, mapping.UserProductId, payload.VariantSku);
+                return "COMPLETED";
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(mapping.MlVariationId))
             await _mercadoLivreApiClient.UpdateItemStockAsync(mapping.MlItemId, current.Available, token, cancellationToken);
         else
             await _mercadoLivreApiClient.UpdateVariationStockAsync(mapping.MlItemId, mapping.MlVariationId, current.Available, token, cancellationToken);
         return "COMPLETED";
+    }
+
+    public static IReadOnlyCollection<MercadoLivreUserProductStockLocation> AllocateWarehouseStock(
+        IReadOnlyCollection<MercadoLivreUserProductStockLocation> source,
+        int requestedAvailable)
+    {
+        var locations = source
+            .Where(location => !string.IsNullOrWhiteSpace(location.StoreId))
+            .OrderBy(location => location.StoreId, StringComparer.Ordinal)
+            .Select(location => new MercadoLivreUserProductStockLocation
+            {
+                Type = "seller_warehouse",
+                StoreId = location.StoreId,
+                NetworkNodeId = location.NetworkNodeId,
+                Quantity = Math.Max(0, location.Quantity)
+            })
+            .ToList();
+        if (locations.Count == 0) return locations;
+
+        var target = Math.Max(0, requestedAvailable);
+        var currentTotal = locations.Sum(location => location.Quantity);
+        if (target == 0)
+        {
+            locations.ForEach(location => location.Quantity = 0);
+            return locations;
+        }
+        if (currentTotal == 0)
+        {
+            locations[0].Quantity = target;
+            return locations;
+        }
+
+        var assigned = 0;
+        var shares = locations.Select(location =>
+        {
+            var exact = (decimal)target * location.Quantity / currentTotal;
+            var floor = (int)Math.Floor(exact);
+            location.Quantity = floor;
+            assigned += floor;
+            return new { Location = location, Fraction = exact - floor };
+        }).OrderByDescending(item => item.Fraction).ThenBy(item => item.Location.StoreId, StringComparer.Ordinal).ToList();
+        for (var index = 0; index < target - assigned; index++)
+        {
+            shares[index % shares.Count].Location.Quantity++;
+        }
+        return locations;
     }
 
     public sealed record StockSyncJobPayload(Guid MappingId, string VariantSku, long InventoryVersion, int RequestedAvailable);

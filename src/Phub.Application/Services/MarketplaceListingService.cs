@@ -10,6 +10,7 @@ namespace Phub.Application.Services;
 
 public sealed class MarketplaceListingService
 {
+    public const string ListingChangeOperation = "LISTING_CHANGE";
     private readonly IAppDbContext _db;
     private readonly IMercadoLivreApiClient _api;
     private readonly MercadoLivreOAuthService _oauth;
@@ -123,6 +124,137 @@ public sealed class MarketplaceListingService
             BuildWorkspace(context.Data.Mapping, refreshed ?? context.Data.Details));
     }
 
+    public async Task<ServiceResult<MarketplaceListingChangeDraft>> SaveDraftAsync(
+        string tenantId,
+        Guid clientId,
+        Guid actorId,
+        Guid mappingId,
+        MarketplaceListingChangeSet changeSet,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await LoadAsync(tenantId, clientId, mappingId, cancellationToken);
+        if (!context.Succeeded || context.Data == null)
+            return ServiceResult<MarketplaceListingChangeDraft>.Failure(context.ErrorCode ?? ServiceErrorCodes.ValidationError, context.Errors);
+
+        var current = BuildWorkspace(context.Data.Mapping, context.Data.Details);
+        if (changeSet.MappingVersion != context.Data.Mapping.MappingVersion
+            || string.IsNullOrWhiteSpace(changeSet.EvaluationHash)
+            || !string.Equals(changeSet.EvaluationHash, current.Capabilities.EvaluationHash, StringComparison.Ordinal))
+        {
+            return ServiceResult<MarketplaceListingChangeDraft>.Conflict(
+                "evaluationHash",
+                "O anuncio mudou ou a avaliacao expirou. Recarregue as capacidades antes de salvar o rascunho.");
+        }
+
+        var validation = ValidateChanges(changeSet, current.Capabilities);
+        if (validation.Count > 0)
+            return ServiceResult<MarketplaceListingChangeDraft>.Failure(ServiceErrorCodes.ValidationError, validation);
+        if (changeSet.Title is null && changeSet.Price is null && changeSet.Description is null)
+            return ServiceResult<MarketplaceListingChangeDraft>.Failure(ServiceErrorCodes.ValidationError, "changes", "Informe ao menos uma alteracao.");
+
+        var now = DateTimeOffset.UtcNow;
+        var envelope = new ListingChangeDraftPayload(mappingId, actorId, changeSet);
+        var job = new MarketplaceOperationJob
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            Provider = MarketplaceProvider.MercadoLivre,
+            OperationType = ListingChangeOperation,
+            Status = "DRAFT",
+            PayloadJson = JsonSerializer.Serialize(envelope),
+            Total = 1,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _db.MarketplaceOperationJobs.Add(job);
+        _db.AuditEvents.Add(new AuditEvent
+        {
+            TenantId = tenantId,
+            ActorType = "ClientUser",
+            ActorId = actorId == Guid.Empty ? null : actorId,
+            Action = "MarketplaceListing.SaveChangeDraft",
+            Entity = nameof(MarketplaceOperationJob),
+            EntityId = job.Id,
+            RequestId = Guid.NewGuid(),
+            MetadataJson = JsonSerializer.Serialize(new { mappingId, context.Data.Mapping.MlItemId, context.Data.Mapping.MappingVersion })
+        });
+        await _db.SaveChangesAsync(cancellationToken);
+        return ServiceResult<MarketplaceListingChangeDraft>.Success(new MarketplaceListingChangeDraft
+        {
+            DraftId = job.Id,
+            MappingId = mappingId,
+            Status = job.Status,
+            Changes = changeSet,
+            CreatedAt = job.CreatedAt
+        });
+    }
+
+    public async Task<ServiceResult<MarketplaceListingWorkspace>> ApplyDraftAsync(
+        string tenantId,
+        Guid clientId,
+        Guid actorId,
+        Guid mappingId,
+        Guid draftId,
+        CancellationToken cancellationToken = default)
+    {
+        var job = await _db.MarketplaceOperationJobs.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.Id == draftId
+            && item.TenantId == tenantId
+            && item.ClientId == clientId
+            && item.Provider == MarketplaceProvider.MercadoLivre
+            && item.OperationType == ListingChangeOperation,
+            cancellationToken);
+        if (job == null) return ServiceResult<MarketplaceListingWorkspace>.NotFound("draftId", "Rascunho nao encontrado.");
+        if (!string.Equals(job.Status, "DRAFT", StringComparison.Ordinal))
+            return ServiceResult<MarketplaceListingWorkspace>.Conflict("draftId", "Este rascunho ja foi processado ou substituido.");
+
+        var payload = JsonSerializer.Deserialize<ListingChangeDraftPayload>(job.PayloadJson);
+        if (payload == null || payload.MappingId != mappingId)
+            return ServiceResult<MarketplaceListingWorkspace>.Failure(ServiceErrorCodes.ValidationError, "draftId", "Rascunho invalido para este anuncio.");
+
+        var startedAt = DateTimeOffset.UtcNow;
+        var claimed = await _db.MarketplaceOperationJobs
+            .Where(item => item.Id == draftId && item.Status == "DRAFT")
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Status, "PROCESSING")
+                .SetProperty(item => item.StartedAt, startedAt)
+                .SetProperty(item => item.Attempts, item => item.Attempts + 1)
+                .SetProperty(item => item.UpdatedAt, startedAt), cancellationToken);
+        if (claimed == 0)
+            return ServiceResult<MarketplaceListingWorkspace>.Conflict("draftId", "Este rascunho foi confirmado por outra sessao.");
+
+        ServiceResult<MarketplaceListingWorkspace> result;
+        try
+        {
+            result = await ApplyAsync(tenantId, clientId, actorId, mappingId, payload.Changes, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            var failedAt = DateTimeOffset.UtcNow;
+            var error = ex.Message.Length > 2000 ? ex.Message[..2000] : ex.Message;
+            await _db.MarketplaceOperationJobs.Where(item => item.Id == draftId).ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Status, "FAILED")
+                .SetProperty(item => item.Processed, 1)
+                .SetProperty(item => item.Failed, 1)
+                .SetProperty(item => item.LastError, error)
+                .SetProperty(item => item.CompletedAt, failedAt)
+                .SetProperty(item => item.UpdatedAt, failedAt), CancellationToken.None);
+            throw;
+        }
+        var status = result.Succeeded ? "COMPLETED" : result.ErrorCode == ServiceErrorCodes.ConcurrencyConflict ? "SUPERSEDED" : "FAILED";
+        var completedAt = DateTimeOffset.UtcNow;
+        var lastError = result.Succeeded ? null : string.Join("; ", result.Errors.Select(error => error.Message));
+        await _db.MarketplaceOperationJobs.Where(item => item.Id == draftId).ExecuteUpdateAsync(setters => setters
+            .SetProperty(item => item.Status, status)
+            .SetProperty(item => item.Processed, 1)
+            .SetProperty(item => item.Succeeded, result.Succeeded ? 1 : 0)
+            .SetProperty(item => item.Failed, result.Succeeded ? 0 : 1)
+            .SetProperty(item => item.LastError, lastError)
+            .SetProperty(item => item.CompletedAt, completedAt)
+            .SetProperty(item => item.UpdatedAt, completedAt), cancellationToken);
+        return result;
+    }
+
     private async Task<ServiceResult<ListingContext>> LoadAsync(
         string tenantId,
         Guid clientId,
@@ -190,4 +322,9 @@ public sealed class MarketplaceListingService
         TenantMarketplaceListingMap Mapping,
         MercadoLivreSellerItemDetails Details,
         string AccessToken);
+
+    private sealed record ListingChangeDraftPayload(
+        Guid MappingId,
+        Guid ActorId,
+        MarketplaceListingChangeSet Changes);
 }

@@ -37,6 +37,8 @@ Push em `main` executa `.github/workflows/deploy.yml`:
 - confirmar que API e worker continuam ativos no Fly.
 - confirmar que um lote de etiquetas retorna HTTP 202, progride no endpoint de job e é consumido pela máquina `worker`;
 - conferir divergências de estoque antes de habilitar escrita global; jobs com `inventoryVersion` inferior à versão corrente não podem chamar o canal.
+- no piloto, conferir separadamente anúncios Legacy e User Products; User Products multi-origem devem registrar leitura e escrita com `x-version`, e conflito HTTP 409 deve ser retentado somente após nova leitura.
+- não tratar estoque Full (`meli_facility`) como gravável pelo HUB.
 
 ## Liberação gradual do estoque
 
