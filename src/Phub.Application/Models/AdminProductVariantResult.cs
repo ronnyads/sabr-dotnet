@@ -10,6 +10,8 @@ public sealed class AdminProductVariantResult
     public int PhysicalStock { get; set; }
     public int ReservedStock { get; set; }
     public int AvailableStock { get; set; }
+    public int SafetyBuffer { get; set; }
+    public long InventoryVersion { get; set; }
     public bool IsActive { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

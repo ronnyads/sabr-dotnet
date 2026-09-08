@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, pedidos, expedicao]
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # Linha do tempo de pedidos
@@ -18,3 +18,9 @@ Sequência comum ao admin e cliente:
 - Múltiplos pacotes mantêm marcos por shipment.
 
 Ver também [[01 - Dashboard de Vendas]] para a visão comercial agregada.
+
+## Etiquetas assíncronas
+
+A busca individual continua contextual por pedido/shipment. A busca em lote não mantém uma conexão HTTP longa: `POST /api/v1/client/orders/marketplace/labels/pull` cria um `MarketplaceOperationJob`, responde `202` com `jobId` e o portal acompanha `GET /api/v1/client/orders/marketplace/jobs/{jobId}`.
+
+O worker processa os shipments com reuso da etiqueta armazenada, até três tentativas e estados `PENDING`, `PROCESSING`, `COMPLETED`, `COMPLETED_WITH_ERRORS` ou `FAILED`. Isso evita que timeouts de proxy apareçam no navegador como falso erro de CORS.

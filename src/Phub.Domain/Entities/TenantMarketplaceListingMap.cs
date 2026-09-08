@@ -12,7 +12,10 @@ public sealed class TenantMarketplaceListingMap
     public long SellerId { get; set; }
     public string MlItemId { get; set; } = string.Empty;
     public string? MlVariationId { get; set; }
+    public string? UserProductId { get; set; }
+    public string? ChannelSku { get; set; }
     public string SabrVariantSku { get; set; } = string.Empty;
+    public long MappingVersion { get; set; } = 1;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

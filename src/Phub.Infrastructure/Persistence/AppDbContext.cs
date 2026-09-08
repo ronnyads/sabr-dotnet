@@ -53,6 +53,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<MarketplaceShipment> MarketplaceShipments => Set<MarketplaceShipment>();
     public DbSet<StockReservation> StockReservations => Set<StockReservation>();
     public DbSet<MarketplaceEventLog> MarketplaceEventLogs => Set<MarketplaceEventLog>();
+    public DbSet<MarketplaceOperationJob> MarketplaceOperationJobs => Set<MarketplaceOperationJob>();
     public DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules => Set<TenantMarketplaceSlaRule>();
     public DbSet<AiPromptConfig> AiPromptConfigs => Set<AiPromptConfig>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
@@ -189,12 +190,24 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 entry.Entity.BaseSku = Sku.Normalize(entry.Entity.BaseSku);
                 entry.Entity.CreatedAt = now;
                 entry.Entity.UpdatedAt = now;
+                entry.Entity.SafetyBuffer = Math.Max(0, entry.Entity.SafetyBuffer);
+                entry.Entity.AvailableStock = Math.Max(0, entry.Entity.PhysicalStock - entry.Entity.ReservedStock - entry.Entity.SafetyBuffer);
+                entry.Entity.InventoryVersion = Math.Max(1, entry.Entity.InventoryVersion);
             }
 
             if (entry.State == EntityState.Modified)
             {
+                var inventoryChanged = entry.Property(nameof(ProductVariant.PhysicalStock)).IsModified
+                                       || entry.Property(nameof(ProductVariant.ReservedStock)).IsModified
+                                       || entry.Property(nameof(ProductVariant.SafetyBuffer)).IsModified;
                 entry.Entity.VariantSku = Sku.Normalize(entry.Entity.VariantSku);
                 entry.Entity.BaseSku = Sku.Normalize(entry.Entity.BaseSku);
+                entry.Entity.SafetyBuffer = Math.Max(0, entry.Entity.SafetyBuffer);
+                entry.Entity.AvailableStock = Math.Max(0, entry.Entity.PhysicalStock - entry.Entity.ReservedStock - entry.Entity.SafetyBuffer);
+                if (inventoryChanged)
+                {
+                    entry.Entity.InventoryVersion = Math.Max(1, entry.Entity.InventoryVersion + 1);
+                }
                 entry.Entity.UpdatedAt = now;
             }
         }
@@ -481,6 +494,16 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             {
                 entry.Entity.UpdatedAt = now;
             }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<MarketplaceOperationJob>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                entry.Entity.CreatedAt = now;
+                entry.Entity.UpdatedAt = now;
+            }
+            if (entry.State == EntityState.Modified) entry.Entity.UpdatedAt = now;
         }
 
         foreach (var entry in ChangeTracker.Entries<TenantMarketplaceSlaRule>())
@@ -922,6 +945,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.PhysicalStock).HasColumnName("physical_stock").IsRequired();
             entity.Property(e => e.ReservedStock).HasColumnName("reserved_stock").IsRequired();
             entity.Property(e => e.AvailableStock).HasColumnName("available_stock").IsRequired();
+            entity.Property(e => e.SafetyBuffer).HasColumnName("safety_buffer").HasDefaultValue(2).IsRequired();
+            entity.Property(e => e.InventoryVersion).HasColumnName("inventory_version").HasDefaultValue(1L).IsRequired();
             entity.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
@@ -932,7 +957,9 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasCheckConstraint("ck_product_variants_physical_non_negative", "\"physical_stock\" >= 0");
             entity.HasCheckConstraint("ck_product_variants_reserved_non_negative", "\"reserved_stock\" >= 0");
             entity.HasCheckConstraint("ck_product_variants_available_non_negative", "\"available_stock\" >= 0");
-            entity.HasCheckConstraint("ck_product_variants_available_consistency", "\"available_stock\" = \"physical_stock\" - \"reserved_stock\"");
+            entity.HasCheckConstraint("ck_product_variants_buffer_non_negative", "\"safety_buffer\" >= 0");
+            entity.HasCheckConstraint("ck_product_variants_inventory_version_positive", "\"inventory_version\" > 0");
+            entity.HasCheckConstraint("ck_product_variants_available_consistency", "\"available_stock\" = GREATEST(0, \"physical_stock\" - \"reserved_stock\" - \"safety_buffer\")");
             entity.HasIndex(e => e.BaseSku).HasDatabaseName("ix_product_variants_base_sku");
             entity.HasIndex(e => new { e.BaseSku, e.IsActive }).HasDatabaseName("ix_product_variants_base_sku_active");
             entity.HasOne<Product>()
@@ -964,6 +991,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.Id).HasColumnName("id").IsRequired();
             entity.Property(e => e.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
             entity.Property(e => e.Description).HasColumnName("description").HasMaxLength(600);
+            entity.Property(e => e.AccessMode).HasColumnName("access_mode").HasDefaultValue(CatalogAccessMode.Public).IsRequired();
             entity.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
@@ -1152,10 +1180,14 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
             entity.Property(e => e.MlItemId).HasColumnName("ml_item_id").HasMaxLength(80).IsRequired();
             entity.Property(e => e.MlVariationId).HasColumnName("ml_variation_id").HasMaxLength(80);
+            entity.Property(e => e.UserProductId).HasColumnName("user_product_id").HasMaxLength(80);
+            entity.Property(e => e.ChannelSku).HasColumnName("channel_sku").HasMaxLength(120);
             entity.Property(e => e.SabrVariantSku).HasColumnName("sabr_variant_sku").HasMaxLength(Sku.MaxLength).IsRequired();
+            entity.Property(e => e.MappingVersion).HasColumnName("mapping_version").HasDefaultValue(1L).IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
             entity.HasCheckConstraint("ck_tenant_marketplace_listing_maps_sku_format", "\"sabr_variant_sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");
+            entity.HasCheckConstraint("ck_tenant_marketplace_listing_maps_version_positive", "\"mapping_version\" > 0");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.IntegrationId, e.MlItemId, e.MlVariationId })
                 .HasFilter("\"ml_variation_id\" IS NOT NULL")
                 .IsUnique()
@@ -1312,6 +1344,10 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.SaleFee).HasColumnName("sale_fee").HasPrecision(18, 2);
             entity.Property(e => e.ReservedQuantity).HasColumnName("reserved_quantity").IsRequired();
             entity.Property(e => e.MappingState).HasColumnName("mapping_state").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.MappingSnapshotId).HasColumnName("mapping_snapshot_id");
+            entity.Property(e => e.MappingSnapshotVersion).HasColumnName("mapping_snapshot_version");
+            entity.Property(e => e.MappingResolutionReason).HasColumnName("mapping_resolution_reason").HasMaxLength(80);
+            entity.Property(e => e.MappingResolvedAt).HasColumnName("mapping_resolved_at");
             entity.Property(e => e.RawJson).HasColumnName("raw_json").HasColumnType("jsonb");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
@@ -1434,6 +1470,33 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .HasDatabaseName("ix_marketplace_event_logs_status_created");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId })
                 .HasDatabaseName("ix_marketplace_event_logs_scope_seller");
+        });
+
+        modelBuilder.Entity<MarketplaceOperationJob>(entity =>
+        {
+            entity.ToTable("marketplace_operation_jobs");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").IsRequired();
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.OperationType).HasColumnName("operation_type").HasMaxLength(60).IsRequired();
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.PayloadJson).HasColumnName("payload_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.ResultJson).HasColumnName("result_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.Total).HasColumnName("total").IsRequired();
+            entity.Property(e => e.Processed).HasColumnName("processed").IsRequired();
+            entity.Property(e => e.Succeeded).HasColumnName("succeeded").IsRequired();
+            entity.Property(e => e.Failed).HasColumnName("failed").IsRequired();
+            entity.Property(e => e.Attempts).HasColumnName("attempts").IsRequired();
+            entity.Property(e => e.InventoryVersion).HasColumnName("inventory_version");
+            entity.Property(e => e.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            entity.Property(e => e.StartedAt).HasColumnName("started_at");
+            entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.Status, e.CreatedAt }).HasDatabaseName("ix_marketplace_operation_jobs_status_created");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.CreatedAt }).HasDatabaseName("ix_marketplace_operation_jobs_scope_created");
         });
 
         modelBuilder.Entity<TenantMarketplaceSlaRule>(entity =>

@@ -369,9 +369,11 @@ public sealed class TinyIntegrationService
             }
 
             orderItem.SellerId = sellerId;
-            orderItem.SabrVariantSku = resolution.SabrVariantSku;
             orderItem.Quantity = (int)tinyItem.Quantidade;
-            orderItem.MappingState = resolution.MappingState;
+            if (!orderItem.MappingResolvedAt.HasValue)
+            {
+                MarketplaceOrderMappingService.ApplyResolutionSnapshot(orderItem, resolution, nowUtc);
+            }
             orderItem.RawJson = System.Text.Json.JsonSerializer.Serialize(tinyItem);
             orderItem.UpdatedAt = nowUtc;
         }

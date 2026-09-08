@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Phub.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using Phub.Infrastructure.Persistence;
 namespace Phub.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260908032424_AddOmnichannelCatalogInventoryFoundation")]
+    partial class AddOmnichannelCatalogInventoryFoundation
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -976,105 +979,6 @@ namespace Phub.Infrastructure.Migrations
                         .HasDatabaseName("ix_marketplace_event_logs_scope_seller");
 
                     b.ToTable("marketplace_event_logs", (string)null);
-                });
-
-            modelBuilder.Entity("Phub.Domain.Entities.MarketplaceOperationJob", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<int>("Attempts")
-                        .HasColumnType("integer")
-                        .HasColumnName("attempts");
-
-                    b.Property<Guid>("ClientId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("client_id");
-
-                    b.Property<DateTimeOffset?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("completed_at");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<int>("Failed")
-                        .HasColumnType("integer")
-                        .HasColumnName("failed");
-
-                    b.Property<long?>("InventoryVersion")
-                        .HasColumnType("bigint")
-                        .HasColumnName("inventory_version");
-
-                    b.Property<string>("LastError")
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)")
-                        .HasColumnName("last_error");
-
-                    b.Property<string>("OperationType")
-                        .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("operation_type");
-
-                    b.Property<string>("PayloadJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("payload_json");
-
-                    b.Property<int>("Processed")
-                        .HasColumnType("integer")
-                        .HasColumnName("processed");
-
-                    b.Property<int>("Provider")
-                        .HasColumnType("integer")
-                        .HasColumnName("provider");
-
-                    b.Property<string>("ResultJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("result_json");
-
-                    b.Property<DateTimeOffset?>("StartedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("started_at");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("status");
-
-                    b.Property<int>("Succeeded")
-                        .HasColumnType("integer")
-                        .HasColumnName("succeeded");
-
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("tenant_id");
-
-                    b.Property<int>("Total")
-                        .HasColumnType("integer")
-                        .HasColumnName("total");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Status", "CreatedAt")
-                        .HasDatabaseName("ix_marketplace_operation_jobs_status_created");
-
-                    b.HasIndex("TenantId", "ClientId", "CreatedAt")
-                        .HasDatabaseName("ix_marketplace_operation_jobs_scope_created");
-
-                    b.ToTable("marketplace_operation_jobs", (string)null);
                 });
 
             modelBuilder.Entity("Phub.Domain.Entities.MarketplaceOrder", b =>

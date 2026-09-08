@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, arquitetura, onboarding-agentes]
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # PrometheusHUB — mapa do sistema
@@ -37,6 +37,7 @@ updated: 2026-09-07
 - [[04 - Onboarding de Clientes]]
 - [[05 - Carteira e Depósitos]]
 - [[06 - Importação de Catálogo do Mercado Livre]]
+- [[07 - Catálogo e Estoque Omnichannel]]
 
 ## Regra de atualização deste vault
 

@@ -433,9 +433,11 @@ public sealed class ShopeeOAuthService
             }
 
             existingItem.SellerId = connection.SellerId;
-            existingItem.SabrVariantSku = resolution.SabrVariantSku;
             existingItem.Quantity = Math.Max(0, line.QuantityPurchased);
-            existingItem.MappingState = resolution.MappingState;
+            if (!existingItem.MappingResolvedAt.HasValue)
+            {
+                MarketplaceOrderMappingService.ApplyResolutionSnapshot(existingItem, resolution, importedAt);
+            }
             existingItem.RawJson = JsonSerializer.Serialize(line);
             existingItem.UpdatedAt = importedAt;
         }

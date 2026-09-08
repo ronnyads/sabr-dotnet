@@ -382,6 +382,7 @@ builder.Services.AddScoped<MarketplaceOrderPaymentService>();
 builder.Services.AddScoped<MarketplaceShipmentLabelService>();
 builder.Services.AddScoped<OrderCancellationService>();
 builder.Services.AddScoped<OrderFulfillmentService>();
+builder.Services.AddScoped<MarketplaceOperationJobService>();
 builder.Services.AddScoped<ClientSalesDashboardService>();
 builder.Services.AddScoped<ClientStoreService>();
 builder.Services.AddScoped<WalletService>();
@@ -417,6 +418,7 @@ if (builder.Configuration.GetValue("BackgroundWorkers:Enabled", false))
     builder.Services.AddHostedService<MarketplaceMabangWorker>();
     builder.Services.AddHostedService<MarketplaceReconcileNightlyWorker>();
     builder.Services.AddHostedService<ProductVariantBackfillWorker>();
+    builder.Services.AddHostedService<MarketplaceOperationWorker>();
 }
 
 // Forçar lookup real (BrasilAPI) para CNPJ; sem mock.

@@ -585,6 +585,20 @@ public sealed class MarketplacePullLabelsBulkResult
     public List<MarketplacePullShipmentLabelResult> Items { get; set; } = new();
 }
 
+public sealed class MarketplaceOperationJobResult
+{
+    public Guid JobId { get; set; }
+    public string OperationType { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public int Total { get; set; }
+    public int Processed { get; set; }
+    public int Succeeded { get; set; }
+    public int Failed { get; set; }
+    public string? LastError { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
 public sealed class MarketplaceShipmentScanRequest
 {
     public string Value { get; set; } = string.Empty;

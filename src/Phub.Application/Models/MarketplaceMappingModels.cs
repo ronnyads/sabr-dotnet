@@ -64,7 +64,9 @@ public sealed record MarketplaceItemResolutionResult(
     string MappingState,
     string MappingReason,
     string? ChannelSku,
-    string ResolutionSource);
+    string ResolutionSource,
+    Guid? MappingId = null,
+    long? MappingVersion = null);
 
 public static class MarketplaceMappingReasonCodes
 {

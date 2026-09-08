@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, deploy, flyio, cloudflare]
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # Deploy e operação
@@ -35,6 +35,19 @@ Push em `main` executa `.github/workflows/deploy.yml`:
 - `app.marketplaceonline.site` e `admin.marketplaceonline.site` com HTTP 200;
 - login e dashboard do cliente sem erro de console/rede;
 - confirmar que API e worker continuam ativos no Fly.
+- confirmar que um lote de etiquetas retorna HTTP 202, progride no endpoint de job e é consumido pela máquina `worker`;
+- conferir divergências de estoque antes de habilitar escrita global; jobs com `inventoryVersion` inferior à versão corrente não podem chamar o canal.
+
+## Liberação gradual do estoque
+
+1. aplicar as migrations aditivas;
+2. validar o backfill do Catálogo Público e snapshots históricos;
+3. observar `physicalStock - reservedStock - safetyBuffer` sem escrita global;
+4. liberar uma conta piloto;
+5. comparar canal x HUB;
+6. expandir somente após ausência de divergências.
+
+O buffer padrão é 2. Reserva, saldo disponível e incremento monotônico de `inventoryVersion` ocorrem na mesma transação. Nunca reduzir a versão manualmente durante rollback.
 
 ## Rollback
 

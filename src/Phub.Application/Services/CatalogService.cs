@@ -50,6 +50,9 @@ public sealed class CatalogService
                 Name = product.Name,
                 ThumbnailUrl = product.ThumbnailUrl,
                 CatalogPriceCents = product.CatalogPriceCents,
+                AvailableStock = _dbContext.ProductVariants
+                    .Where(variant => variant.BaseSku == product.Sku && variant.IsActive)
+                    .Sum(variant => (int?)variant.AvailableStock) ?? 0,
                 IsActive = product.IsActive
             })
             .ToListAsync(cancellationToken);

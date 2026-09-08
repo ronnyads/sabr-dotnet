@@ -22,6 +22,8 @@ public sealed class ProductVariant
     public int PhysicalStock { get; set; }
     public int ReservedStock { get; set; }
     public int AvailableStock { get; set; }
+    public int SafetyBuffer { get; set; } = 2;
+    public long InventoryVersion { get; set; } = 1;
     public bool IsActive { get; set; } = true;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

@@ -8,5 +8,6 @@ public sealed class AdminProductVariantCreateRequest
     public long? CatalogPriceCents { get; set; }
     public int? PhysicalStock { get; set; }
     public int? ReservedStock { get; set; }
+    public int? SafetyBuffer { get; set; }
     public bool? IsActive { get; set; }
 }

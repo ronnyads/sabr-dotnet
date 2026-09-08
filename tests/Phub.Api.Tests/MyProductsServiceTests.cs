@@ -358,7 +358,7 @@ public sealed class MyProductsServiceTests
         Assert.Single(result.Items);
         var row = result.Items[0];
         Assert.Equal(variantB, row.ResolvedVariantSku);
-        Assert.Equal(8, row.AvailableStock);
+        Assert.Equal(6, row.AvailableStock);
         Assert.Equal("AutoBestVariant", row.StockSource);
     }
 

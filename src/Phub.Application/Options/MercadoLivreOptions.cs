@@ -68,6 +68,8 @@ public sealed class MercadoLivreFeatureFlags
     public bool Mabang { get; set; } = false;
     public bool Reconcile { get; set; } = false;
     public bool SlaByMode { get; set; } = true;
+    public bool GlobalInventoryWrite { get; set; } = false;
+    public List<long> InventoryPilotSellerIds { get; set; } = new();
 }
 
 public sealed class MercadoLivreResilienceOptions

@@ -335,9 +335,11 @@ public sealed class ShopifyOAuthService
                 }
 
                 existingItem.SellerId = connection.SellerId;
-                existingItem.SabrVariantSku = resolution.SabrVariantSku;
                 existingItem.Quantity = line.Quantity;
-                existingItem.MappingState = resolution.MappingState;
+                if (!existingItem.MappingResolvedAt.HasValue)
+                {
+                    MarketplaceOrderMappingService.ApplyResolutionSnapshot(existingItem, resolution, nowUtc);
+                }
                 existingItem.RawJson = JsonSerializer.Serialize(line);
                 existingItem.UpdatedAt = nowUtc;
             }

@@ -92,9 +92,10 @@ public sealed class ProductVariantService
         var catalogPriceCents = request.CatalogPriceCents ?? product.CatalogPriceCents;
         var physicalStock = request.PhysicalStock ?? 0;
         var reservedStock = request.ReservedStock ?? 0;
+        var safetyBuffer = request.SafetyBuffer ?? 2;
         var isActive = request.IsActive ?? true;
 
-        errors = ValidateVariantFields(name, costPriceCents, catalogPriceCents, physicalStock, reservedStock);
+        errors = ValidateVariantFields(name, costPriceCents, catalogPriceCents, physicalStock, reservedStock, safetyBuffer);
         if (errors.Count > 0)
         {
             return ServiceResult<AdminProductVariantResult>.Failure(errors);
@@ -109,7 +110,9 @@ public sealed class ProductVariantService
             CatalogPriceCents = catalogPriceCents,
             PhysicalStock = physicalStock,
             ReservedStock = reservedStock,
-            AvailableStock = physicalStock - reservedStock,
+            AvailableStock = Math.Max(0, physicalStock - reservedStock - safetyBuffer),
+            SafetyBuffer = safetyBuffer,
+            InventoryVersion = 1,
             IsActive = isActive,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
@@ -173,9 +176,10 @@ public sealed class ProductVariantService
         var catalogPriceCents = request.CatalogPriceCents ?? variant.CatalogPriceCents;
         var physicalStock = request.PhysicalStock ?? variant.PhysicalStock;
         var reservedStock = request.ReservedStock ?? variant.ReservedStock;
+        var safetyBuffer = request.SafetyBuffer ?? variant.SafetyBuffer;
         var isActive = request.IsActive ?? variant.IsActive;
 
-        errors = ValidateVariantFields(name, costPriceCents, catalogPriceCents, physicalStock, reservedStock);
+        errors = ValidateVariantFields(name, costPriceCents, catalogPriceCents, physicalStock, reservedStock, safetyBuffer);
         if (errors.Count > 0)
         {
             return ServiceResult<AdminProductVariantResult>.Failure(errors);
@@ -186,7 +190,8 @@ public sealed class ProductVariantService
         variant.CatalogPriceCents = catalogPriceCents;
         variant.PhysicalStock = physicalStock;
         variant.ReservedStock = reservedStock;
-        variant.AvailableStock = physicalStock - reservedStock;
+        variant.SafetyBuffer = safetyBuffer;
+        variant.AvailableStock = Math.Max(0, physicalStock - reservedStock - safetyBuffer);
         variant.IsActive = isActive;
         variant.UpdatedAt = DateTimeOffset.UtcNow;
 
@@ -310,7 +315,8 @@ public sealed class ProductVariantService
         long costPriceCents,
         long catalogPriceCents,
         int physicalStock,
-        int reservedStock)
+        int reservedStock,
+        int safetyBuffer)
     {
         var errors = new List<ValidationError>();
 
@@ -348,6 +354,11 @@ public sealed class ProductVariantService
             errors.Add(new ValidationError("reservedStock", "Reserved stock cannot exceed physical stock"));
         }
 
+        if (safetyBuffer < 0)
+        {
+            errors.Add(new ValidationError("safetyBuffer", "Safety buffer cannot be negative"));
+        }
+
         return errors;
     }
 
@@ -383,6 +394,8 @@ public sealed class ProductVariantService
             PhysicalStock = item.PhysicalStock,
             ReservedStock = item.ReservedStock,
             AvailableStock = item.AvailableStock,
+            SafetyBuffer = item.SafetyBuffer,
+            InventoryVersion = item.InventoryVersion,
             IsActive = item.IsActive,
             CreatedAt = item.CreatedAt,
             UpdatedAt = item.UpdatedAt

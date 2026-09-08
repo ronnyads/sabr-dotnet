@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, mercado-livre, catalogo, sku]
-updated: 2026-09-07
+updated: 2026-09-08
 ---
 
 # Importação de catálogo do Mercado Livre
@@ -13,7 +13,7 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 - O produto e a variante usam o mesmo SKU quando o anúncio não possui variações.
 - Produtos já existentes não são duplicados nem têm seus dados comerciais sobrescritos; somente o estoque da variante é atualizado.
 - Novos produtos usam o preço vigente do anúncio como preço inicial de catálogo e custo interno zero, sinalizando que o custo precisa ser revisado no admin.
-- Todo produto importado é vinculado aos catálogos ativos do plano do cliente selecionado.
+- Todo produto ativo é vinculado ao **Catálogo Público** por padrão. Catálogos `PlanRestricted` continuam dependentes de uma assinatura ativa; clientes aprovados enxergam o catálogo público mesmo sem plano.
 - Cada item/variação do Mercado Livre recebe um `TenantMarketplaceListingMap`, inclusive anúncios espelhados/sincronizados, para garantir o reconhecimento dos pedidos.
 - A operação é idempotente e gera o evento auditável `AdminProducts.ImportFromMercadoLivre`.
 
@@ -33,4 +33,8 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 
 ## Observação operacional
 
-A importação cria o catálogo e os mappings. Uma sincronização de pedidos posterior reaplica o reconhecimento por SKU aos pedidos do período processado.
+A importação cria o catálogo e os mappings. O auto-mapping só é aceito quando o SKU normalizado corresponde a um único SKU mestre ativo e autorizado. Ausência ou ambiguidade mantém o item pendente.
+
+Cada item de pedido grava um snapshot imutável do mapping (`mapping_snapshot_id`, versão, motivo e instante). Remapear um anúncio só altera pedidos recebidos depois da mudança; pedidos e reservas históricos não são reescritos.
+
+Os mappings armazenam identidades Legacy (`itemId`/`variationId`) e `userProductId`, permitindo que os adaptadores do Mercado Livre evoluam sem vazar o formato bruto para o domínio.

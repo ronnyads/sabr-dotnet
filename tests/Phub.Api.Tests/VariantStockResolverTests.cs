@@ -103,6 +103,7 @@ public sealed class VariantStockResolverTests
             AvailableStock = availableStock,
             PhysicalStock = physicalStock,
             ReservedStock = Math.Max(0, physicalStock - availableStock),
+            SafetyBuffer = 0,
             IsActive = isActive
         };
     }

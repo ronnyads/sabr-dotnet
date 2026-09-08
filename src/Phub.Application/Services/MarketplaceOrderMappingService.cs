@@ -285,7 +285,9 @@ public sealed class MarketplaceOrderMappingService
                 SellerId = connection.Data.SellerId,
                 MlItemId = normalizedItemId,
                 MlVariationId = normalizedVariationId,
-                SabrVariantSku = resolvedVariant.Data.VariantSku
+                ChannelSku = NormalizeSku(request.SelectedCatalogSku),
+                SabrVariantSku = resolvedVariant.Data.VariantSku,
+                MappingVersion = 1
             };
             _dbContext.TenantMarketplaceListingMaps.Add(existing);
         }
@@ -298,47 +300,10 @@ public sealed class MarketplaceOrderMappingService
             existing.IntegrationId = connection.Data.Id;
             existing.SellerId = connection.Data.SellerId;
             existing.SabrVariantSku = resolvedVariant.Data.VariantSku;
+            existing.ChannelSku = NormalizeSku(request.SelectedCatalogSku);
+            existing.MappingVersion++;
             existing.UpdatedAt = DateTimeOffset.UtcNow;
             action = "updated";
-        }
-
-        var matchedItems = await _dbContext.MarketplaceOrderItems
-            .Where(item => item.TenantId == tenantId
-                           && item.ClientId == clientId
-                           && item.Provider == request.Provider
-                           && item.SellerId == connection.Data.SellerId
-                           && item.MlItemId == normalizedItemId
-                           && item.MlVariationId == normalizedVariationId)
-            .ToListAsync(cancellationToken);
-
-        foreach (var item in matchedItems)
-        {
-            item.SabrVariantSku = resolvedVariant.Data.VariantSku;
-            item.MappingState = MarketplaceMappingStates.MappedByListingMap;
-            item.UpdatedAt = DateTimeOffset.UtcNow;
-        }
-
-        var affectedOrderIds = matchedItems
-            .Select(item => item.MarketplaceOrderId)
-            .Distinct()
-            .ToList();
-
-        if (affectedOrderIds.Count > 0)
-        {
-            var orders = await _dbContext.MarketplaceOrders
-                .Include(order => order.Items)
-                .Where(order => affectedOrderIds.Contains(order.Id))
-                .ToListAsync(cancellationToken);
-
-            foreach (var order in orders)
-            {
-                await _inventoryService.ReconcileReservationsAsync(
-                    order,
-                    order.SellerId,
-                    reservationTtlHours: 24,
-                    cancellationToken);
-                order.UpdatedAt = DateTimeOffset.UtcNow;
-            }
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -347,8 +312,7 @@ public sealed class MarketplaceOrderMappingService
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.Sku == resolvedVariant.Data.BaseSku, cancellationToken);
 
-        var firstMatchedItem = matchedItems.FirstOrDefault();
-        var channelMetadata = FindChannelMetadata(firstMatchedItem);
+        var channelMetadata = new ChannelMetadata(existing.ChannelSku);
 
         return ServiceResult<MarketplaceMappingListItemDto>.Success(new MarketplaceMappingListItemDto
         {
@@ -364,7 +328,7 @@ public sealed class MarketplaceOrderMappingService
             VariantName = resolvedVariant.Data.Name,
             ChannelSku = channelMetadata.ChannelSku,
             Action = action,
-            OrdersAffected = affectedOrderIds.Count,
+            OrdersAffected = 0,
             CreatedAt = existing.CreatedAt,
             UpdatedAt = existing.UpdatedAt
         });
@@ -390,58 +354,7 @@ public sealed class MarketplaceOrderMappingService
                 "Mapeamento nao encontrado.");
         }
 
-        var matchedItems = await _dbContext.MarketplaceOrderItems
-            .Where(item => item.TenantId == tenantId
-                           && item.ClientId == clientId
-                           && item.Provider == mapping.Provider
-                           && item.SellerId == mapping.SellerId
-                           && item.MlItemId == mapping.MlItemId
-                           && item.MlVariationId == mapping.MlVariationId)
-            .ToListAsync(cancellationToken);
-
         _dbContext.TenantMarketplaceListingMaps.Remove(mapping);
-
-        foreach (var item in matchedItems)
-        {
-            var resolution = await ResolveImportedItemAsync(
-                tenantId,
-                clientId,
-                item.Provider,
-                item.SellerId,
-                mapping.IntegrationId,
-                item.MlItemId,
-                item.MlVariationId,
-                FindChannelSku(item.Provider, item.RawJson),
-                cancellationToken,
-                mapping.Id);
-
-            item.SabrVariantSku = resolution.SabrVariantSku;
-            item.MappingState = resolution.MappingState;
-            item.UpdatedAt = DateTimeOffset.UtcNow;
-        }
-
-        var affectedOrderIds = matchedItems
-            .Select(item => item.MarketplaceOrderId)
-            .Distinct()
-            .ToList();
-
-        if (affectedOrderIds.Count > 0)
-        {
-            var orders = await _dbContext.MarketplaceOrders
-                .Include(order => order.Items)
-                .Where(order => affectedOrderIds.Contains(order.Id))
-                .ToListAsync(cancellationToken);
-
-            foreach (var order in orders)
-            {
-                await _inventoryService.ReconcileReservationsAsync(
-                    order,
-                    order.SellerId,
-                    reservationTtlHours: 24,
-                    cancellationToken);
-                order.UpdatedAt = DateTimeOffset.UtcNow;
-            }
-        }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         return ServiceResult<bool>.Success(true);
@@ -495,7 +408,9 @@ public sealed class MarketplaceOrderMappingService
                         MarketplaceMappingStates.MappedByListingMap,
                         MarketplaceMappingReasonCodes.MappedByListingMap,
                         normalizedChannelSku,
-                        MarketplaceMappingReasonCodes.MappedByListingMap);
+                        MarketplaceMappingReasonCodes.MappedByListingMap,
+                        manualMapping.Id,
+                        manualMapping.MappingVersion);
                 }
             }
 
@@ -555,6 +470,16 @@ public sealed class MarketplaceOrderMappingService
 
     public static string? FindChannelSku(MarketplaceProvider provider, string? rawJson)
         => FindChannelMetadata(provider, rawJson).ChannelSku;
+
+    public static void ApplyResolutionSnapshot(MarketplaceOrderItem item, MarketplaceItemResolutionResult resolution, DateTimeOffset resolvedAt)
+    {
+        item.SabrVariantSku = resolution.SabrVariantSku;
+        item.MappingState = resolution.MappingState;
+        item.MappingSnapshotId = resolution.MappingId;
+        item.MappingSnapshotVersion = resolution.MappingVersion;
+        item.MappingResolutionReason = resolution.MappingReason;
+        item.MappingResolvedAt = resolvedAt;
+    }
 
     public static string FindMappingReason(MarketplaceProvider provider, string? rawJson, string? mappingState, bool hasResolvedSku)
     {

@@ -6,5 +6,6 @@ public sealed class CatalogProductDto
     public string Name { get; set; } = string.Empty;
     public string? ThumbnailUrl { get; set; }
     public long CatalogPriceCents { get; set; }
+    public int AvailableStock { get; set; }
     public bool IsActive { get; set; }
 }

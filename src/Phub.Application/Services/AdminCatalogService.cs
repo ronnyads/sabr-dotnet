@@ -84,6 +84,7 @@ public sealed class AdminCatalogService
                 Id = item.Id,
                 Name = item.Name,
                 Description = item.Description,
+                AccessMode = item.AccessMode,
                 IsActive = item.IsActive,
                 ProductCount = productCount,
                 PlanCount = planCount,
@@ -244,6 +245,7 @@ public sealed class AdminCatalogService
         {
             Name = normalizedName,
             Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+            AccessMode = request.AccessMode,
             IsActive = request.IsActive,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
@@ -311,6 +313,7 @@ public sealed class AdminCatalogService
 
         catalog.Name = normalizedName;
         catalog.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+        catalog.AccessMode = request.AccessMode;
         catalog.IsActive = request.IsActive;
         catalog.UpdatedAt = DateTimeOffset.UtcNow;
 
@@ -671,6 +674,7 @@ public sealed class AdminCatalogService
             Id = catalog.Id,
             Name = catalog.Name,
             Description = catalog.Description,
+            AccessMode = catalog.AccessMode,
             IsActive = catalog.IsActive,
             ProductSkus = productSkus,
             PlanIds = planIds,

@@ -16,6 +16,7 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
     private readonly ILogger<ClientMarketplaceOrdersController> _logger;
     private readonly ITenantProvider _tenantProvider;
     private readonly OrderFulfillmentService _orderFulfillmentService;
+    private readonly MarketplaceOperationJobService _operationJobs;
     private readonly MarketplaceOrderPaymentService _paymentService;
     private readonly OrderCancellationService _cancellationService;
 
@@ -23,12 +24,14 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         ILogger<ClientMarketplaceOrdersController> logger,
         ITenantProvider tenantProvider,
         OrderFulfillmentService orderFulfillmentService,
+        MarketplaceOperationJobService operationJobs,
         MarketplaceOrderPaymentService paymentService,
         OrderCancellationService cancellationService)
     {
         _logger = logger;
         _tenantProvider = tenantProvider;
         _orderFulfillmentService = orderFulfillmentService;
+        _operationJobs = operationJobs;
         _paymentService = paymentService;
         _cancellationService = cancellationService;
     }
@@ -153,15 +156,17 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
             return error!;
 
-        var result = await _orderFulfillmentService.PullLabelsBulkAsync(
-            tenantId!,
-            clientId,
-            request?.OrderIds ?? [],
-            cancellationToken);
-        if (!result.Succeeded || result.Data == null)
-            return MapValidationError(result.Errors);
+        var job = await _operationJobs.EnqueueLabelPullAsync(
+            tenantId!, clientId, request?.OrderIds ?? [], cancellationToken);
+        return AcceptedAtAction(nameof(GetOperationJob), new { jobId = job.JobId }, job);
+    }
 
-        return Ok(result.Data);
+    [HttpGet("marketplace/jobs/{jobId:guid}")]
+    public async Task<IActionResult> GetOperationJob([FromRoute] Guid jobId, CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        var job = await _operationJobs.GetAsync(jobId, tenantId!, clientId, cancellationToken);
+        return job == null ? NotFound() : Ok(job);
     }
 
     [HttpPost("{orderId:guid}/mark-paid")]

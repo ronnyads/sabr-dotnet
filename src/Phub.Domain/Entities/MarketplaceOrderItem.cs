@@ -23,6 +23,10 @@ public sealed class MarketplaceOrderItem
     public decimal? SaleFee { get; set; }
     public int ReservedQuantity { get; set; }
     public string MappingState { get; set; } = "UNMAPPED";
+    public Guid? MappingSnapshotId { get; set; }
+    public long? MappingSnapshotVersion { get; set; }
+    public string? MappingResolutionReason { get; set; }
+    public DateTimeOffset? MappingResolvedAt { get; set; }
     public string? RawJson { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

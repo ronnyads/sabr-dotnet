@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -98,6 +99,32 @@ public sealed class MarketplaceOrderInventoryService
         int reservationTtlHours,
         CancellationToken cancellationToken = default)
     {
+        if (!_dbContext.Database.IsRelational() || _dbContext.Database.CurrentTransaction != null)
+        {
+            await ReconcileReservationsCoreAsync(order, sellerId, reservationTtlHours, cancellationToken);
+            return;
+        }
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await ReconcileReservationsCoreAsync(order, sellerId, reservationTtlHours, cancellationToken);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    private async Task ReconcileReservationsCoreAsync(
+        MarketplaceOrder order,
+        long sellerId,
+        int reservationTtlHours,
+        CancellationToken cancellationToken)
+    {
         var nowUtc = DateTimeOffset.UtcNow;
         var items = order.Items.ToList();
         var itemIds = items.Select(item => item.Id).ToList();
@@ -120,6 +147,16 @@ public sealed class MarketplaceOrderInventoryService
             .Select(item => item.SabrVariantSku!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
+
+        if (variantSkus.Count > 0
+            && _dbContext.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            await _dbContext.ProductVariants
+                .FromSqlRaw(
+                    "SELECT * FROM product_variants WHERE variant_sku = ANY ({0}) ORDER BY variant_sku FOR UPDATE",
+                    variantSkus.ToArray())
+                .LoadAsync(cancellationToken);
+        }
 
         var variants = variantSkus.Count == 0
             ? new Dictionary<string, ProductVariant>(StringComparer.Ordinal)
@@ -181,6 +218,15 @@ public sealed class MarketplaceOrderInventoryService
 
             if (delta > 0 && !string.IsNullOrWhiteSpace(item.SabrVariantSku))
             {
+                if (!variants.TryGetValue(item.SabrVariantSku!, out var reservableVariant)
+                    || StockAvailabilityService.ComputeAvailable(reservableVariant) < delta)
+                {
+                    item.ReservedQuantity = currentReserved;
+                    item.SellerId = sellerId;
+                    item.UpdatedAt = nowUtc;
+                    continue;
+                }
+
                 _dbContext.StockReservations.Add(new StockReservation
                 {
                     TenantId = order.TenantId,
@@ -196,11 +242,8 @@ public sealed class MarketplaceOrderInventoryService
 
                 item.ReservedQuantity = currentReserved + delta;
 
-                if (variants.TryGetValue(item.SabrVariantSku!, out var variant))
-                {
-                    variant.ReservedStock += delta;
-                    variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
-                }
+                reservableVariant.ReservedStock += delta;
+                reservableVariant.AvailableStock = StockAvailabilityService.ComputeAvailable(reservableVariant);
             }
             else if (delta < 0)
             {
@@ -266,7 +309,7 @@ public sealed class MarketplaceOrderInventoryService
         }
 
         var reservedForOthers = Math.Max(0, variant.ReservedStock - Math.Max(0, item.ReservedQuantity));
-        var availableForThisOrder = Math.Max(0, variant.PhysicalStock - reservedForOthers);
+        var availableForThisOrder = Math.Max(0, variant.PhysicalStock - reservedForOthers - variant.SafetyBuffer);
         var missingQuantity = Math.Max(0, item.Quantity - availableForThisOrder);
         var availableQuantity = Math.Max(0, item.Quantity - missingQuantity);
 

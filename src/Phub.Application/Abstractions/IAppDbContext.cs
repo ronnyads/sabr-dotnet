@@ -43,6 +43,7 @@ public interface IAppDbContext
     DbSet<MarketplaceShipment> MarketplaceShipments { get; }
     DbSet<StockReservation> StockReservations { get; }
     DbSet<MarketplaceEventLog> MarketplaceEventLogs { get; }
+    DbSet<MarketplaceOperationJob> MarketplaceOperationJobs { get; }
     DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules { get; }
     DbSet<AiPromptConfig> AiPromptConfigs { get; }
     DbSet<Supplier> Suppliers { get; }

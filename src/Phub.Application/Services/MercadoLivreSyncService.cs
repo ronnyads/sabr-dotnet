@@ -462,8 +462,10 @@ public sealed class MercadoLivreSyncService
                 cancellationToken);
             orderItem.Quantity = incomingItem.Quantity;
             orderItem.ChannelSku = incomingItem.ChannelSku;
-            orderItem.MappingState = resolution.MappingState;
-            orderItem.SabrVariantSku = resolution.SabrVariantSku;
+            if (!orderItem.MappingResolvedAt.HasValue)
+            {
+                MarketplaceOrderMappingService.ApplyResolutionSnapshot(orderItem, resolution, nowUtc);
+            }
             orderItem.ProductName = incomingItem.ProductName;
             orderItem.CurrencyId = incomingItem.CurrencyId;
             orderItem.UnitPrice = incomingItem.UnitPrice;
@@ -474,7 +476,7 @@ public sealed class MercadoLivreSyncService
             orderItem.UpdatedAt = nowUtc;
             itemsTouched++;
 
-            if (string.IsNullOrWhiteSpace(resolution.SabrVariantSku))
+            if (string.IsNullOrWhiteSpace(orderItem.SabrVariantSku))
             {
                 continue;
             }

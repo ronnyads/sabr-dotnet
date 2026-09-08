@@ -59,14 +59,23 @@ public sealed class MercadoLivreCatalogImportService
             .ToList();
         var result = new MercadoLivreCatalogImportResult { ListingsFound = listings.Count };
 
-        var catalogIds = await (
-            from subscription in _dbContext.ClientPlanSubscriptions.AsNoTracking()
-            join planCatalog in _dbContext.PlanCatalogs.AsNoTracking() on subscription.PlanId equals planCatalog.PlanId
-            join catalog in _dbContext.Catalogs.AsNoTracking() on planCatalog.CatalogId equals catalog.Id
-            where subscription.TenantId == tenant.Id && subscription.ClientId == clientId && subscription.IsActive && catalog.IsActive
-            select catalog.Id).Distinct().ToListAsync(cancellationToken);
+        var catalogIds = await _dbContext.Catalogs
+            .AsNoTracking()
+            .Where(catalog => catalog.IsActive && catalog.AccessMode == CatalogAccessMode.Public)
+            .Select(catalog => catalog.Id)
+            .ToListAsync(cancellationToken);
         if (catalogIds.Count == 0 && !request.PreviewOnly)
-            return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("catalog", "Client has no active catalog")]);
+        {
+            var publicCatalog = new Catalog
+            {
+                Name = "Catálogo Público",
+                Description = "Produtos disponíveis para todos os clientes aprovados.",
+                AccessMode = CatalogAccessMode.Public,
+                IsActive = true
+            };
+            _dbContext.Catalogs.Add(publicCatalog);
+            catalogIds.Add(publicCatalog.Id);
+        }
 
         var processedSkus = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var listing in selected)
@@ -126,7 +135,9 @@ public sealed class MercadoLivreCatalogImportService
                             CatalogPriceCents = product.CatalogPriceCents,
                             PhysicalStock = request.PhysicalStock,
                             ReservedStock = 0,
-                            AvailableStock = request.PhysicalStock,
+                            SafetyBuffer = 2,
+                            InventoryVersion = 1,
+                            AvailableStock = Math.Max(0, request.PhysicalStock - 2),
                             IsActive = true
                         };
                         _dbContext.ProductVariants.Add(variant);
@@ -134,7 +145,7 @@ public sealed class MercadoLivreCatalogImportService
                     else
                     {
                         variant.PhysicalStock = request.PhysicalStock;
-                        variant.AvailableStock = Math.Max(0, request.PhysicalStock - variant.ReservedStock);
+                        variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
                         variant.IsActive = true;
                         variant.UpdatedAt = DateTimeOffset.UtcNow;
                     }
@@ -160,14 +171,20 @@ public sealed class MercadoLivreCatalogImportService
                         SellerId = connection.SellerId,
                         MlItemId = listing.ItemId,
                         MlVariationId = variationId,
-                        SabrVariantSku = sku
+                        ChannelSku = sku,
+                        SabrVariantSku = sku,
+                        MappingVersion = 1
                     });
                     result.MappingsCreated++;
                 }
                 else
                 {
-                    mapping.SabrVariantSku = sku;
-                    mapping.UpdatedAt = DateTimeOffset.UtcNow;
+                    if (!string.Equals(mapping.SabrVariantSku, sku, StringComparison.Ordinal))
+                    {
+                        mapping.SabrVariantSku = sku;
+                        mapping.MappingVersion++;
+                        mapping.UpdatedAt = DateTimeOffset.UtcNow;
+                    }
                 }
             }
         }

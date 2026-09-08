@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Phub.Application.Abstractions;
+using Phub.Application.Options;
 using Phub.Domain.Entities;
 
 namespace Phub.Application.Services;
@@ -11,22 +13,25 @@ public sealed class StockAvailabilityService
     private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
     private readonly MercadoLivreOAuthService _oauthService;
     private readonly ILogger<StockAvailabilityService> _logger;
+    private readonly MercadoLivreFeatureFlags _features;
 
     public StockAvailabilityService(
         IAppDbContext dbContext,
         IMercadoLivreApiClient mercadoLivreApiClient,
         MercadoLivreOAuthService oauthService,
-        ILogger<StockAvailabilityService> logger)
+        ILogger<StockAvailabilityService> logger,
+        IOptions<MercadoLivreOptions> options)
     {
         _dbContext = dbContext;
         _mercadoLivreApiClient = mercadoLivreApiClient;
         _oauthService = oauthService;
         _logger = logger;
+        _features = options.Value.Features;
     }
 
     public static int ComputeAvailable(ProductVariant variant)
     {
-        return Math.Max(0, variant.PhysicalStock - variant.ReservedStock);
+        return Math.Max(0, variant.PhysicalStock - variant.ReservedStock - variant.SafetyBuffer);
     }
 
     public async Task SyncStockForSkusAsync(
@@ -67,12 +72,19 @@ public sealed class StockAvailabilityService
 
         variant.AvailableStock = ComputeAvailable(variant);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        var expectedInventoryVersion = variant.InventoryVersion;
 
         var mappings = await _dbContext.TenantMarketplaceListingMaps
-            .Where(item => item.TenantId == tenantId
-                           && item.ClientId == clientId
-                           && item.SabrVariantSku == variantSku)
+            .Where(item => item.SabrVariantSku == variantSku)
             .ToListAsync(cancellationToken);
+        if (!_features.GlobalInventoryWrite)
+        {
+            var pilots = _features.InventoryPilotSellerIds.ToHashSet();
+            mappings = mappings.Where(item => pilots.Contains(item.SellerId)).ToList();
+            _logger.LogInformation(
+                "INVENTORY_OBSERVATION_MODE sku={Sku} version={Version} available={Available} pilotMappings={PilotMappings}",
+                variantSku, expectedInventoryVersion, variant.AvailableStock, mappings.Count);
+        }
         if (mappings.Count == 0)
         {
             return;
@@ -88,13 +100,11 @@ public sealed class StockAvailabilityService
             .Distinct()
             .ToList();
         var connections = await _dbContext.TenantMarketplaceConnections
-            .Where(item => item.TenantId == tenantId
-                           && item.ClientId == clientId
-                           && (integrationIds.Contains(item.Id) || sellerIds.Contains(item.SellerId)))
+            .Where(item => integrationIds.Contains(item.Id) || sellerIds.Contains(item.SellerId))
             .ToListAsync(cancellationToken);
 
         var connectionBySeller = connections
-            .GroupBy(item => item.SellerId)
+            .GroupBy(item => (item.TenantId, item.ClientId, item.SellerId))
             .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.UpdatedAt).First());
         var connectionByIntegration = connections.ToDictionary(item => item.Id);
         foreach (var mapping in mappings)
@@ -105,14 +115,45 @@ public sealed class StockAvailabilityService
                 connectionByIntegration.TryGetValue(mapping.IntegrationId.Value, out connection);
             }
 
-            if (connection == null && !connectionBySeller.TryGetValue(mapping.SellerId, out connection))
+            if (connection == null && !connectionBySeller.TryGetValue((mapping.TenantId, mapping.ClientId, mapping.SellerId), out connection))
             {
                 continue;
             }
 
             try
             {
+                var currentVersion = await _dbContext.ProductVariants
+                    .AsNoTracking()
+                    .Where(item => item.VariantSku == variantSku)
+                    .Select(item => item.InventoryVersion)
+                    .SingleAsync(cancellationToken);
+                if (currentVersion != expectedInventoryVersion)
+                {
+                    _logger.LogInformation(
+                        "ML_SYNC_SUPERSEDED sku={Sku} expectedVersion={ExpectedVersion} currentVersion={CurrentVersion}",
+                        variantSku,
+                        expectedInventoryVersion,
+                        currentVersion);
+                    return;
+                }
+
                 var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
+
+                currentVersion = await _dbContext.ProductVariants
+                    .AsNoTracking()
+                    .Where(item => item.VariantSku == variantSku)
+                    .Select(item => item.InventoryVersion)
+                    .SingleAsync(cancellationToken);
+                if (currentVersion != expectedInventoryVersion)
+                {
+                    _logger.LogInformation(
+                        "ML_SYNC_SUPERSEDED sku={Sku} expectedVersion={ExpectedVersion} currentVersion={CurrentVersion}",
+                        variantSku,
+                        expectedInventoryVersion,
+                        currentVersion);
+                    return;
+                }
+
                 if (string.IsNullOrWhiteSpace(mapping.MlVariationId))
                 {
                     await _mercadoLivreApiClient.UpdateItemStockAsync(
@@ -136,8 +177,8 @@ public sealed class StockAvailabilityService
                 _logger.LogWarning(
                     ex,
                     "ML_SYNC_FAILED tenant={TenantId} client={ClientId} sku={Sku} seller={SellerId} item={ItemId}",
-                    tenantId,
-                    clientId,
+                    mapping.TenantId,
+                    mapping.ClientId,
                     variantSku,
                     mapping.SellerId,
                     mapping.MlItemId);

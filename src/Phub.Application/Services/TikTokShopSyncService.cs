@@ -923,8 +923,10 @@ public sealed class TikTokShopSyncService
             if (existing != null)
             {
                 existing.Quantity = lineItem.Quantity;
-                existing.SabrVariantSku = resolution.SabrVariantSku;
-                existing.MappingState = resolution.MappingState;
+                if (!existing.MappingResolvedAt.HasValue)
+                {
+                    MarketplaceOrderMappingService.ApplyResolutionSnapshot(existing, resolution, DateTimeOffset.UtcNow);
+                }
                 existing.RawJson = JsonSerializer.Serialize(lineItem);
                 existing.UpdatedAt = DateTimeOffset.UtcNow;
             }
@@ -939,12 +941,12 @@ public sealed class TikTokShopSyncService
                     SellerId = sellerId,
                     MlItemId = productId,
                     MlVariationId = skuId,
-                    SabrVariantSku = resolution.SabrVariantSku,
                     Quantity = lineItem.Quantity,
-                    MappingState = resolution.MappingState,
                     RawJson = JsonSerializer.Serialize(lineItem),
                     MarketplaceOrder = order
                 };
+
+                MarketplaceOrderMappingService.ApplyResolutionSnapshot(newItem, resolution, DateTimeOffset.UtcNow);
 
                 order.Items.Add(newItem);
                 _dbContext.MarketplaceOrderItems.Add(newItem);
