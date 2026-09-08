@@ -11,16 +11,98 @@ public sealed class MercadoLivreIntegrationService
 {
     private readonly IAppDbContext _dbContext;
     private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
+    private readonly MercadoLivreOAuthService _oauthService;
     private readonly ILogger<MercadoLivreIntegrationService> _logger;
 
     public MercadoLivreIntegrationService(
         IAppDbContext dbContext,
         IMercadoLivreApiClient mercadoLivreApiClient,
+        MercadoLivreOAuthService oauthService,
         ILogger<MercadoLivreIntegrationService> logger)
     {
         _dbContext = dbContext;
         _mercadoLivreApiClient = mercadoLivreApiClient;
+        _oauthService = oauthService;
         _logger = logger;
+    }
+
+    public async Task<ServiceResult<List<MercadoLivreLinkCandidateResult>>> ListLinkCandidatesAsync(
+        string tenantId,
+        Guid clientId,
+        string? sellerId,
+        string? query,
+        CancellationToken cancellationToken = default)
+    {
+        if (!MercadoLivreSellerIdParser.TryParseOptional(sellerId, out var parsedSellerId))
+            return ServiceResult<List<MercadoLivreLinkCandidateResult>>.Failure([
+                new ValidationError("sellerId", "SellerId must be numeric")
+            ]);
+
+        var connectionQuery = _dbContext.TenantMarketplaceConnections
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == MarketplaceProvider.MercadoLivre);
+        if (parsedSellerId.HasValue)
+            connectionQuery = connectionQuery.Where(item => item.SellerId == parsedSellerId.Value);
+
+        var connection = await connectionQuery
+            .OrderByDescending(item => item.UpdatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (connection == null)
+            return ServiceResult<List<MercadoLivreLinkCandidateResult>>.Failure([
+                new ValidationError("sellerId", "Mercado Livre connection not found")
+            ]);
+
+        var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
+        var listings = await _mercadoLivreApiClient.SearchSellerItemsAsync(
+            MercadoLivreSellerIdParser.ToApiString(connection.SellerId),
+            query?.Trim() ?? string.Empty,
+            accessToken,
+            cancellationToken);
+        var itemIds = listings.Select(item => item.ItemId).Distinct(StringComparer.Ordinal).ToList();
+        var mappings = await _dbContext.TenantMarketplaceListingMaps
+            .AsNoTracking()
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == MarketplaceProvider.MercadoLivre
+                           && item.SellerId == connection.SellerId
+                           && itemIds.Contains(item.MlItemId))
+            .ToListAsync(cancellationToken);
+        var mappingLookup = mappings.ToDictionary(
+            item => $"{item.MlItemId}|{item.MlVariationId ?? string.Empty}",
+            item => item,
+            StringComparer.Ordinal);
+
+        var results = new List<MercadoLivreLinkCandidateResult>();
+        foreach (var listing in listings.Take(200))
+        {
+            var identities = listing.Variations.Count > 0
+                ? listing.Variations.Select(variation => (VariationId: (string?)variation.VariationId, variation.SellerSku))
+                : [(VariationId: (string?)null, listing.SellerSku)];
+            foreach (var identity in identities)
+            {
+                mappingLookup.TryGetValue($"{listing.ItemId}|{identity.VariationId ?? string.Empty}", out var mapping);
+                results.Add(new MercadoLivreLinkCandidateResult
+                {
+                    SellerId = MercadoLivreSellerIdParser.ToApiString(connection.SellerId),
+                    ItemId = listing.ItemId,
+                    VariationId = identity.VariationId,
+                    Title = listing.Title,
+                    SellerSku = identity.SellerSku,
+                    ThumbnailUrl = listing.ThumbnailUrl,
+                    Price = listing.Price,
+                    AvailableQuantity = listing.AvailableQuantity,
+                    Status = listing.Status,
+                    ListingTypeId = listing.ListingTypeId,
+                    UserProductId = listing.UserProductId,
+                    Permalink = listing.Permalink,
+                    AlreadyMapped = mapping != null,
+                    MappedSku = mapping?.SabrVariantSku
+                });
+            }
+        }
+
+        return ServiceResult<List<MercadoLivreLinkCandidateResult>>.Success(results);
     }
 
     public async Task<MercadoLivreIntegrationStatusResult> GetClientStatusAsync(

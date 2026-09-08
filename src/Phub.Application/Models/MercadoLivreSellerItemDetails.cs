@@ -25,3 +25,21 @@ public sealed class MercadoLivreSellerVariationDetails
     public string VariationId { get; set; } = string.Empty;
     public string? SellerSku { get; set; }
 }
+
+public sealed class MercadoLivreLinkCandidateResult
+{
+    public string SellerId { get; set; } = string.Empty;
+    public string ItemId { get; set; } = string.Empty;
+    public string? VariationId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? SellerSku { get; set; }
+    public string? ThumbnailUrl { get; set; }
+    public decimal Price { get; set; }
+    public int AvailableQuantity { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string? ListingTypeId { get; set; }
+    public string? UserProductId { get; set; }
+    public string? Permalink { get; set; }
+    public bool AlreadyMapped { get; set; }
+    public string? MappedSku { get; set; }
+}

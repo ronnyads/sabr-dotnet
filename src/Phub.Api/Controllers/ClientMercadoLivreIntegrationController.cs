@@ -359,6 +359,23 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         return Ok(result.Data);
     }
 
+    [HttpGet("seller-listings")]
+    public async Task<IActionResult> ListSellerListings(
+        [FromQuery] string? sellerId,
+        [FromQuery] string? q,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+            return error!;
+
+        var result = await _integrationService.ListLinkCandidatesAsync(
+            tenantId!, clientId, sellerId, q, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+
+        return Ok(result.Data);
+    }
+
     [HttpPost("reconcile")]
     public async Task<IActionResult> Reconcile([FromBody] MercadoLivreSyncNowRequest? request, CancellationToken cancellationToken)
     {

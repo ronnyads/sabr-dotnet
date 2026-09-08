@@ -975,6 +975,39 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task SellerListings_ReturnsSelectableVariationsFromAuthorizedConnection()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-link-picker";
+        const string tenantSlug = "mllinkpicker";
+        const string sellerId = "1001999";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = "MLB-LINK-01",
+            Title = "Serum Principia",
+            Price = 49.90m,
+            AvailableQuantity = 7,
+            Status = "active",
+            ThumbnailUrl = "https://example.test/serum.jpg",
+            Variations = [new MercadoLivreSellerVariationDetails { VariationId = "991", SellerSku = "SKU-ML-991" }]
+        });
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.GetAsync($"/api/v1/client/integrations/mercadolivre/seller-listings?sellerId={sellerId}&q=serum");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var candidates = await response.Content.ReadFromJsonAsync<List<MercadoLivreLinkCandidateResult>>();
+        var candidate = Assert.Single(candidates!);
+        Assert.Equal("MLB-LINK-01", candidate.ItemId);
+        Assert.Equal("991", candidate.VariationId);
+        Assert.Equal("SKU-ML-991", candidate.SellerSku);
+        Assert.False(candidate.AlreadyMapped);
+    }
+
+    [Fact]
     public async Task FulfillmentTimeline_RequiresStrictSequence_AndDoesNotProcessOnPayment()
     {
         await _factory.ResetDatabaseAsync();
