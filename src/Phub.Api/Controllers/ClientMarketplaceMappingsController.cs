@@ -5,6 +5,7 @@ using Phub.Application.Models;
 using Phub.Application.Services;
 using Phub.Application.Validation;
 using Phub.Domain.Enums;
+using System.Security.Claims;
 
 namespace Phub.Api.Controllers;
 
@@ -139,10 +140,12 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
             return BadRequest(CreateApiError("VALIDATION_ERROR", "Payload is required."));
         }
 
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
         var result = await _mappingService.UpsertMappingAsync(
             tenantId!,
             clientId,
             request,
+            actorId,
             cancellationToken);
         if (!result.Succeeded || result.Data == null)
         {
@@ -189,7 +192,7 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
     {
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
         if (request == null) return BadRequest(CreateApiError("VALIDATION_ERROR", "Payload is required."));
-        Guid.TryParse(User.FindFirst("sub")?.Value ?? User.FindFirst("userId")?.Value, out var actorId);
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
         var result = await _listingService.ApplyAsync(tenantId!, clientId, actorId, id, request, cancellationToken);
         return MapListingResult(result);
     }

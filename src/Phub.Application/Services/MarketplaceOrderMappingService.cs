@@ -200,6 +200,7 @@ public sealed class MarketplaceOrderMappingService
         string tenantId,
         Guid clientId,
         MarketplaceUpsertMappingRequest request,
+        Guid actorUserId = default,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
@@ -306,11 +307,62 @@ public sealed class MarketplaceOrderMappingService
             action = "updated";
         }
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
         var product = await _dbContext.Products
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.Sku == resolvedVariant.Data.BaseSku, cancellationToken);
+
+        var clientOwnsProduct = await _dbContext.Publications.AsNoTracking().AnyAsync(
+            item => item.TenantId == tenantId
+                    && item.ClientId == clientId
+                    && item.ProductSku == resolvedVariant.Data.BaseSku
+                    && item.Status == PublicationStatus.Draft,
+            cancellationToken);
+        if (!clientOwnsProduct && product != null)
+        {
+            var now = DateTimeOffset.UtcNow;
+            _dbContext.Publications.Add(new Publication
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                ProductSku = product.Sku,
+                Status = PublicationStatus.Draft,
+                PricingMode = PricingMode.CatalogPrice,
+                CostPriceCentsSnapshot = product.CostPriceCents,
+                CatalogPriceCentsSnapshot = product.CatalogPriceCents,
+                FinalPriceCentsSnapshot = product.CatalogPriceCents,
+                PriceSnapshotTakenAt = now,
+                CreatedByUserId = actorUserId,
+                UpdatedByUserId = actorUserId,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+        }
+
+        _dbContext.AuditEvents.Add(new AuditEvent
+        {
+            TenantId = tenantId,
+            ActorType = "TenantUser",
+            ActorId = actorUserId == Guid.Empty ? null : actorUserId,
+            Action = action == "updated" ? "MarketplaceMapping.RemapFutureOrders" : "MarketplaceMapping.Upsert",
+            Entity = nameof(TenantMarketplaceListingMap),
+            EntityId = existing.Id,
+            RequestId = Guid.NewGuid(),
+            MetadataJson = JsonSerializer.Serialize(new
+            {
+                existing.Provider,
+                existing.SellerId,
+                existing.MlItemId,
+                existing.MlVariationId,
+                existing.UserProductId,
+                existing.ChannelSku,
+                existing.SabrVariantSku,
+                existing.MappingVersion,
+                action,
+                addedToMyProducts = !clientOwnsProduct
+            })
+        });
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
 
         var channelMetadata = new ChannelMetadata(existing.ChannelSku);
 
