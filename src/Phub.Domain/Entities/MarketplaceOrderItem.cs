@@ -21,6 +21,9 @@ public sealed class MarketplaceOrderItem
     public decimal? FullUnitPrice { get; set; }
     public decimal? GrossPrice { get; set; }
     public decimal? SaleFee { get; set; }
+    public long? CatalogUnitPriceCentsAtPayment { get; set; }
+    public long? CostUnitPriceCentsAtPayment { get; set; }
+    public long? ChargeLineTotalCentsAtPayment { get; set; }
     public int ReservedQuantity { get; set; }
     public string MappingState { get; set; } = "UNMAPPED";
     public Guid? MappingSnapshotId { get; set; }

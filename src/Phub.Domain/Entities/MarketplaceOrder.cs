@@ -23,6 +23,13 @@ public sealed class MarketplaceOrder
     public DateTimeOffset? ShipByDeadlineAt { get; set; }
     public DateTimeOffset ImportedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
+    public long? ProductSubtotalCentsAtPayment { get; set; }
+    public long? FreightCentsAtPayment { get; set; }
+    public long? AdditionalCentsAtPayment { get; set; }
+    public long? DiscountCentsAtPayment { get; set; }
+    public long? TotalChargeCentsAtPayment { get; set; }
+    public Guid? WalletLedgerEntryId { get; set; }
+    public string? PaymentQuoteHash { get; set; }
     public string? CancellationRequestStatus { get; set; }
     public DateTimeOffset? CancellationRequestedAt { get; set; }
     public string? CancellationRequestedBy { get; set; }

@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, financeiro, carteira, depósitos, auditoria]
-updated: 2026-09-07
+updated: 2026-09-09
 ---
 
 # Carteira e depósitos
@@ -39,6 +39,20 @@ Os índices cobrem o histórico por tenant/cliente/data e a fila por status/data
 - `GET /api/v1/admin/wallet/deposits/{id}/proof`
 
 Os endpoints internos antigos de crédito/débito agora exigem papel administrativo/financeiro, fechando a possibilidade de auto-crédito por cliente.
+
+## Pagamento de pedidos do marketplace
+
+O pagamento interno é um checkout transacional, separado do estado `paid` informado pelo canal:
+
+1. `GET /api/v1/client/orders/{orderId}/payment-quote` calcula os itens pelo preço vigente do catálogo, saldo atual e bloqueadores operacionais.
+2. O portal apresenta os itens, quantidades, subtotal, total e saldo projetado antes da confirmação.
+3. `POST /api/v1/client/orders/{orderId}/mark-paid` envia o `quoteHash`; uma cotação alterada é recusada com `PAYMENT_QUOTE_CHANGED`.
+4. Pedido, variantes e carteira são bloqueados no PostgreSQL. Débito, snapshots de preço, consumo da reserva e confirmação do pagamento são salvos na mesma transação.
+5. Saldo insuficiente retorna `INSUFFICIENT_WALLET_BALANCE` sem confirmar o pedido, consumir estoque ou criar ledger.
+
+Cada pedido aceita no máximo um débito (`OrderId` + `Debit`). Repetir a confirmação devolve o resultado original sem movimentar carteira ou reserva novamente. O ledger referencia o pedido e o pedido referencia o ledger para auditoria bidirecional.
+
+O snapshot financeiro preserva preço unitário de catálogo, custo unitário, total da linha, subtotal, adicionais, descontos e total cobrado. Frete, adicionais e descontos permanecem zero enquanto não existir uma política comercial explícita; valores de frete do marketplace não são convertidos silenciosamente em cobrança interna.
 
 ## Evolução para PIX
 

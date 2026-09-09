@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, pedidos, expedicao]
-updated: 2026-09-08
+updated: 2026-09-09
 ---
 
 # Linha do tempo de pedidos
@@ -16,6 +16,12 @@ Sequência comum ao admin e cliente:
 - O cliente acompanha datas, estados e baixa a etiqueta, mas não avança etapas administrativas.
 - O despacho remove da fila ativa e preserva o histórico em Pedidos.
 - Múltiplos pacotes mantêm marcos por shipment.
+
+## Confirmação interna de pagamento
+
+`Pedido pago` só é concluído depois do checkout da carteira. Antes da confirmação, cliente e admin recebem a mesma cotação com produtos, SKU mestre, quantidade, valor unitário, total e saldo projetado. A confirmação é atômica com o débito e o consumo das reservas de estoque.
+
+O hash da cotação impede confirmar valores que mudaram entre revisão e clique. Repetições são idempotentes e não recriam reservas nem geram um segundo débito. Pedidos sem vínculo, sem preço, sem estoque ou sem saldo continuam pendentes com bloqueador explícito.
 
 Ver também [[01 - Dashboard de Vendas]] para a visão comercial agregada.
 

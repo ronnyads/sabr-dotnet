@@ -13,18 +13,18 @@ namespace Phub.Api.Controllers;
 public sealed class AdminMarketplaceOrdersController : ControllerBase
 {
     private readonly ILogger<AdminMarketplaceOrdersController> _logger;
-    private readonly MarketplaceOrderPaymentService _paymentService;
+    private readonly MarketplaceOrderCheckoutService _checkoutService;
     private readonly OrderCancellationService _cancellationService;
     private readonly OrderFulfillmentService _fulfillmentService;
 
     public AdminMarketplaceOrdersController(
         ILogger<AdminMarketplaceOrdersController> logger,
-        MarketplaceOrderPaymentService paymentService,
+        MarketplaceOrderCheckoutService checkoutService,
         OrderCancellationService cancellationService,
         OrderFulfillmentService fulfillmentService)
     {
         _logger = logger;
-        _paymentService = paymentService;
+        _checkoutService = checkoutService;
         _cancellationService = cancellationService;
         _fulfillmentService = fulfillmentService;
     }
@@ -78,6 +78,25 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         return Ok(result.Data);
     }
 
+    [HttpGet("{orderId:guid}/payment-quote")]
+    public async Task<IActionResult> GetPaymentQuote(
+        [FromRoute] Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        var orderResult = await _fulfillmentService.GetAdminOrderAsync(orderId, cancellationToken);
+        if (!orderResult.Succeeded || orderResult.Data == null)
+            return MapValidationError(orderResult.Errors);
+
+        var result = await _checkoutService.GetQuoteAsync(
+            orderResult.Data.TenantId,
+            orderResult.Data.ClientId,
+            orderId,
+            cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapValidationError(result.Errors);
+        return Ok(result.Data);
+    }
+
     [HttpPost("{orderId:guid}/confirm-payment")]
     public async Task<IActionResult> ConfirmPayment(
         [FromRoute] Guid orderId,
@@ -88,11 +107,12 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         if (!orderResult.Succeeded || orderResult.Data == null)
             return MapValidationError(orderResult.Errors);
 
-        var result = await _paymentService.MarkPaidAsync(
+        var result = await _checkoutService.ConfirmAsync(
             orderResult.Data.TenantId,
             orderResult.Data.ClientId,
             orderId,
             request?.Force ?? false,
+            request?.QuoteHash,
             cancellationToken);
 
         if (!result.Succeeded || result.Data == null)
@@ -327,6 +347,13 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         {
             return UnprocessableEntity(CreateApiError("OUT_OF_STOCK_FOR_PAYMENT", "O pedido nao possui estoque suficiente para confirmacao de pagamento.", errors));
         }
+
+        if (errors.Any(e => string.Equals(e.Message, "INSUFFICIENT_WALLET_BALANCE", StringComparison.OrdinalIgnoreCase)))
+            return UnprocessableEntity(CreateApiError("INSUFFICIENT_WALLET_BALANCE", "Saldo insuficiente na carteira do cliente.", errors));
+        if (errors.Any(e => string.Equals(e.Message, "PAYMENT_PRICE_NOT_CONFIGURED", StringComparison.OrdinalIgnoreCase)))
+            return UnprocessableEntity(CreateApiError("PAYMENT_PRICE_NOT_CONFIGURED", "Um ou mais produtos ainda nao possuem preco de catalogo configurado.", errors));
+        if (errors.Any(e => string.Equals(e.Message, "PAYMENT_QUOTE_CHANGED", StringComparison.OrdinalIgnoreCase)))
+            return Conflict(CreateApiError("PAYMENT_QUOTE_CHANGED", "Os valores do pedido mudaram. Revise o resumo atualizado.", errors));
 
         if (errors.Any(e => string.Equals(e.Message, "TRACKING_NOT_UNIQUE", StringComparison.OrdinalIgnoreCase)))
         {

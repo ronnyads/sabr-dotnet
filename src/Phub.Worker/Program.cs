@@ -141,6 +141,7 @@ try
     builder.Services.AddScoped<MarketplaceOrderNumberService>();
     builder.Services.AddScoped<MarketplaceOrderInventoryService>();
     builder.Services.AddScoped<MarketplaceOrderPaymentService>();
+    builder.Services.AddScoped<MarketplaceOrderCheckoutService>();
     builder.Services.AddScoped<MarketplaceShipmentLabelService>();
     builder.Services.AddScoped<OrderFulfillmentService>();
     builder.Services.AddScoped<MarketplaceOperationJobService>();

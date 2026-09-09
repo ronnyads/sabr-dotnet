@@ -384,9 +384,66 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             Assert.Equal(2, await db.MarketplaceOrderItems.SumAsync(item => item.Quantity));
             Assert.Equal(2, await db.StockReservations.Where(item => item.Status == StockReservationStatus.Reserved).SumAsync(item => item.Quantity));
             Assert.Equal(10, (await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku)).PhysicalStock);
+
+            var seededWallet = await db.WalletAccounts.SingleAsync(item => item.TenantId == tenantId && item.ClientId == clientId);
+            seededWallet.BalanceCents = 0;
+            await db.SaveChangesAsync();
         }
 
-        var first = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
+        var insufficientQuoteResponse = await client.GetAsync($"/api/v1/client/orders/{orderId}/payment-quote");
+        Assert.Equal(HttpStatusCode.OK, insufficientQuoteResponse.StatusCode);
+        var insufficientQuote = await insufficientQuoteResponse.Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
+        Assert.NotNull(insufficientQuote);
+        Assert.False(insufficientQuote!.HasSufficientBalance);
+        Assert.Equal(3_000, insufficientQuote.TotalChargeCents);
+
+        var insufficient = await client.PostAsJsonAsync(
+            $"/api/v1/client/orders/{orderId}/mark-paid",
+            new { force = false, quoteHash = insufficientQuote.QuoteHash });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, insufficient.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var emptyWallet = await db.WalletAccounts.SingleAsync(item => item.TenantId == tenantId && item.ClientId == clientId);
+            Assert.Equal(0, emptyWallet.BalanceCents);
+            Assert.False((await db.MarketplaceOrders.SingleAsync(item => item.Id == orderId)).SabrPaymentConfirmedAt.HasValue);
+            Assert.Equal(0, await db.WalletLedgerEntries.CountAsync(item => item.OrderId == orderId));
+            emptyWallet.BalanceCents = 1_000_000;
+            await db.SaveChangesAsync();
+        }
+
+        var quoteResponse = await client.GetAsync($"/api/v1/client/orders/{orderId}/payment-quote");
+        Assert.Equal(HttpStatusCode.OK, quoteResponse.StatusCode);
+        var quote = await quoteResponse.Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
+        Assert.NotNull(quote);
+        Assert.True(quote!.HasSufficientBalance);
+        Assert.Equal(3_000, quote.ProductSubtotalCents);
+        Assert.Equal(997_000, quote.WalletBalanceAfterCents);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            (await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku)).CatalogPriceCents = 1_600;
+            await db.SaveChangesAsync();
+        }
+
+        var staleQuote = await client.PostAsJsonAsync(
+            $"/api/v1/client/orders/{orderId}/mark-paid",
+            new { force = false, quoteHash = quote.QuoteHash });
+        Assert.Equal(HttpStatusCode.Conflict, staleQuote.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(0, await db.WalletLedgerEntries.CountAsync(item => item.OrderId == orderId));
+            (await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku)).CatalogPriceCents = 1_500;
+            await db.SaveChangesAsync();
+        }
+
+        var first = await client.PostAsJsonAsync(
+            $"/api/v1/client/orders/{orderId}/mark-paid",
+            new { force = false, quoteHash = quote.QuoteHash });
         var second = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
 
         var firstBody = await first.Content.ReadAsStringAsync();
@@ -403,13 +460,23 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         using var verifyScope = _factory.Services.CreateScope();
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var reservation = await verifyDb.StockReservations.SingleAsync();
+        var reservation = await verifyDb.StockReservations.SingleAsync(item => item.Status == StockReservationStatus.Consumed);
         var variant = await verifyDb.ProductVariants.SingleAsync(item => item.VariantSku == variantSku);
+        var paidOrder = await verifyDb.MarketplaceOrders.SingleAsync(item => item.Id == orderId);
+        var paidItem = await verifyDb.MarketplaceOrderItems.SingleAsync(item => item.MarketplaceOrderId == orderId);
+        var wallet = await verifyDb.WalletAccounts.SingleAsync(item => item.TenantId == tenantId && item.ClientId == clientId);
+        var ledger = await verifyDb.WalletLedgerEntries.SingleAsync(item => item.OrderId == orderId && item.Type == WalletEntryType.Debit);
 
         Assert.Equal(StockReservationStatus.Consumed, reservation.Status);
         Assert.Equal(8, variant.PhysicalStock);
         Assert.Equal(0, variant.ReservedStock);
         Assert.Equal(6, variant.AvailableStock);
+        Assert.Equal(3_000, paidOrder.TotalChargeCentsAtPayment);
+        Assert.Equal(1_500, paidItem.CatalogUnitPriceCentsAtPayment);
+        Assert.Equal(3_000, paidItem.ChargeLineTotalCentsAtPayment);
+        Assert.Equal(997_000, wallet.BalanceCents);
+        Assert.Equal(3_000, ledger.AmountCents);
+        Assert.Equal(ledger.Id, paidOrder.WalletLedgerEntryId);
     }
 
     [Fact]
@@ -1497,6 +1564,16 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 Status = ClientStatus.Approved,
                 MustChangePassword = false,
                 ProtheusTag = ProtheusTag.Build(ProtheusPrefixes.Client, ProtheusOperationType.CREATE)
+            });
+        }
+
+        if (!await db.WalletAccounts.AnyAsync(item => item.TenantId == tenantId && item.ClientId == clientId))
+        {
+            db.WalletAccounts.Add(new WalletAccount
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                BalanceCents = 1_000_000
             });
         }
 

@@ -822,6 +822,10 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.ReferenceId).HasColumnName("reference_id").HasMaxLength(80);
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.CreatedAt }).HasDatabaseName("ix_ledger_client");
+            entity.HasIndex(e => new { e.OrderId, e.Type })
+                .IsUnique()
+                .HasFilter("order_id IS NOT NULL AND type = 'Debit'")
+                .HasDatabaseName("ux_wallet_ledger_order_debit");
         });
 
         modelBuilder.Entity<IdempotencyKey>(entity =>
@@ -1251,6 +1255,13 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.ShipByDeadlineAt).HasColumnName("ship_by_deadline_at");
             entity.Property(e => e.ImportedAt).HasColumnName("imported_at").IsRequired();
             entity.Property(e => e.SabrPaymentConfirmedAt).HasColumnName("sabr_payment_confirmed_at");
+            entity.Property(e => e.ProductSubtotalCentsAtPayment).HasColumnName("product_subtotal_cents_at_payment");
+            entity.Property(e => e.FreightCentsAtPayment).HasColumnName("freight_cents_at_payment");
+            entity.Property(e => e.AdditionalCentsAtPayment).HasColumnName("additional_cents_at_payment");
+            entity.Property(e => e.DiscountCentsAtPayment).HasColumnName("discount_cents_at_payment");
+            entity.Property(e => e.TotalChargeCentsAtPayment).HasColumnName("total_charge_cents_at_payment");
+            entity.Property(e => e.WalletLedgerEntryId).HasColumnName("wallet_ledger_entry_id");
+            entity.Property(e => e.PaymentQuoteHash).HasColumnName("payment_quote_hash").HasMaxLength(64);
             entity.Property(e => e.CancellationRequestStatus).HasColumnName("cancellation_request_status").HasMaxLength(40);
             entity.Property(e => e.CancellationRequestedAt).HasColumnName("cancellation_requested_at");
             entity.Property(e => e.CancellationRequestedBy).HasColumnName("cancellation_requested_by").HasMaxLength(120);
@@ -1271,6 +1282,14 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasIndex(e => e.InternalOrderNumber)
                 .IsUnique()
                 .HasDatabaseName("ux_marketplace_orders_internal_order_number");
+            entity.HasIndex(e => e.WalletLedgerEntryId)
+                .IsUnique()
+                .HasFilter("wallet_ledger_entry_id IS NOT NULL")
+                .HasDatabaseName("ux_marketplace_orders_wallet_ledger_entry");
+            entity.HasOne<WalletLedgerEntry>()
+                .WithMany()
+                .HasForeignKey(e => e.WalletLedgerEntryId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<WalletDepositRequest>(entity =>
@@ -1342,6 +1361,9 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.FullUnitPrice).HasColumnName("full_unit_price").HasPrecision(18, 2);
             entity.Property(e => e.GrossPrice).HasColumnName("gross_price").HasPrecision(18, 2);
             entity.Property(e => e.SaleFee).HasColumnName("sale_fee").HasPrecision(18, 2);
+            entity.Property(e => e.CatalogUnitPriceCentsAtPayment).HasColumnName("catalog_unit_price_cents_at_payment");
+            entity.Property(e => e.CostUnitPriceCentsAtPayment).HasColumnName("cost_unit_price_cents_at_payment");
+            entity.Property(e => e.ChargeLineTotalCentsAtPayment).HasColumnName("charge_line_total_cents_at_payment");
             entity.Property(e => e.ReservedQuantity).HasColumnName("reserved_quantity").IsRequired();
             entity.Property(e => e.MappingState).HasColumnName("mapping_state").HasMaxLength(40).IsRequired();
             entity.Property(e => e.MappingSnapshotId).HasColumnName("mapping_snapshot_id");
@@ -1354,6 +1376,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasCheckConstraint("ck_marketplace_order_items_quantity_positive", "\"quantity\" > 0");
             entity.HasCheckConstraint("ck_marketplace_order_items_reserved_non_negative", "\"reserved_quantity\" >= 0");
             entity.HasCheckConstraint("ck_marketplace_order_items_prices_non_negative", "(\"unit_price\" IS NULL OR \"unit_price\" >= 0) AND (\"full_unit_price\" IS NULL OR \"full_unit_price\" >= 0) AND (\"gross_price\" IS NULL OR \"gross_price\" >= 0) AND (\"sale_fee\" IS NULL OR \"sale_fee\" >= 0)");
+            entity.HasCheckConstraint("ck_marketplace_order_items_payment_prices_non_negative", "(\"catalog_unit_price_cents_at_payment\" IS NULL OR \"catalog_unit_price_cents_at_payment\" >= 0) AND (\"cost_unit_price_cents_at_payment\" IS NULL OR \"cost_unit_price_cents_at_payment\" >= 0) AND (\"charge_line_total_cents_at_payment\" IS NULL OR \"charge_line_total_cents_at_payment\" >= 0)");
             entity.HasCheckConstraint("ck_marketplace_order_items_sku_format", "\"sabr_variant_sku\" IS NULL OR \"sabr_variant_sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");
             entity.HasIndex(e => new { e.MarketplaceOrderId, e.MlItemId, e.MlVariationId })
                 .IsUnique()

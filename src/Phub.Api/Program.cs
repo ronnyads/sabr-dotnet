@@ -382,6 +382,7 @@ builder.Services.AddScoped<IMarketplaceListingAdapter, MercadoLivreUserProductLi
 builder.Services.AddScoped<MarketplaceListingService>();
 builder.Services.AddScoped<MarketplaceOrderInventoryService>();
 builder.Services.AddScoped<MarketplaceOrderPaymentService>();
+builder.Services.AddScoped<MarketplaceOrderCheckoutService>();
 builder.Services.AddScoped<MarketplaceShipmentLabelService>();
 builder.Services.AddScoped<OrderCancellationService>();
 builder.Services.AddScoped<OrderFulfillmentService>();

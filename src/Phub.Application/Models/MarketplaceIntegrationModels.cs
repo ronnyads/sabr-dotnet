@@ -296,6 +296,7 @@ public sealed class MercadoLivreCreateMappingRequest
 public sealed class MarketplaceMarkPaidRequest
 {
     public bool Force { get; set; }
+    public string? QuoteHash { get; set; }
 }
 
 public sealed class MercadoLivreConnectUrlResult
@@ -713,6 +714,8 @@ public static class MarketplaceOrderPaymentBlockers
     public const string OutOfStock = "out_of_stock";
     public const string LabelMissing = "label_missing";
     public const string CancellationPending = "cancellation_pending";
+    public const string PricingMissing = "pricing_missing";
+    public const string InsufficientBalance = "insufficient_balance";
 }
 
 public static class MarketplacePullLabelReasonCodes
@@ -738,6 +741,37 @@ public sealed class MarketplaceMarkPaidResult
     public bool AlreadyPaid { get; set; }
     public DateTimeOffset? SabrPaymentConfirmedAt { get; set; }
     public string? RiskFlagsJson { get; set; }
+    public long? TotalChargedCents { get; set; }
+    public long? WalletBalanceAfterCents { get; set; }
+    public Guid? WalletLedgerEntryId { get; set; }
+}
+
+public sealed class MarketplaceOrderPaymentQuoteItemResult
+{
+    public Guid OrderItemId { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string ProductName { get; set; } = string.Empty;
+    public int Quantity { get; set; }
+    public long UnitPriceCents { get; set; }
+    public long LineTotalCents { get; set; }
+}
+
+public sealed class MarketplaceOrderPaymentQuoteResult
+{
+    public Guid OrderId { get; set; }
+    public string CurrencyId { get; set; } = "BRL";
+    public long ProductSubtotalCents { get; set; }
+    public long FreightCents { get; set; }
+    public long AdditionalCents { get; set; }
+    public long DiscountCents { get; set; }
+    public long TotalChargeCents { get; set; }
+    public long WalletBalanceCents { get; set; }
+    public long WalletBalanceAfterCents { get; set; }
+    public bool HasSufficientBalance { get; set; }
+    public string QuoteHash { get; set; } = string.Empty;
+    public DateTimeOffset GeneratedAt { get; set; }
+    public List<string> PaymentBlockers { get; set; } = [];
+    public List<MarketplaceOrderPaymentQuoteItemResult> Items { get; set; } = [];
 }
 
 public sealed class MarketplacePaymentConfirmationRequiredResult
