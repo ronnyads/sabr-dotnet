@@ -34,11 +34,14 @@ updated: 2026-09-09
 - Ao criar um vínculo manual, somente itens ainda não resolvidos com a mesma identidade externa recebem o snapshot do mapping. Itens já resolvidos e pedidos históricos permanecem imutáveis.
 - Pedidos pendentes afetados são reconciliados imediatamente para criar a reserva de estoque. O pagamento repete a reconciliação de forma idempotente antes de consumir o saldo, cobrindo pedidos importados antes do vínculo.
 - Pagamento permanece bloqueado para item sem mapping, falta de estoque ou cancelamento pendente. No portal, os bloqueadores são apresentados antes da ação.
+- O botão de pagamento nunca fica silenciosamente indisponível por falta de mapping: ele muda para **Vincular produto para pagar**, abre o pedido e leva ao primeiro item pendente.
+- O editor apresenta explicitamente o caminho `anúncio do cliente -> SKU mestre`, permite pesquisar o catálogo autorizado e mostra SKU, preço e estoque antes da confirmação.
 - Ao consumir reservas duplicadas ou antigas, o débito físico é limitado à quantidade efetiva dos itens do pedido; todo excesso reservado é liberado e não pode baixar estoque duas vezes.
 - A tela de pagamento usa uma cotação derivada exclusivamente do SKU mestre autorizado. Preço de catálogo e custo são congelados no item; totais e `quoteHash` são congelados no pedido.
 - Carteira, ledger, pedido, itens, reservas e variantes são atualizados na mesma transação. A restrição única de débito por pedido protege também contra confirmações concorrentes.
 - Uma repetição idempotente de pagamento não executa nova reconciliação, evitando recriar reserva depois que o estoque já foi consumido.
 - Em **Meus Produtos**, “Vincular existente” abre um seletor dos anúncios reais da conexão autorizada. A busca retorna no máximo 200 opções normalizadas, separa variações e mostra imagem, Item ID, SKU do canal, preço, estoque, status e vínculo atual antes da confirmação.
+- **Meus Produtos** também mantém uma fila dos anúncios vendidos sem referência. Cada linha informa pedidos e unidades bloqueados e permite selecionar diretamente o SKU mestre autorizado; a seleção é confirmada mostrando o produto de destino.
 - `GET /api/v1/client/integrations/mercadolivre/seller-listings` nunca aceita credenciais ou cliente informados pela UI: tenant e cliente vêm da sessão e o seller precisa pertencer à conexão autorizada.
 
 ## Anúncios normalizados e Capability Engine
