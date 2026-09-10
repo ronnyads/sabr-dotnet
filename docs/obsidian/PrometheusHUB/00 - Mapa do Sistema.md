@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, arquitetura, onboarding-agentes]
-updated: 2026-09-08
+updated: 2026-09-10
 ---
 
 # PrometheusHUB — mapa do sistema
@@ -38,6 +38,7 @@ updated: 2026-09-08
 - [[05 - Carteira e Depósitos]]
 - [[06 - Importação de Catálogo do Mercado Livre]]
 - [[07 - Catálogo e Estoque Omnichannel]]
+- [[08 - SENTINEL Torre de Expedicao]]
 
 ## Regra de atualização deste vault
 

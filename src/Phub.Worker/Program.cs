@@ -145,6 +145,8 @@ try
     builder.Services.AddScoped<MarketplaceShipmentLabelService>();
     builder.Services.AddScoped<OrderFulfillmentService>();
     builder.Services.AddScoped<MarketplaceOperationJobService>();
+    builder.Services.AddScoped<SentinelReconciliationService>();
+    builder.Services.AddScoped<SentinelService>();
     builder.Services.AddScoped<StockAvailabilityService>();
     builder.Services.AddScoped<CatalogAuthorizationService>();
     builder.Services.AddScoped<ProductVariantBackfillService>();
@@ -167,6 +169,7 @@ try
         builder.Services.AddHostedService<MarketplaceReconcileNightlyWorker>();
         builder.Services.AddHostedService<ProductVariantBackfillWorker>();
         builder.Services.AddHostedService<MarketplaceOperationWorker>();
+        builder.Services.AddHostedService<SentinelReconciliationWorker>();
     }
 
     var host = builder.Build();

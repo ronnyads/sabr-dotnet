@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -172,7 +174,7 @@ public sealed class MercadoLivreWebhookService
                                || item.Topic == MarketplaceEventTopics.WebhookPayments))
             .OrderBy(item => item.CreatedAt)
             .Take(batchSize * 2)
-            .Select(item => new WebhookCandidate(item.Id, item.Status, item.Attempts, item.LastErrorAt))
+            .Select(item => new WebhookCandidate(item.Id, item.Status, item.Attempts, item.LastErrorAt, item.NotificationId))
             .ToListAsync(cancellationToken);
 
         if (candidates.Count == 0)
@@ -211,6 +213,7 @@ public sealed class MercadoLivreWebhookService
                 if (connection == null)
                 {
                     MarkFailed(item, "ML_WEBHOOK_UNKNOWN_SELLER");
+                    await MarkReconciliationFailureAsync(item, "ML_WEBHOOK_UNKNOWN_SELLER", cancellationToken);
                     processed += 1;
                     continue;
                 }
@@ -220,13 +223,14 @@ public sealed class MercadoLivreWebhookService
                 if (!resourceValidation.isValid)
                 {
                     MarkFailed(item, resourceValidation.errorCode ?? "ML_WEBHOOK_RESOURCE_INVALID");
+                    await MarkReconciliationFailureAsync(item, resourceValidation.errorCode ?? "ML_WEBHOOK_RESOURCE_INVALID", cancellationToken);
                     processed += 1;
                     continue;
                 }
 
                 if (resourceValidation.shipmentDetails != null)
                 {
-                    await UpsertShipmentProjectionAsync(item, resourceValidation.shipmentDetails, cancellationToken);
+                    await UpsertShipmentProjectionAsync(item, resourceValidation.shipmentDetails, accessToken, cancellationToken);
                 }
 
                 var syncResult = await _syncService.SyncNowAsync(
@@ -245,12 +249,15 @@ public sealed class MercadoLivreWebhookService
                 }
                 else
                 {
-                    MarkFailed(item, string.Join("; ", syncResult.Errors.Select(error => error.Message)));
+                    var error = string.Join("; ", syncResult.Errors.Select(error => error.Message));
+                    MarkFailed(item, error);
+                    await MarkReconciliationFailureAsync(item, error, cancellationToken);
                 }
             }
             catch (Exception ex)
             {
                 MarkFailed(item, ex.Message);
+                await MarkReconciliationFailureAsync(item, ex.Message, cancellationToken);
                 _logger.LogWarning(
                     ex,
                     "Webhook processing failed for event {EventId} topic={Topic} tenant={TenantId} client={ClientId} attempt={Attempt}",
@@ -318,10 +325,52 @@ public sealed class MercadoLivreWebhookService
             return false;
         }
 
-        var baseDelayMs = Math.Max(1000, _options.Resilience.RetryBaseDelayMs);
         var retryAttempt = Math.Max(1, candidate.Attempts);
+        if (candidate.NotificationId?.StartsWith("sentinel:", StringComparison.Ordinal) == true)
+        {
+            var capSeconds = Math.Min(15 * 60, 30 * (int)Math.Pow(2, Math.Min(5, retryAttempt - 1)));
+            var jitterRange = Math.Max(1, capSeconds - 29);
+            var jitterSeconds = 30 + Math.Abs(HashCode.Combine(candidate.Id, retryAttempt)) % jitterRange;
+            return candidate.LastErrorAt.Value.AddSeconds(jitterSeconds) <= now;
+        }
+
+        var baseDelayMs = Math.Max(1000, _options.Resilience.RetryBaseDelayMs);
         var delayMs = Math.Min(MaxRetryDelayMs, (int)(baseDelayMs * Math.Pow(2, Math.Min(6, retryAttempt - 1))));
         return candidate.LastErrorAt.Value.AddMilliseconds(delayMs) <= now;
+    }
+
+    private async Task MarkReconciliationFailureAsync(
+        MarketplaceEventLog item,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        if (item.NotificationId?.StartsWith("sentinel:", StringComparison.Ordinal) != true)
+        {
+            return;
+        }
+
+        var shipmentId = ExtractResourceId(item.ResourceId, "shipments");
+        if (string.IsNullOrWhiteSpace(shipmentId))
+        {
+            return;
+        }
+
+        var attempts = Math.Max(1, item.Attempts);
+        var capSeconds = Math.Min(15 * 60, 30 * (int)Math.Pow(2, Math.Min(5, attempts - 1)));
+        var retrySeconds = 30 + Random.Shared.Next(Math.Max(1, capSeconds - 29));
+        var now = DateTimeOffset.UtcNow;
+        await _dbContext.MarketplaceShipmentExternalStates
+            .Where(x => x.TenantId == item.TenantId && x.ClientId == item.ClientId
+                        && x.Provider == item.Provider && x.SellerId == item.SellerId
+                        && x.ShipmentId == shipmentId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.ReconciliationAttempts, x => x.ReconciliationAttempts + 1)
+                .SetProperty(x => x.LastSyncError, TrimError(error))
+                .SetProperty(x => x.FreshnessState, attempts >= 3 ? "INTEGRATION_RISK" : "STALE")
+                .SetProperty(x => x.NextReconciliationAt, now.AddSeconds(retrySeconds))
+                .SetProperty(x => x.LockedBy, (string?)null)
+                .SetProperty(x => x.LeaseUntil, (DateTimeOffset?)null)
+                .SetProperty(x => x.UpdatedAt, now), cancellationToken);
     }
 
     private void MarkFailed(MarketplaceEventLog item, string error)
@@ -407,11 +456,91 @@ public sealed class MercadoLivreWebhookService
     private async Task UpsertShipmentProjectionAsync(
         MarketplaceEventLog eventLog,
         MercadoLivreShipmentDetails shipmentDetails,
+        string accessToken,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(shipmentDetails.ShipmentId))
         {
             return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(shipmentDetails.RawJson))).ToLowerInvariant();
+        var external = await _dbContext.MarketplaceShipmentExternalStates.FirstOrDefaultAsync(
+            x => x.TenantId == eventLog.TenantId && x.ClientId == eventLog.ClientId
+                 && x.Provider == eventLog.Provider && x.ShipmentId == shipmentDetails.ShipmentId,
+            cancellationToken);
+        if (external == null)
+        {
+            external = new MarketplaceShipmentExternalState
+            {
+                TenantId = eventLog.TenantId, ClientId = eventLog.ClientId, Provider = eventLog.Provider,
+                SellerId = eventLog.SellerId, ShipmentId = shipmentDetails.ShipmentId
+            };
+            _dbContext.MarketplaceShipmentExternalStates.Add(external);
+        }
+
+        // A delayed or unversioned response cannot overwrite a newer provider projection.
+        // A missing provider timestamp is accepted only while the projection has never been
+        // versioned; once a dated fact exists, only an equal/newer provider fact may replace it.
+        var acceptsProviderProjection = !external.ProviderUpdatedAt.HasValue
+            || (shipmentDetails.ProviderUpdatedAt.HasValue
+                && shipmentDetails.ProviderUpdatedAt >= external.ProviderUpdatedAt);
+        if (acceptsProviderProjection)
+        {
+            external.Status = shipmentDetails.Status;
+            external.Substatus = shipmentDetails.Substatus;
+            external.ShippingMode = shipmentDetails.ShippingMode;
+            external.LogisticType = shipmentDetails.LogisticType;
+            external.HandlingAt = shipmentDetails.HandlingAt;
+            external.ReadyToShipAt = shipmentDetails.ReadyToShipAt;
+            external.FirstPrintedAt = shipmentDetails.FirstPrintedAt;
+            external.ShippedAt = shipmentDetails.ShippedAt;
+            external.DeliveredAt = shipmentDetails.DeliveredAt;
+            external.NotDeliveredAt = shipmentDetails.NotDeliveredAt;
+            external.ReturnedAt = shipmentDetails.ReturnedAt;
+            external.CancelledAt = shipmentDetails.CancelledAt;
+            external.TrackingNumber = shipmentDetails.TrackingNumber;
+            external.TrackingMethod = shipmentDetails.TrackingMethod;
+            external.TrackingUrl = shipmentDetails.TrackingUrl;
+            external.ProviderUpdatedAt = shipmentDetails.ProviderUpdatedAt;
+            if (external.PayloadHash != payloadHash) external.Version += 1;
+            external.PayloadHash = payloadHash;
+        }
+        external.LastMarketplaceSyncAt = now;
+        external.FreshnessState = "FRESH";
+        external.ReconciliationAttempts = 0;
+        external.LastSyncError = null;
+        external.NextReconciliationAt = now.AddMinutes(external.ShippedAt.HasValue ? 15 : 5);
+        external.LockedBy = null;
+        external.LeaseUntil = null;
+        external.UpdatedAt = now;
+
+        var sla = await _mercadoLivreApiClient.GetShipmentSlaAsync(shipmentDetails.ShipmentId, accessToken, cancellationToken);
+        if (sla?.DispatchDeadline is not null)
+        {
+            var current = await _dbContext.MarketplaceShipmentDispatchDeadlineVersions.FirstOrDefaultAsync(
+                x => x.TenantId == eventLog.TenantId && x.ClientId == eventLog.ClientId
+                     && x.Provider == eventLog.Provider && x.ShipmentId == shipmentDetails.ShipmentId && x.IsCurrent,
+                cancellationToken);
+            if (current?.PayloadHash != sla.PayloadHash)
+            {
+                if (current != null) current.IsCurrent = false;
+                var version = (current?.Version ?? 0) + 1;
+                _dbContext.MarketplaceShipmentDispatchDeadlineVersions.Add(new MarketplaceShipmentDispatchDeadlineVersion
+                {
+                    TenantId = eventLog.TenantId, ClientId = eventLog.ClientId, Provider = eventLog.Provider,
+                    SellerId = eventLog.SellerId, ShipmentId = shipmentDetails.ShipmentId,
+                    DispatchDeadline = sla.DispatchDeadline.Value, Source = sla.Source,
+                    ProviderLastUpdatedAt = sla.ProviderLastUpdatedAt, QueriedAt = now,
+                    Version = version, PayloadHash = sla.PayloadHash, IsCurrent = true
+                });
+                shipmentDetails.ShipByDeadlineAt = sla.DispatchDeadline;
+            }
+            else
+            {
+                shipmentDetails.ShipByDeadlineAt = current.DispatchDeadline;
+            }
         }
 
         var shipment = await _dbContext.MarketplaceShipments.FirstOrDefaultAsync(
@@ -434,14 +563,17 @@ public sealed class MercadoLivreWebhookService
             _dbContext.MarketplaceShipments.Add(shipment);
         }
 
-        shipment.Status = shipmentDetails.Status;
-        shipment.Substatus = shipmentDetails.Substatus;
-        shipment.ShippingMode = shipmentDetails.ShippingMode;
-        shipment.LogisticType = shipmentDetails.LogisticType;
-        shipment.TrackingNumber = shipmentDetails.TrackingNumber;
-        shipment.TrackingMethod = shipmentDetails.TrackingMethod;
-        shipment.TrackingUrl = shipmentDetails.TrackingUrl;
-        shipment.ShippedAt = shipmentDetails.ShippedAt;
+        if (acceptsProviderProjection)
+        {
+            shipment.Status = shipmentDetails.Status;
+            shipment.Substatus = shipmentDetails.Substatus;
+            shipment.ShippingMode = shipmentDetails.ShippingMode;
+            shipment.LogisticType = shipmentDetails.LogisticType;
+            shipment.TrackingNumber = shipmentDetails.TrackingNumber;
+            shipment.TrackingMethod = shipmentDetails.TrackingMethod;
+            shipment.TrackingUrl = shipmentDetails.TrackingUrl;
+            shipment.ShippedAt = shipmentDetails.ShippedAt;
+        }
         shipment.ShipByDeadlineAt = shipmentDetails.ShipByDeadlineAt;
         shipment.UpdatedAt = DateTimeOffset.UtcNow;
 
@@ -454,19 +586,22 @@ public sealed class MercadoLivreWebhookService
             .ToListAsync(cancellationToken);
         foreach (var order in relatedOrders)
         {
-            order.ShippingMode = shipmentDetails.ShippingMode ?? order.ShippingMode;
-            order.LogisticType = shipmentDetails.LogisticType ?? order.LogisticType;
-            order.ShipByDeadlineAt = shipmentDetails.ShipByDeadlineAt ?? order.ShipByDeadlineAt;
-            if (IsShippedStatus(shipmentDetails.Status))
+            if (acceptsProviderProjection)
             {
-                order.Status = "shipped";
+                order.ShippingMode = shipmentDetails.ShippingMode ?? order.ShippingMode;
+                order.LogisticType = shipmentDetails.LogisticType ?? order.LogisticType;
+                if (IsShippedStatus(shipmentDetails.Status))
+                {
+                    order.Status = "shipped";
+                }
             }
+            order.ShipByDeadlineAt = shipmentDetails.ShipByDeadlineAt ?? order.ShipByDeadlineAt;
 
             order.UpdatedAt = DateTimeOffset.UtcNow;
             shipment.MlOrderId ??= order.MlOrderId;
         }
 
-        if (IsShippedStatus(shipment.Status))
+        if (acceptsProviderProjection && IsShippedStatus(shipment.Status))
         {
             await _auditLogService.RecordAsync(
                 eventLog.TenantId,
@@ -561,5 +696,5 @@ public sealed class MercadoLivreWebhookService
             StringComparison.Ordinal);
     }
 
-    private sealed record WebhookCandidate(Guid Id, string Status, int Attempts, DateTimeOffset? LastErrorAt);
+    private sealed record WebhookCandidate(Guid Id, string Status, int Attempts, DateTimeOffset? LastErrorAt, string? NotificationId);
 }

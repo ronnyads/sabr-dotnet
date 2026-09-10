@@ -257,6 +257,7 @@ public sealed class AdminAuthController : ControllerBase
             UserRole.SuperAdmin => "SuperAdmin",
             UserRole.Finance => "Finance",
             UserRole.Admin => "Admin",
+            UserRole.Analyst => "Analyst",
             _ => "Admin"
         };
     }

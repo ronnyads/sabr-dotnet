@@ -230,7 +230,25 @@ public sealed class MercadoLivreShipmentDetails
     public string? TrackingMethod { get; set; }
     public string? TrackingUrl { get; set; }
     public DateTimeOffset? ShippedAt { get; set; }
-    public DateTimeOffset? ShipByDeadlineAt { get; set; }
+    public DateTimeOffset? HandlingAt { get; set; }
+    public DateTimeOffset? ReadyToShipAt { get; set; }
+    public DateTimeOffset? FirstPrintedAt { get; set; }
+    public DateTimeOffset? DeliveredAt { get; set; }
+    public DateTimeOffset? NotDeliveredAt { get; set; }
+    public DateTimeOffset? ReturnedAt { get; set; }
+    public DateTimeOffset? CancelledAt { get; set; }
+    public DateTimeOffset? ProviderUpdatedAt { get; set; }
+    public DateTimeOffset? ShipByDeadlineAt { get; set; } // Official SLA only.
+    public string RawJson { get; set; } = "{}";
+}
+
+public sealed class MercadoLivreShipmentSlaDetails
+{
+    public string ShipmentId { get; set; } = string.Empty;
+    public DateTimeOffset? DispatchDeadline { get; set; }
+    public DateTimeOffset? ProviderLastUpdatedAt { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public string PayloadHash { get; set; } = string.Empty;
     public string RawJson { get; set; } = "{}";
 }
 
@@ -632,7 +650,7 @@ public sealed class MarketplaceShipmentScanResult
     public string? InternalOrderNumber { get; set; }
     public string ShipmentId { get; set; } = string.Empty;
     public string ScanType { get; set; } = string.Empty;
-    public string Action { get; set; } = MarketplaceShipmentMilestones.Dispatched;
+    public string Action { get; set; } = MarketplaceShipmentMilestones.Packed;
     public DateTimeOffset UpdatedAt { get; set; }
     public string Message { get; set; } = string.Empty;
 }
@@ -652,10 +670,12 @@ public sealed class MarketplaceShipmentMilestoneAdvanceRequest
 public static class MarketplaceShipmentMilestones
 {
     public const string ProcessingStarted = "processing_started";
+    public const string PickingStarted = "picking_started";
     public const string LabelGenerated = "label_generated";
     public const string LabelPrinted = "label_printed";
     public const string Separated = "separated";
     public const string Processed = "processed";
+    public const string Packed = "packed";
     public const string Dispatched = "dispatched";
 }
 
@@ -669,6 +689,7 @@ public static class MarketplaceInternalStages
     public const string LabelPrinted = MarketplaceShipmentMilestones.LabelPrinted;
     public const string Separated = MarketplaceShipmentMilestones.Separated;
     public const string Processed = MarketplaceShipmentMilestones.Processed;
+    public const string Packed = MarketplaceShipmentMilestones.Packed;
     public const string Dispatched = MarketplaceShipmentMilestones.Dispatched;
 }
 
@@ -840,10 +861,13 @@ public static class MarketplaceEventTopics
     public const string AuditShipmentShipped    = "audit.shipment.shipped";
     public const string AuditLabelGenerated     = "audit.label.generated";
     public const string AuditFulfillmentProcessingStarted = "audit.fulfillment.processing_started";
+    public const string AuditFulfillmentPickingStarted = "audit.fulfillment.picking_started";
     public const string AuditFulfillmentLabelPrinted      = "audit.fulfillment.label_printed";
     public const string AuditFulfillmentSeparated         = "audit.fulfillment.separated";
     public const string AuditFulfillmentProcessed         = "audit.fulfillment.processed";
     public const string AuditFulfillmentDispatched        = "audit.fulfillment.dispatched";
+    public const string AuditFulfillmentPacked            = "audit.fulfillment.packed";
+    public const string SentinelSlaLevelChanged           = "sentinel.sla.level_changed";
 }
 
 public sealed class MercadoLivreWebhookPayload

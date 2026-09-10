@@ -755,6 +755,7 @@ public sealed class AuthService
             UserRole.SuperAdmin => PlatformUserRole.SuperAdmin,
             UserRole.Admin => PlatformUserRole.Admin,
             UserRole.Finance => PlatformUserRole.Finance,
+            UserRole.Analyst => PlatformUserRole.Analyst,
             _ => PlatformUserRole.Admin
         };
     }
@@ -765,6 +766,7 @@ public sealed class AuthService
         {
             PlatformUserRole.SuperAdmin => UserRole.SuperAdmin,
             PlatformUserRole.Finance => UserRole.Finance,
+            PlatformUserRole.Analyst => UserRole.Analyst,
             _ => UserRole.Admin
         };
     }

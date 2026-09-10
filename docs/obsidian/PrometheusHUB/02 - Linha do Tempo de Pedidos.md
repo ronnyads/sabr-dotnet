@@ -1,20 +1,20 @@
 ---
 tags: [prometheushub, pedidos, expedicao]
-updated: 2026-09-09
+updated: 2026-09-10
 ---
 
 # Linha do tempo de pedidos
 
 Sequência comum ao admin e cliente:
 
-**Pedido baixado → Pedido pago → Etiqueta gerada → Etiqueta impressa → Pedido separado → Pedido processado → Pedido despachado**
+**Recebido → Pago → Etiqueta disponível → Etiqueta impressa → Separação iniciada → Separado → Embalado → Aguardando postagem/coleta → Enviado confirmado pelo marketplace → Em trânsito → Entregue/Devolvido/Cancelado**
 
-- Importação, pagamento, obtenção da etiqueta e despacho registram marcos automáticos.
-- Impressão, separação e processamento são ações explícitas do admin.
+- Importação, pagamento, obtenção da etiqueta e confirmação externa registram marcos automáticos.
+- Impressão, início da separação, separação e embalagem são ações explícitas do admin.
 - Uma etapa não pode pular a anterior.
 - Pedido pago permanece na Expedição mesmo com etiqueta pendente.
 - O cliente acompanha datas, estados e baixa a etiqueta, mas não avança etapas administrativas.
-- O despacho remove da fila ativa e preserva o histórico em Pedidos.
+- A bipagem final significa `Embalado e pronto`; o shipment permanece vigiado até o marketplace confirmar o envio.
 - Múltiplos pacotes mantêm marcos por shipment.
 
 ## Confirmação interna de pagamento
@@ -24,6 +24,8 @@ Sequência comum ao admin e cliente:
 O hash da cotação impede confirmar valores que mudaram entre revisão e clique. Repetições são idempotentes e não recriam reservas nem geram um segundo débito. Pedidos sem vínculo, sem preço, sem estoque ou sem saldo continuam pendentes com bloqueador explícito.
 
 Ver também [[01 - Dashboard de Vendas]] para a visão comercial agregada.
+
+Ver também [[08 - SENTINEL Torre de Expedicao]] para estados separados, deadline oficial e risco de SLA.
 
 ## Etiquetas assíncronas
 

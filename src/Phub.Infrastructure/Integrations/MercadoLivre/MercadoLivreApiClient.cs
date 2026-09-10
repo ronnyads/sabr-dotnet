@@ -499,13 +499,48 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 TrackingUrl = root.TryGetProperty("tracking", out var trackingRoot)
                     ? GetOptionalString(trackingRoot, "url")
                     : null,
-                ShippedAt = TryParseDateTimeOffset(
-                    GetOptionalString(root, "date_shipped") ??
-                    GetOptionalString(root, "date_handling")),
-                ShipByDeadlineAt = TryParseDateTimeOffset(
-                    GetOptionalString(root, "shipping_estimated_date") ??
-                    GetOptionalString(root, "shipping_deadline") ??
-                    GetOptionalString(root, "date_first_printed")),
+                ShippedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_shipped")),
+                HandlingAt = TryParseDateTimeOffset(GetOptionalString(root, "date_handling")),
+                ReadyToShipAt = TryParseDateTimeOffset(GetOptionalString(root, "date_ready_to_ship")),
+                FirstPrintedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_first_printed")),
+                DeliveredAt = TryParseDateTimeOffset(GetOptionalString(root, "date_delivered")),
+                NotDeliveredAt = TryParseDateTimeOffset(GetOptionalString(root, "date_not_delivered")),
+                ReturnedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_returned")),
+                CancelledAt = TryParseDateTimeOffset(GetOptionalString(root, "date_cancelled")),
+                ProviderUpdatedAt = TryParseDateTimeOffset(GetOptionalString(root, "last_updated")),
+                ShipByDeadlineAt = null,
+                RawJson = json
+            };
+        }, cancellationToken);
+    }
+
+    public async Task<MercadoLivreShipmentSlaDetails?> GetShipmentSlaAsync(
+        string shipmentId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            var source = $"/shipments/{Uri.EscapeDataString(shipmentId)}/sla";
+            using var request = new HttpRequestMessage(HttpMethod.Get, source);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Headers.TryAddWithoutValidation("x-format-new", "true");
+            using var response = await _httpClient.SendAsync(request, ct);
+            if (response.StatusCode == HttpStatusCode.NotFound) return null;
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var expected = FindFirstDate(root, "dispatch_deadline")
+                           ?? FindFirstDate(root, "date_to_be_shipped")
+                           ?? FindFirstDate(root, "expected_date");
+            return new MercadoLivreShipmentSlaDetails
+            {
+                ShipmentId = shipmentId,
+                DispatchDeadline = expected,
+                ProviderLastUpdatedAt = FindFirstDate(root, "last_updated"),
+                Source = source,
+                PayloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant(),
                 RawJson = json
             };
         }, cancellationToken);
@@ -1695,6 +1730,13 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }
 
         return false;
+    }
+
+    private static DateTimeOffset? FindFirstDate(JsonElement element, string propertyName)
+    {
+        return TryFindString(element, propertyName, out var value)
+            ? TryParseDateTimeOffset(value)
+            : null;
     }
 
     public async Task RevokeApplicationAsync(long sellerId, string accessToken, CancellationToken cancellationToken = default)

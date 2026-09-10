@@ -388,6 +388,8 @@ builder.Services.AddScoped<OrderCancellationService>();
 builder.Services.AddScoped<OrderFulfillmentService>();
 builder.Services.AddScoped<MarketplaceOperationJobService>();
 builder.Services.AddScoped<ClientSalesDashboardService>();
+builder.Services.AddScoped<SentinelService>();
+builder.Services.AddScoped<SentinelReconciliationService>();
 builder.Services.AddScoped<ClientStoreService>();
 builder.Services.AddScoped<WalletService>();
 builder.Services.AddScoped<WalletDepositService>();

@@ -51,6 +51,9 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<MarketplaceOrderNumberSequence> MarketplaceOrderNumberSequences => Set<MarketplaceOrderNumberSequence>();
     public DbSet<MarketplaceOrderItem> MarketplaceOrderItems => Set<MarketplaceOrderItem>();
     public DbSet<MarketplaceShipment> MarketplaceShipments => Set<MarketplaceShipment>();
+    public DbSet<MarketplaceShipmentExternalState> MarketplaceShipmentExternalStates => Set<MarketplaceShipmentExternalState>();
+    public DbSet<MarketplaceShipmentOperationalState> MarketplaceShipmentOperationalStates => Set<MarketplaceShipmentOperationalState>();
+    public DbSet<MarketplaceShipmentDispatchDeadlineVersion> MarketplaceShipmentDispatchDeadlineVersions => Set<MarketplaceShipmentDispatchDeadlineVersion>();
     public DbSet<StockReservation> StockReservations => Set<StockReservation>();
     public DbSet<MarketplaceEventLog> MarketplaceEventLogs => Set<MarketplaceEventLog>();
     public DbSet<MarketplaceOperationJob> MarketplaceOperationJobs => Set<MarketplaceOperationJob>();
@@ -1428,6 +1431,111 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .HasDatabaseName("ix_marketplace_shipments_scan_code");
         });
 
+        modelBuilder.Entity<MarketplaceShipmentExternalState>(entity =>
+        {
+            entity.ToTable("marketplace_shipment_external_states");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.ShipmentId).HasColumnName("shipment_id").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.MlOrderId).HasColumnName("ml_order_id").HasMaxLength(80);
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(80);
+            entity.Property(e => e.Substatus).HasColumnName("substatus").HasMaxLength(120);
+            entity.Property(e => e.ShippingMode).HasColumnName("shipping_mode").HasMaxLength(80);
+            entity.Property(e => e.LogisticType).HasColumnName("logistic_type").HasMaxLength(80);
+            entity.Property(e => e.HandlingAt).HasColumnName("handling_at");
+            entity.Property(e => e.ReadyToShipAt).HasColumnName("ready_to_ship_at");
+            entity.Property(e => e.FirstPrintedAt).HasColumnName("first_printed_at");
+            entity.Property(e => e.ShippedAt).HasColumnName("shipped_at");
+            entity.Property(e => e.DeliveredAt).HasColumnName("delivered_at");
+            entity.Property(e => e.NotDeliveredAt).HasColumnName("not_delivered_at");
+            entity.Property(e => e.ReturnedAt).HasColumnName("returned_at");
+            entity.Property(e => e.CancelledAt).HasColumnName("cancelled_at");
+            entity.Property(e => e.DeliveryExpectedAt).HasColumnName("delivery_expected_at");
+            entity.Property(e => e.DelayType).HasColumnName("delay_type").HasMaxLength(120);
+            entity.Property(e => e.TrackingNumber).HasColumnName("tracking_number").HasMaxLength(120);
+            entity.Property(e => e.TrackingMethod).HasColumnName("tracking_method").HasMaxLength(80);
+            entity.Property(e => e.TrackingUrl).HasColumnName("tracking_url").HasMaxLength(1000);
+            entity.Property(e => e.ProviderUpdatedAt).HasColumnName("provider_updated_at");
+            entity.Property(e => e.LastMarketplaceSyncAt).HasColumnName("last_marketplace_sync_at").IsRequired();
+            entity.Property(e => e.PayloadHash).HasColumnName("payload_hash").HasMaxLength(64).IsRequired();
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.Property(e => e.NextReconciliationAt).HasColumnName("next_reconciliation_at");
+            entity.Property(e => e.ReconciliationAttempts).HasColumnName("reconciliation_attempts").IsRequired();
+            entity.Property(e => e.LockedBy).HasColumnName("locked_by").HasMaxLength(120);
+            entity.Property(e => e.LeaseUntil).HasColumnName("lease_until");
+            entity.Property(e => e.FreshnessState).HasColumnName("freshness_state").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.LastSyncError).HasColumnName("last_sync_error").HasMaxLength(2000);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.ShipmentId }).IsUnique()
+                .HasDatabaseName("ux_shipment_external_scope_provider_shipment");
+            entity.HasIndex(e => new { e.NextReconciliationAt, e.LeaseUntil })
+                .HasDatabaseName("ix_shipment_external_reconciliation");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.FreshnessState, e.LastMarketplaceSyncAt })
+                .HasDatabaseName("ix_shipment_external_scope_freshness");
+            entity.HasCheckConstraint("ck_shipment_external_version", "\"version\" > 0");
+        });
+
+        modelBuilder.Entity<MarketplaceShipmentOperationalState>(entity =>
+        {
+            entity.ToTable("marketplace_shipment_operational_states");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.ShipmentId).HasColumnName("shipment_id").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.LabelPrintedAt).HasColumnName("label_printed_at");
+            entity.Property(e => e.LabelPrintedBy).HasColumnName("label_printed_by").HasMaxLength(160);
+            entity.Property(e => e.PickingStartedAt).HasColumnName("picking_started_at");
+            entity.Property(e => e.PickingStartedBy).HasColumnName("picking_started_by").HasMaxLength(160);
+            entity.Property(e => e.SeparatedAt).HasColumnName("separated_at");
+            entity.Property(e => e.SeparatedBy).HasColumnName("separated_by").HasMaxLength(160);
+            entity.Property(e => e.PackedAt).HasColumnName("packed_at");
+            entity.Property(e => e.PackedBy).HasColumnName("packed_by").HasMaxLength(160);
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.ShipmentId }).IsUnique()
+                .HasDatabaseName("ux_shipment_operational_scope_provider_shipment");
+            entity.HasCheckConstraint("ck_shipment_operational_version", "\"version\" > 0");
+        });
+
+        modelBuilder.Entity<MarketplaceShipmentDispatchDeadlineVersion>(entity =>
+        {
+            entity.ToTable("marketplace_shipment_dispatch_deadline_versions");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.ShipmentId).HasColumnName("shipment_id").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.DispatchDeadline).HasColumnName("dispatch_deadline").IsRequired();
+            entity.Property(e => e.Source).HasColumnName("source").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.ProviderLastUpdatedAt).HasColumnName("provider_last_updated_at");
+            entity.Property(e => e.QueriedAt).HasColumnName("queried_at").IsRequired();
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.Property(e => e.PayloadHash).HasColumnName("payload_hash").HasMaxLength(64).IsRequired();
+            entity.Property(e => e.IsCurrent).HasColumnName("is_current").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.ShipmentId, e.Version }).IsUnique()
+                .HasDatabaseName("ux_dispatch_deadline_scope_version");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.ShipmentId, e.PayloadHash }).IsUnique()
+                .HasDatabaseName("ux_dispatch_deadline_scope_hash");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.ShipmentId }).IsUnique()
+                .HasFilter("\"is_current\" = TRUE")
+                .HasDatabaseName("ux_dispatch_deadline_current");
+            entity.HasIndex(e => new { e.IsCurrent, e.DispatchDeadline })
+                .HasDatabaseName("ix_dispatch_deadline_current_deadline");
+            entity.HasCheckConstraint("ck_dispatch_deadline_version", "\"version\" > 0");
+        });
+
         modelBuilder.Entity<StockReservation>(entity =>
         {
             entity.ToTable("stock_reservations");
@@ -1538,11 +1646,16 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.LogisticType).HasColumnName("logistic_type").HasMaxLength(80).IsRequired();
             entity.Property(e => e.ShippingMode).HasColumnName("shipping_mode").HasMaxLength(80);
             entity.Property(e => e.CutoffLocalTime).HasColumnName("cutoff_local_time").HasMaxLength(5).IsRequired();
+            entity.Property(e => e.MonitorMinutes).HasColumnName("monitor_minutes").IsRequired();
+            entity.Property(e => e.AttentionMinutes).HasColumnName("attention_minutes").IsRequired();
+            entity.Property(e => e.UrgentMinutes).HasColumnName("urgent_minutes").IsRequired();
+            entity.Property(e => e.CriticalMinutes).HasColumnName("critical_minutes").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.LogisticType, e.ShippingMode })
                 .IsUnique()
                 .HasDatabaseName("ux_tenant_marketplace_sla_rules_scope_mode");
+            entity.HasCheckConstraint("ck_sla_risk_thresholds", "\"monitor_minutes\" > \"attention_minutes\" AND \"attention_minutes\" > \"urgent_minutes\" AND \"urgent_minutes\" > \"critical_minutes\" AND \"critical_minutes\" > 0");
         });
 
         base.OnModelCreating(modelBuilder);

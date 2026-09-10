@@ -1176,19 +1176,22 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         Assert.False((await AdvanceAsync(MarketplaceShipmentMilestones.Separated)).Succeeded);
         Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.LabelPrinted)).Succeeded);
-        Assert.False((await AdvanceAsync(MarketplaceShipmentMilestones.Processed)).Succeeded);
+        Assert.False((await AdvanceAsync(MarketplaceShipmentMilestones.Packed)).Succeeded);
+        Assert.False((await AdvanceAsync(MarketplaceShipmentMilestones.Separated)).Succeeded);
+        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.PickingStarted)).Succeeded);
         Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.Separated)).Succeeded);
-        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.Processed)).Succeeded);
-        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.Dispatched)).Succeeded);
+        Assert.True((await AdvanceAsync(MarketplaceShipmentMilestones.Packed)).Succeeded);
+        Assert.False((await AdvanceAsync(MarketplaceShipmentMilestones.Dispatched)).Succeeded);
 
         var completed = await fulfillmentService.GetAdminOrderAsync(orderId);
         Assert.True(completed.Succeeded);
         var milestones = completed.Data!.InternalFulfillmentSummary!.Milestones;
         Assert.NotNull(milestones.LabelPrintedAt);
+        Assert.NotNull(milestones.ProcessingStartedAt);
         Assert.NotNull(milestones.SeparatedAt);
         Assert.NotNull(milestones.ProcessedAt);
-        Assert.NotNull(milestones.DispatchedAt);
-        Assert.Equal(MarketplaceInternalStages.Dispatched, completed.Data.CurrentInternalStage);
+        Assert.Null(milestones.DispatchedAt);
+        Assert.Equal(MarketplaceInternalStages.Packed, completed.Data.CurrentInternalStage);
     }
 
     [Fact]

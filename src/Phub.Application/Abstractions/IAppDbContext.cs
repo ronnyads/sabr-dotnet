@@ -41,6 +41,9 @@ public interface IAppDbContext
     DbSet<MarketplaceOrderNumberSequence> MarketplaceOrderNumberSequences { get; }
     DbSet<MarketplaceOrderItem> MarketplaceOrderItems { get; }
     DbSet<MarketplaceShipment> MarketplaceShipments { get; }
+    DbSet<MarketplaceShipmentExternalState> MarketplaceShipmentExternalStates { get; }
+    DbSet<MarketplaceShipmentOperationalState> MarketplaceShipmentOperationalStates { get; }
+    DbSet<MarketplaceShipmentDispatchDeadlineVersion> MarketplaceShipmentDispatchDeadlineVersions { get; }
     DbSet<StockReservation> StockReservations { get; }
     DbSet<MarketplaceEventLog> MarketplaceEventLogs { get; }
     DbSet<MarketplaceOperationJob> MarketplaceOperationJobs { get; }

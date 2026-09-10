@@ -219,13 +219,12 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
         [FromRoute] Guid orderId,
         CancellationToken cancellationToken = default)
     {
-        var adminId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "admin";
-        var result = await _fulfillmentService.MarkDispatchedAsync(orderId, adminId, cancellationToken);
-
-        if (!result.Succeeded || result.Data == null)
-            return MapValidationError(result.Errors);
-
-        return Ok(result.Data);
+        await Task.CompletedTask;
+        return StatusCode(StatusCodes.Status410Gone, new
+        {
+            error = "MANUAL_DISPATCH_DISABLED",
+            message = "Envio é confirmado exclusivamente pelo marketplace. Use Confirmar embalado na Expedição."
+        });
     }
 
     [HttpPost("{orderId:guid}/shipments/{shipmentId}/milestone")]

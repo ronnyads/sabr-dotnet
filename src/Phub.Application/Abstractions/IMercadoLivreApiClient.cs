@@ -79,6 +79,11 @@ public interface IMercadoLivreApiClient
         int availableQuantity,
         string accessToken,
         CancellationToken cancellationToken = default);
+    Task<MercadoLivreShipmentSlaDetails?> GetShipmentSlaAsync(
+        string shipmentId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<MercadoLivreShipmentSlaDetails?>(null);
     Task<MercadoLivreUserProductStock> GetUserProductStockAsync(
         string userProductId,
         string accessToken,
