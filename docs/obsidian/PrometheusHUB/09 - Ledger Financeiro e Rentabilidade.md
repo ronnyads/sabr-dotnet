@@ -1,0 +1,59 @@
+# Ledger Financeiro e Rentabilidade
+
+## Objetivo
+
+Explicar, sem sobrescrita de fatos, quanto o seller faturou, quais débitos incidiram, qual foi o custo operacional e qual é a maturidade de cada resultado.
+
+## Camadas
+
+- `OPERATIONAL`: projeção imediata de Orders, Discounts, Shipments, Packs e catálogo.
+- `RECONCILED`: confirmação posterior pelos recursos oficiais de Billing.
+- `INTERNAL_CONFIRMED`: fatos confirmados dentro do PrometheusHUB, como o débito do custo de produto.
+
+Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da operação.
+
+## Invariantes
+
+1. Receita/crédito/recuperação são positivos; custo/tarifa/débito/reembolso são negativos.
+2. O ledger é append-only. Uma correção cria uma nova entrada e avança `FinancialEconomicHead`.
+3. Há exatamente uma cabeça ativa por tenant, cliente, provider, seller e `economicKey`.
+4. Somente a cabeça ativa participa dos agregados.
+5. `economicOccurredAt`, `financialConfirmedAt` e `observedAt` são datas distintas.
+6. `sellerId` é dimensão relacional explícita em fatos, projeções, cursores, jobs e índices.
+7. Refund ou chargeback sem alocação oficial permanece no grão fornecido; nunca há rateio inventado.
+8. Entrega de devolução não recupera custo. A recuperação exige confirmação administrativa de item vendável.
+9. Preço de catálogo é fotografado no pedido e não muda retroativamente.
+10. Ausência de dado não equivale a zero.
+
+## Maturidade
+
+- `INCOMPLETO`: falta SKU, custo, frete, alocação ou componente obrigatório.
+- `ESTIMADO`: componentes operacionais resolvidos, ainda sem confirmação suficiente.
+- `PARCIALMENTE_CONFIRMADO`: confirmação parcial.
+- `CONFIRMADO`: todos os componentes esperados confirmados ou não aplicáveis.
+- `REABERTO`: fato tardio alterou um pedido antes confirmado.
+
+## Sincronização
+
+- Webhook permanece primário.
+- O catch-up operacional de até 365 dias é particionado em chunks de no máximo 31 dias.
+- Cada chunk possui checkpoint, dedupe key, tentativas, lease e retomada durável.
+- A aquisição PostgreSQL usa `FOR UPDATE SKIP LOCKED`; a chamada HTTP ocorre fora da transação.
+- Retentativas usam backoff exponencial com full jitter.
+- Billing é processado sequencialmente por seller, grupo e período, preservando `from_id`; respostas parciais e rate limit não viram zero confirmado.
+
+## APIs
+
+- `GET /api/v1/client/dashboard/profitability`
+- `GET /api/v1/client/dashboard/profitability/orders`
+- `GET /api/v1/client/dashboard/profitability/orders/{orderId}`
+- `POST /api/v1/client/dashboard/sync`
+- `GET /api/v1/client/dashboard/sync/{jobId}`
+- `GET /api/v1/client/dashboard/sync-status`
+- `GET|PUT /api/v1/client/financial-settings/tax`
+- `GET|POST /api/v1/admin/integrations/{clientId}/financial-capabilities[/probe]`
+- `GET /api/v1/admin/financial-reconciliation/runs`
+
+## Rollout e recuperação
+
+As migrações são aditivas. Ativar primeiro em shadow mode, auditar grants separados do Mercado Livre e Mercado Pago e validar manualmente a amostra do seller piloto. Qualquer centavo sem causa identificada bloqueia o rollout. Em incidente, pausar consumidores financeiros; o fluxo operacional de pedidos continua independente e as filas retomam do checkpoint.

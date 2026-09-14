@@ -43,6 +43,7 @@ public sealed class MarketplaceUnmappedItemDto
     public string? ChannelSku { get; set; }
     public string? ProductName { get; set; }
     public string? VariantName { get; set; }
+    public string? ThumbnailUrl { get; set; }
     public string MappingReason { get; set; } = MarketplaceMappingReasonCodes.UnmappedUnknownChannelSku;
     public int OrdersAffected { get; set; }
     public int TotalUnits { get; set; }
@@ -57,6 +58,14 @@ public sealed class MarketplaceUpsertMappingRequest
     public string ExternalItemId { get; set; } = string.Empty;
     public string? ExternalVariationId { get; set; }
     public string SelectedCatalogSku { get; set; } = string.Empty;
+}
+
+public sealed class MarketplaceMappingReanalysisResult
+{
+    public int ItemsExamined { get; set; }
+    public int ItemsMapped { get; set; }
+    public int ItemsRemaining { get; set; }
+    public int OrdersReleased { get; set; }
 }
 
 public sealed record MarketplaceItemResolutionResult(
@@ -74,6 +83,7 @@ public static class MarketplaceMappingReasonCodes
     public const string MappedByListingMap = "mapped_by_listing_map";
     public const string UnmappedMissingChannelSku = "unmapped_missing_channel_sku";
     public const string UnmappedUnknownChannelSku = "unmapped_unknown_channel_sku";
+    public const string UnmappedAmbiguousChannelSku = "unmapped_ambiguous_channel_sku";
     public const string UnmappedSkuNotAuthorized = "unmapped_sku_not_authorized";
     public const string UnmappedMappedSkuNotAuthorized = "unmapped_mapping_not_authorized";
     public const string UnmappedNoImportedItems = "unmapped_no_imported_items";

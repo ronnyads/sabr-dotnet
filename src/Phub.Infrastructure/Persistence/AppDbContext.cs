@@ -57,6 +57,13 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<StockReservation> StockReservations => Set<StockReservation>();
     public DbSet<MarketplaceEventLog> MarketplaceEventLogs => Set<MarketplaceEventLog>();
     public DbSet<MarketplaceOperationJob> MarketplaceOperationJobs => Set<MarketplaceOperationJob>();
+    public DbSet<MarketplaceFinancialEntry> MarketplaceFinancialEntries => Set<MarketplaceFinancialEntry>();
+    public DbSet<FinancialEconomicHead> FinancialEconomicHeads => Set<FinancialEconomicHead>();
+    public DbSet<MarketplaceOrderFinancialState> MarketplaceOrderFinancialStates => Set<MarketplaceOrderFinancialState>();
+    public DbSet<SellerTaxProfileVersion> SellerTaxProfileVersions => Set<SellerTaxProfileVersion>();
+    public DbSet<FinancialReconciliationCursor> FinancialReconciliationCursors => Set<FinancialReconciliationCursor>();
+    public DbSet<FinancialSyncJob> FinancialSyncJobs => Set<FinancialSyncJob>();
+    public DbSet<MarketplaceOAuthGrant> MarketplaceOAuthGrants => Set<MarketplaceOAuthGrant>();
     public DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules => Set<TenantMarketplaceSlaRule>();
     public DbSet<AiPromptConfig> AiPromptConfigs => Set<AiPromptConfig>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
@@ -1633,6 +1640,233 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .IsUnique()
                 .HasFilter("\"dedupe_key\" IS NOT NULL")
                 .HasDatabaseName("ux_marketplace_operation_jobs_dedupe_key");
+        });
+
+        modelBuilder.Entity<MarketplaceFinancialEntry>(entity =>
+        {
+            entity.ToTable("marketplace_financial_entries", table =>
+            {
+                table.HasCheckConstraint("ck_financial_entry_amount_non_zero", "amount_cents <> 0");
+                table.HasCheckConstraint("ck_financial_entry_layer", "layer IN ('OPERATIONAL','RECONCILED','INTERNAL_CONFIRMED')");
+                table.HasCheckConstraint("ck_financial_entry_status", "status IN ('ESTIMATED','CONFIRMED')");
+            });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.EntryType).HasColumnName("entry_type").HasMaxLength(60).IsRequired();
+            entity.Property(e => e.Layer).HasColumnName("layer").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.AmountCents).HasColumnName("amount_cents").IsRequired();
+            entity.Property(e => e.CurrencyId).HasColumnName("currency_id").HasMaxLength(3).IsRequired();
+            entity.Property(e => e.EconomicKey).HasColumnName("economic_key").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.SupersedesEntryId).HasColumnName("supersedes_entry_id");
+            entity.Property(e => e.MarketplaceOrderId).HasColumnName("marketplace_order_id");
+            entity.Property(e => e.MarketplaceOrderItemId).HasColumnName("marketplace_order_item_id");
+            entity.Property(e => e.ExternalOrderId).HasColumnName("external_order_id").HasMaxLength(120);
+            entity.Property(e => e.ExternalPaymentId).HasColumnName("external_payment_id").HasMaxLength(120);
+            entity.Property(e => e.ExternalShipmentId).HasColumnName("external_shipment_id").HasMaxLength(120);
+            entity.Property(e => e.ExternalPackId).HasColumnName("external_pack_id").HasMaxLength(120);
+            entity.Property(e => e.ExternalClaimId).HasColumnName("external_claim_id").HasMaxLength(120);
+            entity.Property(e => e.ExternalReturnId).HasColumnName("external_return_id").HasMaxLength(120);
+            entity.Property(e => e.EconomicOccurredAt).HasColumnName("economic_occurred_at").IsRequired();
+            entity.Property(e => e.FinancialConfirmedAt).HasColumnName("financial_confirmed_at");
+            entity.Property(e => e.ProviderUpdatedAt).HasColumnName("provider_updated_at");
+            entity.Property(e => e.ObservedAt).HasColumnName("observed_at").IsRequired();
+            entity.Property(e => e.SourceEndpoint).HasColumnName("source_endpoint").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.SourceRecordId).HasColumnName("source_record_id").HasMaxLength(200);
+            entity.Property(e => e.CanonicalPayloadHash).HasColumnName("canonical_payload_hash").HasMaxLength(64).IsRequired();
+            entity.Property(e => e.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.Provider, e.SellerId, e.IdempotencyKey }).IsUnique()
+                .HasDatabaseName("ux_financial_entries_scope_idempotency");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.EconomicOccurredAt })
+                .HasDatabaseName("ix_financial_entries_scope_economic_at");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.FinancialConfirmedAt })
+                .HasDatabaseName("ix_financial_entries_scope_confirmed_at");
+            entity.HasIndex(e => new { e.SellerId, e.MarketplaceOrderId }).HasDatabaseName("ix_financial_entries_seller_order");
+            entity.HasIndex(e => new { e.SellerId, e.ExternalPaymentId }).HasDatabaseName("ix_financial_entries_seller_payment");
+            entity.HasIndex(e => new { e.SellerId, e.ExternalShipmentId }).HasDatabaseName("ix_financial_entries_seller_shipment");
+            entity.HasIndex(e => e.SupersedesEntryId).HasDatabaseName("ix_financial_entries_supersedes");
+            entity.HasOne<MarketplaceFinancialEntry>().WithMany().HasForeignKey(e => e.SupersedesEntryId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<MarketplaceOrder>().WithMany().HasForeignKey(e => e.MarketplaceOrderId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<MarketplaceOrderItem>().WithMany().HasForeignKey(e => e.MarketplaceOrderItemId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FinancialEconomicHead>(entity =>
+        {
+            entity.ToTable("financial_economic_heads", table =>
+                table.HasCheckConstraint("ck_financial_head_version", "version > 0"));
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.EconomicKey).HasColumnName("economic_key").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.ActiveEntryId).HasColumnName("active_entry_id").IsRequired();
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.EconomicKey }).IsUnique()
+                .HasDatabaseName("ux_financial_heads_scope_economic_key");
+            entity.HasIndex(e => e.ActiveEntryId).IsUnique().HasDatabaseName("ux_financial_heads_active_entry");
+            entity.HasOne<MarketplaceFinancialEntry>().WithMany().HasForeignKey(e => e.ActiveEntryId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<MarketplaceOrderFinancialState>(entity =>
+        {
+            entity.ToTable("marketplace_order_financial_states", table =>
+            {
+                table.HasCheckConstraint("ck_order_financial_state_version", "version > 0");
+                table.HasCheckConstraint("ck_order_financial_state_maturity", "maturity IN ('INCOMPLETO','ESTIMADO','PARCIALMENTE_CONFIRMADO','CONFIRMADO','REABERTO')");
+            });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.MarketplaceOrderId).HasColumnName("marketplace_order_id").IsRequired();
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.Maturity).HasColumnName("maturity").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.GrossRevenueCents).HasColumnName("gross_revenue_cents");
+            entity.Property(e => e.EstimatedEconomicNetCents).HasColumnName("estimated_economic_net_cents");
+            entity.Property(e => e.ConfirmedValueCents).HasColumnName("confirmed_value_cents");
+            entity.Property(e => e.OperationalProfitCents).HasColumnName("operational_profit_cents");
+            entity.Property(e => e.UnallocatedCents).HasColumnName("unallocated_cents");
+            entity.Property(e => e.SkuResolved).HasColumnName("sku_resolved");
+            entity.Property(e => e.CostResolved).HasColumnName("cost_resolved");
+            entity.Property(e => e.FreightResolved).HasColumnName("freight_resolved");
+            entity.Property(e => e.OperationalComponentsResolved).HasColumnName("operational_components_resolved");
+            entity.Property(e => e.ConfirmedComponentsResolved).HasColumnName("confirmed_components_resolved");
+            entity.Property(e => e.ItemAllocationResolved).HasColumnName("item_allocation_resolved");
+            entity.Property(e => e.IncompleteReasonsJson).HasColumnName("incomplete_reasons_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.DivergenceJson).HasColumnName("divergence_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.WasConfirmedAt).HasColumnName("was_confirmed_at");
+            entity.Property(e => e.ReopenedAt).HasColumnName("reopened_at");
+            entity.Property(e => e.LastProjectedAt).HasColumnName("last_projected_at").IsRequired();
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.HasIndex(e => e.MarketplaceOrderId).IsUnique().HasDatabaseName("ux_order_financial_states_order");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.Maturity })
+                .HasDatabaseName("ix_order_financial_states_scope_maturity");
+            entity.HasOne<MarketplaceOrder>().WithMany().HasForeignKey(e => e.MarketplaceOrderId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SellerTaxProfileVersion>(entity =>
+        {
+            entity.ToTable("seller_tax_profile_versions", table =>
+            {
+                table.HasCheckConstraint("ck_seller_tax_rate", "rate_basis_points >= 0 AND rate_basis_points <= 10000");
+                table.HasCheckConstraint("ck_seller_tax_version", "version > 0");
+                table.HasCheckConstraint("ck_seller_tax_period", "effective_to IS NULL OR effective_to > effective_from");
+            });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.RateBasisPoints).HasColumnName("rate_basis_points").IsRequired();
+            entity.Property(e => e.EffectiveFrom).HasColumnName("effective_from").IsRequired();
+            entity.Property(e => e.EffectiveTo).HasColumnName("effective_to");
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.Property(e => e.CreatedBy).HasColumnName("created_by").HasMaxLength(160).IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.Version }).IsUnique()
+                .HasDatabaseName("ux_seller_tax_scope_version");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.EffectiveFrom })
+                .HasDatabaseName("ix_seller_tax_scope_effective_from");
+        });
+
+        modelBuilder.Entity<FinancialReconciliationCursor>(entity =>
+        {
+            entity.ToTable("financial_reconciliation_cursors");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.BillingGroup).HasColumnName("billing_group").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.PeriodKey).HasColumnName("period_key").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.FromId).HasColumnName("from_id").HasMaxLength(200);
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.LastPayloadHash).HasColumnName("last_payload_hash").HasMaxLength(64);
+            entity.Property(e => e.LastSucceededAt).HasColumnName("last_succeeded_at");
+            entity.Property(e => e.NextAttemptAt).HasColumnName("next_attempt_at");
+            entity.Property(e => e.Attempts).HasColumnName("attempts").IsRequired();
+            entity.Property(e => e.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.BillingGroup, e.PeriodKey }).IsUnique()
+                .HasDatabaseName("ux_financial_cursor_scope_period");
+            entity.HasIndex(e => new { e.SellerId, e.Status, e.NextAttemptAt }).HasDatabaseName("ix_financial_cursor_seller_retry");
+        });
+
+        modelBuilder.Entity<FinancialSyncJob>(entity =>
+        {
+            entity.ToTable("financial_sync_jobs", table =>
+                table.HasCheckConstraint("ck_financial_sync_range", "range_to > range_from"));
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.ParentJobId).HasColumnName("parent_job_id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.JobType).HasColumnName("job_type").HasMaxLength(50).IsRequired();
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.RangeFrom).HasColumnName("range_from").IsRequired();
+            entity.Property(e => e.RangeTo).HasColumnName("range_to").IsRequired();
+            entity.Property(e => e.Checkpoint).HasColumnName("checkpoint").HasMaxLength(300);
+            entity.Property(e => e.DedupeKey).HasColumnName("dedupe_key").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.PayloadJson).HasColumnName("payload_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.ResultJson).HasColumnName("result_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.Total).HasColumnName("total").IsRequired();
+            entity.Property(e => e.Processed).HasColumnName("processed").IsRequired();
+            entity.Property(e => e.Attempts).HasColumnName("attempts").IsRequired();
+            entity.Property(e => e.NextAttemptAt).HasColumnName("next_attempt_at");
+            entity.Property(e => e.LockedBy).HasColumnName("locked_by").HasMaxLength(160);
+            entity.Property(e => e.LeaseUntil).HasColumnName("lease_until");
+            entity.Property(e => e.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
+            entity.HasIndex(e => new { e.TenantId, e.Provider, e.SellerId, e.DedupeKey }).IsUnique()
+                .HasDatabaseName("ux_financial_sync_jobs_scope_dedupe");
+            entity.HasIndex(e => new { e.SellerId, e.NextAttemptAt, e.CreatedAt })
+                .HasFilter("\"status\" IN ('PENDING','RETRY')")
+                .HasDatabaseName("ix_financial_sync_jobs_pending");
+            entity.HasIndex(e => e.ParentJobId).HasDatabaseName("ix_financial_sync_jobs_parent");
+            entity.HasOne<FinancialSyncJob>().WithMany().HasForeignKey(e => e.ParentJobId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<MarketplaceOAuthGrant>(entity =>
+        {
+            entity.ToTable("marketplace_oauth_grants");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.AppFamily).HasColumnName("app_family").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.ClientIdFingerprint).HasColumnName("client_id_fingerprint").HasMaxLength(64).IsRequired();
+            entity.Property(e => e.AccessTokenProtected).HasColumnName("access_token_protected").IsRequired();
+            entity.Property(e => e.RefreshTokenProtected).HasColumnName("refresh_token_protected").IsRequired();
+            entity.Property(e => e.TokenExpiresAt).HasColumnName("token_expires_at").IsRequired();
+            entity.Property(e => e.ScopesJson).HasColumnName("scopes_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.CapabilitiesJson).HasColumnName("capabilities_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.LastCapabilityVerifiedAt).HasColumnName("last_capability_verified_at");
+            entity.Property(e => e.CapabilityError).HasColumnName("capability_error").HasMaxLength(2000);
+            entity.Property(e => e.RequiresReauthorization).HasColumnName("requires_reauthorization").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.AppFamily }).IsUnique()
+                .HasDatabaseName("ux_oauth_grants_scope_app_family");
+            entity.HasIndex(e => new { e.SellerId, e.LastCapabilityVerifiedAt }).HasDatabaseName("ix_oauth_grants_seller_verified");
         });
 
         modelBuilder.Entity<TenantMarketplaceSlaRule>(entity =>

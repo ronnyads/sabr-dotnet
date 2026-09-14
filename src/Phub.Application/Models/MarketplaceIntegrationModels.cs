@@ -155,6 +155,7 @@ public static class MarketplaceMappingStates
     public const string MappedByListingMap = "MAPPED_BY_LISTING_MAP";
     public const string UnmappedMissingChannelSku = "UNMAPPED_MISSING_CHANNEL_SKU";
     public const string UnmappedUnknownChannelSku = "UNMAPPED_UNKNOWN_CHANNEL_SKU";
+    public const string UnmappedAmbiguousChannelSku = "UNMAPPED_AMBIGUOUS_CHANNEL_SKU";
     public const string UnmappedSkuNotAuthorized = "UNMAPPED_SKU_NOT_AUTHORIZED";
     public const string UnmappedMappingNotAuthorized = "UNMAPPED_MAPPING_NOT_AUTHORIZED";
 
@@ -168,6 +169,7 @@ public static class MarketplaceMappingStates
            || string.Equals(value, Unmapped, StringComparison.Ordinal)
            || string.Equals(value, UnmappedMissingChannelSku, StringComparison.Ordinal)
            || string.Equals(value, UnmappedUnknownChannelSku, StringComparison.Ordinal)
+           || string.Equals(value, UnmappedAmbiguousChannelSku, StringComparison.Ordinal)
            || string.Equals(value, UnmappedSkuNotAuthorized, StringComparison.Ordinal)
            || string.Equals(value, UnmappedMappingNotAuthorized, StringComparison.Ordinal);
 }
@@ -239,6 +241,25 @@ public sealed class MercadoLivreShipmentDetails
     public DateTimeOffset? CancelledAt { get; set; }
     public DateTimeOffset? ProviderUpdatedAt { get; set; }
     public DateTimeOffset? ShipByDeadlineAt { get; set; } // Official SLA only.
+    public string RawJson { get; set; } = "{}";
+}
+
+public sealed class MercadoLivreShipmentCostDetails
+{
+    public string ShipmentId { get; set; } = string.Empty;
+    public long SellerId { get; set; }
+    public decimal SellerCost { get; set; }
+    public decimal SellerCompensation { get; set; }
+    public string CurrencyId { get; set; } = "BRL";
+    public string RawJson { get; set; } = "{}";
+}
+
+public sealed class MercadoLivreOrderDiscountDetails
+{
+    public string DiscountId { get; set; } = string.Empty;
+    public string? ItemId { get; set; }
+    public int Quantity { get; set; }
+    public decimal SellerAmount { get; set; }
     public string RawJson { get; set; } = "{}";
 }
 

@@ -1538,6 +1538,243 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(1, await db.StockReservations.CountAsync(item => item.SabrVariantSku == variantSku));
     }
 
+    [Fact]
+    public async Task UnmappedItems_UsesPersistedAndNestedMercadoLivreIdentity()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-unmapped-identity";
+        const string tenantSlug = "mlunmappedidentity";
+        const long sellerId = 2496573592;
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var firstOrder = new MarketplaceOrder
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = sellerId,
+                MlOrderId = "ORDER-IDENTITY-01",
+                Status = "paid"
+            };
+            var secondOrder = new MarketplaceOrder
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = sellerId,
+                MlOrderId = "ORDER-IDENTITY-02",
+                Status = "paid"
+            };
+            db.MarketplaceOrders.AddRange(firstOrder, secondOrder);
+            db.MarketplaceOrderItems.AddRange(
+                new MarketplaceOrderItem
+                {
+                    MarketplaceOrderId = firstOrder.Id,
+                    TenantId = tenantId,
+                    ClientId = clientId,
+                    Provider = MarketplaceProvider.MercadoLivre,
+                    SellerId = sellerId,
+                    MlItemId = "MLB-PERSISTED",
+                    ChannelSku = "PH-PERSISTED",
+                    ProductName = "Produto salvo no pedido",
+                    Quantity = 1,
+                    MappingState = MarketplaceMappingStates.UnmappedUnknownChannelSku,
+                    RawJson = "{}"
+                },
+                new MarketplaceOrderItem
+                {
+                    MarketplaceOrderId = secondOrder.Id,
+                    TenantId = tenantId,
+                    ClientId = clientId,
+                    Provider = MarketplaceProvider.MercadoLivre,
+                    SellerId = sellerId,
+                    MlItemId = "MLB-NESTED",
+                    Quantity = 1,
+                    MappingState = MarketplaceMappingStates.UnmappedUnknownChannelSku,
+                    RawJson = """{"item":{"title":"Produto no JSON do ML","seller_sku":"PH-NESTED","thumbnail":"https://http2.mlstatic.com/test.jpg"}}"""
+                });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.GetAsync("/api/v1/client/marketplace-mappings/unmapped-items?provider=MercadoLivre");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<List<MarketplaceUnmappedItemDto>>();
+        Assert.NotNull(payload);
+        Assert.Equal(2, payload!.Count);
+        var persisted = Assert.Single(payload, item => item.ExternalItemId == "MLB-PERSISTED");
+        Assert.Equal("Produto salvo no pedido", persisted.ProductName);
+        Assert.Equal("PH-PERSISTED", persisted.ChannelSku);
+        var nested = Assert.Single(payload, item => item.ExternalItemId == "MLB-NESTED");
+        Assert.Equal("Produto no JSON do ML", nested.ProductName);
+        Assert.Equal("PH-NESTED", nested.ChannelSku);
+        Assert.Equal("https://http2.mlstatic.com/test.jpg", nested.ThumbnailUrl);
+    }
+
+    [Fact]
+    public async Task ExactAuthorizedSku_AutoMapsAndAddsProductToClientWorkspace()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-auto-map";
+        const string tenantSlug = "mlautomap";
+        const string sellerId = "2496573592";
+        const string baseSku = "PH-AUTO";
+        const string variantSku = "PH-AUTO-01";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, variantSku, physicalStock: 1000, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var service = scope.ServiceProvider.GetRequiredService<MarketplaceOrderMappingService>();
+        var integrationId = await db.TenantMarketplaceConnections
+            .Where(item => item.TenantId == tenantId && item.ClientId == clientId)
+            .Select(item => item.Id)
+            .SingleAsync();
+
+        var result = await service.ResolveImportedItemAsync(
+            tenantId,
+            clientId,
+            MarketplaceProvider.MercadoLivre,
+            ParseSellerId(sellerId),
+            integrationId,
+            "MLB-AUTO-01",
+            null,
+            variantSku);
+
+        Assert.Equal(MarketplaceMappingStates.MappedByExactSku, result.MappingState);
+        Assert.Equal(variantSku, result.SabrVariantSku);
+        Assert.NotNull(result.MappingId);
+        Assert.Equal(1, result.MappingVersion);
+        Assert.True(await db.TenantMarketplaceListingMaps.AnyAsync(item => item.Id == result.MappingId));
+        Assert.True(await db.Publications.AnyAsync(item => item.TenantId == tenantId
+                                                          && item.ClientId == clientId
+                                                          && item.ProductSku == baseSku
+                                                          && item.Status == PublicationStatus.Draft));
+        Assert.True(await db.AuditEvents.AnyAsync(item => item.Action == "MarketplaceMapping.AutoMapExactSku"
+                                                         && item.EntityId == result.MappingId));
+    }
+
+    [Fact]
+    public async Task BaseSkuWithMultipleAuthorizedVariants_RemainsPendingForManualChoice()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-ambiguous-map";
+        const string tenantSlug = "mlambiguousmap";
+        const string sellerId = "2496573592";
+        const string baseSku = "PH-AMBIGUOUS";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, "PH-AMBIGUOUS-A", physicalStock: 1000, reservedStock: 0);
+        await SeedVariantAsync(baseSku, "PH-AMBIGUOUS-B", physicalStock: 1000, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var service = scope.ServiceProvider.GetRequiredService<MarketplaceOrderMappingService>();
+        var integrationId = await db.TenantMarketplaceConnections
+            .Where(item => item.TenantId == tenantId && item.ClientId == clientId)
+            .Select(item => item.Id)
+            .SingleAsync();
+
+        var result = await service.ResolveImportedItemAsync(
+            tenantId,
+            clientId,
+            MarketplaceProvider.MercadoLivre,
+            ParseSellerId(sellerId),
+            integrationId,
+            "MLB-AMBIGUOUS-01",
+            null,
+            baseSku);
+
+        Assert.Equal(MarketplaceMappingStates.UnmappedAmbiguousChannelSku, result.MappingState);
+        Assert.Equal(MarketplaceMappingReasonCodes.UnmappedAmbiguousChannelSku, result.MappingReason);
+        Assert.Null(result.SabrVariantSku);
+        Assert.False(await db.TenantMarketplaceListingMaps.AnyAsync(item => item.MlItemId == "MLB-AMBIGUOUS-01"));
+    }
+
+    [Fact]
+    public async Task ReanalyzePendingItems_AutoMapsExistingOrderWithUniqueSku()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-reanalyze-map";
+        const string tenantSlug = "mlreanalyzemap";
+        const string sellerId = "2496573592";
+        const string baseSku = "PH-REANALYZE";
+        const string variantSku = "PH-REANALYZE-01";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, variantSku, physicalStock: 1000, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        Guid orderItemId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var order = new MarketplaceOrder
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlOrderId = "ORDER-REANALYZE-01",
+                Status = "paid",
+                PaidAt = DateTimeOffset.UtcNow
+            };
+            var item = new MarketplaceOrderItem
+            {
+                MarketplaceOrderId = order.Id,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlItemId = "MLB-REANALYZE-01",
+                ChannelSku = variantSku,
+                ProductName = "Produto para reanálise",
+                Quantity = 1,
+                MappingState = MarketplaceMappingStates.UnmappedUnknownChannelSku,
+                RawJson = "{}"
+            };
+            orderItemId = item.Id;
+            db.MarketplaceOrders.Add(order);
+            db.MarketplaceOrderItems.Add(item);
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsync(
+            "/api/v1/client/marketplace-mappings/unmapped-items/reanalyze?provider=MercadoLivre",
+            JsonContent.Create(new { }));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<MarketplaceMappingReanalysisResult>();
+        Assert.NotNull(result);
+        Assert.Equal(1, result!.ItemsExamined);
+        Assert.Equal(1, result.ItemsMapped);
+        Assert.Equal(0, result.ItemsRemaining);
+        Assert.Equal(1, result.OrdersReleased);
+
+        using var verificationScope = _factory.Services.CreateScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var mappedItem = await verificationDb.MarketplaceOrderItems.SingleAsync(item => item.Id == orderItemId);
+        Assert.Equal(variantSku, mappedItem.SabrVariantSku);
+        Assert.Equal(MarketplaceMappingStates.MappedByExactSku, mappedItem.MappingState);
+        Assert.NotNull(mappedItem.MappingSnapshotId);
+    }
+
     private async Task SeedTenantClientAsync(string tenantId, string tenantSlug, Guid clientId)
     {
         using var scope = _factory.Services.CreateScope();

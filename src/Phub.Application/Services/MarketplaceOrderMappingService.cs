@@ -146,6 +146,7 @@ public sealed class MarketplaceOrderMappingService
                                || item.MappingState == MarketplaceMappingStates.Unmapped
                                || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
                                || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized));
 
@@ -183,6 +184,7 @@ public sealed class MarketplaceOrderMappingService
                     ChannelSku = metadata.ChannelSku,
                     ProductName = metadata.ProductName,
                     VariantName = metadata.VariantName,
+                    ThumbnailUrl = metadata.ThumbnailUrl,
                     MappingReason = reason,
                     OrdersAffected = group.Select(entry => entry.order.Id).Distinct().Count(),
                     TotalUnits = group.Sum(entry => entry.item.Quantity),
@@ -378,6 +380,7 @@ public sealed class MarketplaceOrderMappingService
                                || item.MappingState == MarketplaceMappingStates.Unmapped
                                || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
                                || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized))
             .ToListAsync(cancellationToken);
@@ -446,6 +449,135 @@ public sealed class MarketplaceOrderMappingService
             OrdersAffected = ordersAffected,
             CreatedAt = existing.CreatedAt,
             UpdatedAt = existing.UpdatedAt
+        });
+    }
+
+    public async Task<ServiceResult<MarketplaceMappingReanalysisResult>> ReanalyzePendingItemsAsync(
+        string tenantId,
+        Guid clientId,
+        MarketplaceProvider provider,
+        Guid actorUserId = default,
+        CancellationToken cancellationToken = default)
+    {
+        var pendingItems = await _dbContext.MarketplaceOrderItems
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == provider
+                           && (string.IsNullOrWhiteSpace(item.SabrVariantSku)
+                               || item.MappingState == MarketplaceMappingStates.Unmapped
+                               || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
+                               || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized))
+            .OrderBy(item => item.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        if (pendingItems.Count == 0)
+        {
+            return ServiceResult<MarketplaceMappingReanalysisResult>.Success(new MarketplaceMappingReanalysisResult());
+        }
+
+        var connectionIds = await _dbContext.TenantMarketplaceConnections
+            .AsNoTracking()
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == provider)
+            .ToDictionaryAsync(item => item.SellerId, item => (Guid?)item.Id, cancellationToken);
+
+        var mappedItemCount = 0;
+        var affectedOrderIds = new HashSet<Guid>();
+        var releasedOrdersCount = 0;
+        var groups = pendingItems.GroupBy(
+            item => BuildGroupKey(provider, item.SellerId, item.MlItemId, item.MlVariationId),
+            StringComparer.Ordinal);
+
+        foreach (var group in groups)
+        {
+            var first = group.First();
+            var metadata = FindChannelMetadata(first);
+            var resolution = await ResolveImportedItemAsync(
+                tenantId,
+                clientId,
+                provider,
+                first.SellerId,
+                connectionIds.GetValueOrDefault(first.SellerId),
+                first.MlItemId,
+                first.MlVariationId,
+                metadata.ChannelSku,
+                cancellationToken);
+
+            var resolvedAt = DateTimeOffset.UtcNow;
+            foreach (var item in group)
+            {
+                item.ChannelSku = NormalizeNullable(item.ChannelSku) ?? metadata.ChannelSku;
+                item.ProductName = NormalizeNullable(item.ProductName) ?? metadata.ProductName;
+                ApplyResolutionSnapshot(item, resolution, resolvedAt);
+                item.UpdatedAt = resolvedAt;
+                if (!string.IsNullOrWhiteSpace(resolution.SabrVariantSku))
+                {
+                    mappedItemCount++;
+                    affectedOrderIds.Add(item.MarketplaceOrderId);
+                }
+            }
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        if (affectedOrderIds.Count > 0)
+        {
+            var pendingOrders = await _dbContext.MarketplaceOrders
+                .Where(item => affectedOrderIds.Contains(item.Id) && !item.SabrPaymentConfirmedAt.HasValue)
+                .ToListAsync(cancellationToken);
+            var allOrderItems = await _dbContext.MarketplaceOrderItems
+                .Where(item => affectedOrderIds.Contains(item.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            var readyOrderIds = allOrderItems
+                .GroupBy(item => item.MarketplaceOrderId)
+                .Where(group => group.All(item => !MarketplaceMappingStates.IsUnmapped(item.MappingState)
+                                                 && !string.IsNullOrWhiteSpace(item.SabrVariantSku)))
+                .Select(group => group.Key)
+                .ToHashSet();
+            releasedOrdersCount = pendingOrders.Count(item => readyOrderIds.Contains(item.Id));
+            foreach (var pendingOrder in pendingOrders.Where(item => readyOrderIds.Contains(item.Id)))
+            {
+                pendingOrder.Items = allOrderItems
+                    .Where(item => item.MarketplaceOrderId == pendingOrder.Id)
+                    .ToList();
+                await _inventoryService.ReconcileReservationsAsync(
+                    pendingOrder,
+                    pendingOrder.SellerId,
+                    reservationTtlHours: 24,
+                    cancellationToken: cancellationToken);
+            }
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        _dbContext.AuditEvents.Add(new AuditEvent
+        {
+            TenantId = tenantId,
+            ActorType = actorUserId == Guid.Empty ? "System" : "TenantUser",
+            ActorId = actorUserId == Guid.Empty ? null : actorUserId,
+            Action = "MarketplaceMapping.ReanalyzePending",
+            Entity = nameof(MarketplaceOrderItem),
+            RequestId = Guid.NewGuid(),
+            MetadataJson = JsonSerializer.Serialize(new
+            {
+                provider,
+                itemsExamined = pendingItems.Count,
+                itemsMapped = mappedItemCount,
+                itemsRemaining = pendingItems.Count - mappedItemCount,
+                ordersReleased = releasedOrdersCount
+            })
+        });
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return ServiceResult<MarketplaceMappingReanalysisResult>.Success(new MarketplaceMappingReanalysisResult
+        {
+            ItemsExamined = pendingItems.Count,
+            ItemsMapped = mappedItemCount,
+            ItemsRemaining = pendingItems.Count - mappedItemCount,
+            OrdersReleased = releasedOrdersCount
         });
     }
 
@@ -539,33 +671,97 @@ public sealed class MarketplaceOrderMappingService
 
         if (!string.IsNullOrWhiteSpace(normalizedChannelSku))
         {
-            var exactVariant = await _dbContext.ProductVariants
+            // A SKU may identify an exact variant or a base product with one
+            // active variant. Only one authorized candidate is safe to map.
+            var skuCandidates = await _dbContext.ProductVariants
                 .AsNoTracking()
-                .FirstOrDefaultAsync(item => item.VariantSku == normalizedChannelSku && item.IsActive, cancellationToken);
-            if (exactVariant != null)
+                .Where(item => item.IsActive
+                               && (item.VariantSku == normalizedChannelSku || item.BaseSku == normalizedChannelSku))
+                .OrderBy(item => item.VariantSku)
+                .ToListAsync(cancellationToken);
+            var authorizedCandidates = new List<ProductVariant>();
+            foreach (var candidate in skuCandidates)
             {
                 var isAuthorized = await _catalogAuthorizationService.IsSkuAllowedAsync(
                     tenantId,
                     clientId,
-                    exactVariant.BaseSku,
+                    candidate.BaseSku,
                     cancellationToken);
-                if (isAuthorized)
-                {
-                    return new MarketplaceItemResolutionResult(
-                        exactVariant.VariantSku,
-                        MarketplaceMappingStates.MappedByExactSku,
-                        MarketplaceMappingReasonCodes.MappedByExactSku,
-                        normalizedChannelSku,
-                        MarketplaceMappingReasonCodes.MappedByExactSku);
-                }
+                if (isAuthorized) authorizedCandidates.Add(candidate);
+            }
 
+            if (authorizedCandidates.Count == 1)
+            {
+                var exactVariant = authorizedCandidates[0];
+                var addedToMyProducts = await EnsureClientProductAsync(
+                    tenantId,
+                    clientId,
+                    exactVariant.BaseSku,
+                    Guid.Empty,
+                    cancellationToken);
+                var automaticMap = new TenantMarketplaceListingMap
+                {
+                    TenantId = tenantId,
+                    ClientId = clientId,
+                    Provider = provider,
+                    IntegrationId = integrationId,
+                    SellerId = sellerId,
+                    MlItemId = normalizedItemId,
+                    MlVariationId = normalizedVariationId,
+                    ChannelSku = normalizedChannelSku,
+                    SabrVariantSku = exactVariant.VariantSku,
+                    MappingVersion = 1
+                };
+                _dbContext.TenantMarketplaceListingMaps.Add(automaticMap);
+                _dbContext.AuditEvents.Add(new AuditEvent
+                {
+                    TenantId = tenantId,
+                    ActorType = "System",
+                    Action = "MarketplaceMapping.AutoMapExactSku",
+                    Entity = nameof(TenantMarketplaceListingMap),
+                    EntityId = automaticMap.Id,
+                    RequestId = Guid.NewGuid(),
+                    MetadataJson = JsonSerializer.Serialize(new
+                    {
+                        provider,
+                        sellerId,
+                        integrationId,
+                        externalItemId = normalizedItemId,
+                        externalVariationId = normalizedVariationId,
+                        channelSku = normalizedChannelSku,
+                        masterVariantSku = exactVariant.VariantSku,
+                        automaticMap.MappingVersion,
+                        addedToMyProducts
+                    })
+                });
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return new MarketplaceItemResolutionResult(
+                    exactVariant.VariantSku,
+                    MarketplaceMappingStates.MappedByExactSku,
+                    MarketplaceMappingReasonCodes.MappedByExactSku,
+                    normalizedChannelSku,
+                    MarketplaceMappingReasonCodes.MappedByExactSku,
+                    automaticMap.Id,
+                    automaticMap.MappingVersion);
+            }
+
+            if (authorizedCandidates.Count > 1)
+            {
+                return new MarketplaceItemResolutionResult(
+                    null,
+                    MarketplaceMappingStates.UnmappedAmbiguousChannelSku,
+                    MarketplaceMappingReasonCodes.UnmappedAmbiguousChannelSku,
+                    normalizedChannelSku,
+                    MarketplaceMappingReasonCodes.UnmappedAmbiguousChannelSku);
+            }
+
+            if (skuCandidates.Count > 0)
                 return new MarketplaceItemResolutionResult(
                     null,
                     MarketplaceMappingStates.UnmappedSkuNotAuthorized,
                     MarketplaceMappingReasonCodes.UnmappedSkuNotAuthorized,
                     normalizedChannelSku,
                     MarketplaceMappingReasonCodes.UnmappedSkuNotAuthorized);
-            }
 
             return new MarketplaceItemResolutionResult(
                 null,
@@ -581,6 +777,46 @@ public sealed class MarketplaceOrderMappingService
             MarketplaceMappingReasonCodes.UnmappedMissingChannelSku,
             null,
             MarketplaceMappingReasonCodes.UnmappedMissingChannelSku);
+    }
+
+    private async Task<bool> EnsureClientProductAsync(
+        string tenantId,
+        Guid clientId,
+        string baseSku,
+        Guid actorUserId,
+        CancellationToken cancellationToken)
+    {
+        var alreadyExists = await _dbContext.Publications.AsNoTracking().AnyAsync(
+            item => item.TenantId == tenantId
+                    && item.ClientId == clientId
+                    && item.ProductSku == baseSku
+                    && item.Status == PublicationStatus.Draft,
+            cancellationToken);
+        if (alreadyExists) return false;
+
+        var product = await _dbContext.Products.AsNoTracking().FirstOrDefaultAsync(
+            item => item.Sku == baseSku && item.IsActive,
+            cancellationToken);
+        if (product == null) return false;
+
+        var now = DateTimeOffset.UtcNow;
+        _dbContext.Publications.Add(new Publication
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            ProductSku = product.Sku,
+            Status = PublicationStatus.Draft,
+            PricingMode = PricingMode.CatalogPrice,
+            CostPriceCentsSnapshot = product.CostPriceCents,
+            CatalogPriceCentsSnapshot = product.CatalogPriceCents,
+            FinalPriceCentsSnapshot = product.CatalogPriceCents,
+            PriceSnapshotTakenAt = now,
+            CreatedByUserId = actorUserId,
+            UpdatedByUserId = actorUserId,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        return true;
     }
 
     public static string? FindChannelSku(MarketplaceProvider provider, string? rawJson)
@@ -795,6 +1031,7 @@ public sealed class MarketplaceOrderMappingService
             MarketplaceMappingStates.UnmappedSkuNotAuthorized => MarketplaceMappingReasonCodes.UnmappedSkuNotAuthorized,
             MarketplaceMappingStates.UnmappedMappingNotAuthorized => MarketplaceMappingReasonCodes.UnmappedMappedSkuNotAuthorized,
             MarketplaceMappingStates.UnmappedUnknownChannelSku => MarketplaceMappingReasonCodes.UnmappedUnknownChannelSku,
+            MarketplaceMappingStates.UnmappedAmbiguousChannelSku => MarketplaceMappingReasonCodes.UnmappedAmbiguousChannelSku,
             MarketplaceMappingStates.UnmappedMissingChannelSku => MarketplaceMappingReasonCodes.UnmappedMissingChannelSku,
             _ => string.IsNullOrWhiteSpace(metadata.ChannelSku)
                 ? MarketplaceMappingReasonCodes.UnmappedMissingChannelSku
@@ -803,7 +1040,15 @@ public sealed class MarketplaceOrderMappingService
     }
 
     private static ChannelMetadata FindChannelMetadata(MarketplaceOrderItem? item)
-        => item == null ? new ChannelMetadata() : FindChannelMetadata(item.Provider, item.RawJson);
+    {
+        if (item == null) return new ChannelMetadata();
+        var parsed = FindChannelMetadata(item.Provider, item.RawJson);
+        return parsed with
+        {
+            ChannelSku = NormalizeNullable(item.ChannelSku) ?? parsed.ChannelSku,
+            ProductName = NormalizeNullable(item.ProductName) ?? parsed.ProductName
+        };
+    }
 
     private static ChannelMetadata FindChannelMetadata(MarketplaceProvider provider, string? rawJson)
     {
@@ -835,16 +1080,31 @@ public sealed class MarketplaceOrderMappingService
                     ChannelSku: ReadString(root, "Codigo") ?? ReadString(root, "codigo"),
                     ProductName: ReadString(root, "Descricao") ?? ReadString(root, "descricao"),
                     VariantName: ReadString(root, "Descricao") ?? ReadString(root, "descricao")),
-                _ => new ChannelMetadata(
-                    ChannelSku: ReadString(root, "seller_custom_field") ?? ReadString(root, "seller_sku"),
-                    ProductName: ReadString(root, "title") ?? ReadString(root, "name"),
-                    VariantName: ReadString(root, "variation_name") ?? ReadString(root, "sku"))
+                _ => ReadMercadoLivreMetadata(root)
             };
         }
         catch
         {
             return new ChannelMetadata();
         }
+    }
+
+    private static ChannelMetadata ReadMercadoLivreMetadata(JsonElement root)
+    {
+        var item = root.TryGetProperty("item", out var nested) && nested.ValueKind == JsonValueKind.Object
+            ? nested
+            : root;
+        return new ChannelMetadata(
+            ChannelSku: ReadString(item, "seller_sku")
+                        ?? ReadString(item, "seller_custom_field")
+                        ?? ReadString(root, "seller_sku")
+                        ?? ReadString(root, "seller_custom_field"),
+            ProductName: ReadString(item, "title") ?? ReadString(item, "name")
+                         ?? ReadString(root, "title") ?? ReadString(root, "name"),
+            VariantName: ReadString(item, "variation_name") ?? ReadString(item, "sku")
+                         ?? ReadString(root, "variation_name") ?? ReadString(root, "sku"),
+            ThumbnailUrl: ReadString(item, "thumbnail") ?? ReadString(item, "thumbnail_url")
+                          ?? ReadString(root, "thumbnail") ?? ReadString(root, "thumbnail_url"));
     }
 
     private static string? ReadString(JsonElement element, string propertyName)
@@ -886,5 +1146,6 @@ public sealed class MarketplaceOrderMappingService
     private sealed record ChannelMetadata(
         string? ChannelSku = null,
         string? ProductName = null,
-        string? VariantName = null);
+        string? VariantName = null,
+        string? ThumbnailUrl = null);
 }

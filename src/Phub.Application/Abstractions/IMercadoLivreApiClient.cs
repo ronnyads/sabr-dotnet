@@ -79,6 +79,12 @@ public interface IMercadoLivreApiClient
         int availableQuantity,
         string accessToken,
         CancellationToken cancellationToken = default);
+    Task<MercadoLivreShipmentCostDetails?> GetShipmentCostsAsync(
+        string shipmentId, long sellerId, string accessToken, CancellationToken cancellationToken = default)
+        => Task.FromResult<MercadoLivreShipmentCostDetails?>(null);
+    Task<IReadOnlyList<MercadoLivreOrderDiscountDetails>> GetOrderDiscountsAsync(
+        string orderId, string accessToken, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<MercadoLivreOrderDiscountDetails>>([]);
     Task<MercadoLivreShipmentSlaDetails?> GetShipmentSlaAsync(
         string shipmentId,
         string accessToken,

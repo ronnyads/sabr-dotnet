@@ -546,6 +546,79 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }, cancellationToken);
     }
 
+    public async Task<MercadoLivreShipmentCostDetails?> GetShipmentCostsAsync(
+        string shipmentId, long sellerId, string accessToken, CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"/shipments/{Uri.EscapeDataString(shipmentId)}/costs");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Headers.TryAddWithoutValidation("x-format-new", "true");
+            using var response = await _httpClient.SendAsync(request, ct);
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("senders", out var senders) || senders.ValueKind != JsonValueKind.Array) return null;
+            foreach (var sender in senders.EnumerateArray())
+            {
+                var userId = GetOptionalString(sender, "user_id");
+                if (!long.TryParse(userId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed != sellerId) continue;
+                return new MercadoLivreShipmentCostDetails
+                {
+                    ShipmentId = shipmentId,
+                    SellerId = sellerId,
+                    SellerCost = GetOptionalDecimal(sender, "cost") ?? 0m,
+                    SellerCompensation = GetOptionalDecimal(sender, "compensation") ?? 0m,
+                    CurrencyId = GetOptionalString(root, "currency_id") ?? "BRL",
+                    RawJson = json
+                };
+            }
+            return null;
+        }, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MercadoLivreOrderDiscountDetails>> GetOrderDiscountsAsync(
+        string orderId, string accessToken, CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"/orders/{Uri.EscapeDataString(orderId)}/discounts");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            using var response = await _httpClient.SendAsync(request, ct);
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return (IReadOnlyList<MercadoLivreOrderDiscountDetails>)[];
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+            var rows = new List<MercadoLivreOrderDiscountDetails>();
+            if (!doc.RootElement.TryGetProperty("details", out var details) || details.ValueKind != JsonValueKind.Array) return rows;
+            var detailIndex = 0;
+            foreach (var detail in details.EnumerateArray())
+            {
+                var identity = GetOptionalString(detail, "id") ?? GetOptionalString(detail, "type") ?? "discount";
+                if (!detail.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) continue;
+                var itemIndex = 0;
+                foreach (var item in items.EnumerateArray())
+                {
+                    var sellerAmount = item.TryGetProperty("amounts", out var amounts) ? GetOptionalDecimal(amounts, "seller") ?? 0m : 0m;
+                    if (sellerAmount == 0m) { itemIndex++; continue; }
+                    rows.Add(new MercadoLivreOrderDiscountDetails
+                    {
+                        DiscountId = $"{identity}:{detailIndex}:{itemIndex}",
+                        ItemId = GetOptionalString(item, "id"),
+                        Quantity = GetOptionalInt(item, "quantity") ?? 0,
+                        SellerAmount = sellerAmount,
+                        RawJson = item.GetRawText()
+                    });
+                    itemIndex++;
+                }
+                detailIndex++;
+            }
+            return rows;
+        }, cancellationToken);
+    }
+
     public async Task<MercadoLivreShipmentLabelResult?> GetShipmentLabelAsync(
         string shipmentId,
         string accessToken,

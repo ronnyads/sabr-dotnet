@@ -19,6 +19,7 @@ public sealed class MercadoLivreSyncService
     private readonly MarketplaceOrderNumberService _orderNumberService;
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly MarketplaceOrderMappingService _mappingService;
+    private readonly OperationalFinancialProjectionService _financialProjection;
     private readonly MercadoLivreOptions _options;
     private readonly ILogger<MercadoLivreSyncService> _logger;
 
@@ -30,6 +31,7 @@ public sealed class MercadoLivreSyncService
         MarketplaceOrderNumberService orderNumberService,
         MarketplaceAuditLogService auditLogService,
         MarketplaceOrderMappingService mappingService,
+        OperationalFinancialProjectionService financialProjection,
         IOptions<MercadoLivreOptions> options,
         ILogger<MercadoLivreSyncService> logger)
     {
@@ -40,6 +42,7 @@ public sealed class MercadoLivreSyncService
         _orderNumberService = orderNumberService;
         _auditLogService = auditLogService;
         _mappingService = mappingService;
+        _financialProjection = financialProjection;
         _options = options.Value;
         _logger = logger;
     }
@@ -111,6 +114,37 @@ public sealed class MercadoLivreSyncService
             sellerId,
             Math.Max(1, _options.ManualSyncLookbackDays),
             cancellationToken);
+    }
+
+    public async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncRangeNowAsync(
+        string tenantId,
+        Guid clientId,
+        long sellerId,
+        DateTimeOffset rangeFrom,
+        DateTimeOffset rangeTo,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty || sellerId <= 0 || rangeFrom >= rangeTo)
+        {
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(new[]
+            {
+                new ValidationError("range", "Invalid tenant, seller or sync range")
+            });
+        }
+
+        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(x => x.TenantId == tenantId
+            && x.ClientId == clientId && x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId,
+            cancellationToken);
+        if (connection == null)
+        {
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(new[]
+            {
+                new ValidationError("sellerId", "No active Mercado Livre connection found")
+            });
+        }
+
+        return ServiceResult<MercadoLivreSyncNowResult>.Success(
+            await SyncConnectionAsync(connection, rangeFrom.ToUniversalTime(), rangeTo.ToUniversalTime(), cancellationToken));
     }
 
     private async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncScopedAsync(
@@ -256,11 +290,20 @@ public sealed class MercadoLivreSyncService
     {
         var nowUtc = DateTimeOffset.UtcNow;
         var fromUtc = nowUtc.AddDays(-Math.Max(1, lookbackDays));
+        return await SyncConnectionAsync(connection, fromUtc, nowUtc, cancellationToken);
+    }
+
+    private async Task<MercadoLivreSyncNowResult> SyncConnectionAsync(
+        TenantMarketplaceConnection connection,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        CancellationToken cancellationToken)
+    {
         var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
         var orderIds = await _mercadoLivreApiClient.SearchOrdersAsync(
             MercadoLivreSellerIdParser.ToApiString(connection.SellerId),
             fromUtc,
-            nowUtc,
+            toUtc,
             accessToken,
             cancellationToken);
 
@@ -299,15 +342,34 @@ public sealed class MercadoLivreSyncService
                 {
                     var details = await _mercadoLivreApiClient.GetOrderAsync(orderId, accessToken, cancellationToken);
                     MercadoLivreShipmentDetails? shipment = null;
+                    MercadoLivreShipmentCostDetails? shipmentCosts = null;
+                    IReadOnlyList<MercadoLivreOrderDiscountDetails> discounts = [];
                     if (details != null && !string.IsNullOrWhiteSpace(details.ShipmentId))
                     {
                         shipment = await _mercadoLivreApiClient.GetShipmentAsync(
                             details.ShipmentId,
                             accessToken,
                             cancellationToken);
+                        try
+                        {
+                            shipmentCosts = await _mercadoLivreApiClient.GetShipmentCostsAsync(
+                                details.ShipmentId, connection.SellerId, accessToken, cancellationToken);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _logger.LogWarning(ex, "Shipment cost unavailable seller={SellerId} shipment={ShipmentId}", connection.SellerId, details.ShipmentId);
+                        }
+                    }
+                    if (details != null)
+                    {
+                        try { discounts = await _mercadoLivreApiClient.GetOrderDiscountsAsync(details.MlOrderId, accessToken, cancellationToken); }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _logger.LogWarning(ex, "Order discounts unavailable seller={SellerId} order={OrderId}", connection.SellerId, details.MlOrderId);
+                        }
                     }
 
-                    return (details, shipment);
+                    return (details, shipment, shipmentCosts, discounts);
                 }
                 finally
                 {
@@ -349,10 +411,16 @@ public sealed class MercadoLivreSyncService
             result.OrdersUpserted += upsertResult.orders;
             result.ItemsUpserted += upsertResult.items;
             result.ReservationsCreated += upsertResult.reservations;
+            var localOrderId = await _dbContext.MarketplaceOrders.AsNoTracking()
+                .Where(x => x.TenantId == connection.TenantId && x.ClientId == connection.ClientId
+                            && x.Provider == MarketplaceProvider.MercadoLivre && x.MlOrderId == details.MlOrderId)
+                .Select(x => x.Id).SingleAsync(cancellationToken);
+            await _financialProjection.ProjectExternalFactsAsync(localOrderId, remoteOrder.shipmentCosts,
+                remoteOrder.discounts, cancellationToken);
         }
 
-        connection.LastSyncAt = nowUtc;
-        connection.UpdatedAt = nowUtc;
+        connection.LastSyncAt = DateTimeOffset.UtcNow;
+        connection.UpdatedAt = DateTimeOffset.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         if (changedSkus.Count > 0)
@@ -556,6 +624,8 @@ public sealed class MercadoLivreSyncService
                 cancellationToken);
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
+
+        await _financialProjection.ProjectOrderAsync(order.Id, cancellationToken);
 
         return (createdOrder ? 1 : 0, itemsTouched, reservationsCreated);
     }

@@ -39,6 +39,7 @@ updated: 2026-09-10
 - [[06 - Importação de Catálogo do Mercado Livre]]
 - [[07 - Catálogo e Estoque Omnichannel]]
 - [[08 - SENTINEL Torre de Expedicao]]
+- [[09 - Ledger Financeiro e Rentabilidade]]
 
 ## Regra de atualização deste vault
 

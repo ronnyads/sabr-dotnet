@@ -47,6 +47,13 @@ public interface IAppDbContext
     DbSet<StockReservation> StockReservations { get; }
     DbSet<MarketplaceEventLog> MarketplaceEventLogs { get; }
     DbSet<MarketplaceOperationJob> MarketplaceOperationJobs { get; }
+    DbSet<MarketplaceFinancialEntry> MarketplaceFinancialEntries { get; }
+    DbSet<FinancialEconomicHead> FinancialEconomicHeads { get; }
+    DbSet<MarketplaceOrderFinancialState> MarketplaceOrderFinancialStates { get; }
+    DbSet<SellerTaxProfileVersion> SellerTaxProfileVersions { get; }
+    DbSet<FinancialReconciliationCursor> FinancialReconciliationCursors { get; }
+    DbSet<FinancialSyncJob> FinancialSyncJobs { get; }
+    DbSet<MarketplaceOAuthGrant> MarketplaceOAuthGrants { get; }
     DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules { get; }
     DbSet<AiPromptConfig> AiPromptConfigs { get; }
     DbSet<Supplier> Suppliers { get; }

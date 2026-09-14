@@ -18,6 +18,7 @@ public sealed class MarketplaceOrderPaymentService
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly MercadoLivreOptions _options;
     private readonly TinyIntegrationService _tinyIntegrationService;
+    private readonly OperationalFinancialProjectionService _financialProjection;
 
     public MarketplaceOrderPaymentService(
         IAppDbContext dbContext,
@@ -25,7 +26,8 @@ public sealed class MarketplaceOrderPaymentService
         MarketplaceOrderInventoryService inventoryService,
         MarketplaceAuditLogService auditLogService,
         IOptions<MercadoLivreOptions> options,
-        TinyIntegrationService tinyIntegrationService)
+        TinyIntegrationService tinyIntegrationService,
+        OperationalFinancialProjectionService financialProjection)
     {
         _dbContext = dbContext;
         _stockAvailabilityService = stockAvailabilityService;
@@ -33,6 +35,7 @@ public sealed class MarketplaceOrderPaymentService
         _auditLogService = auditLogService;
         _options = options.Value;
         _tinyIntegrationService = tinyIntegrationService;
+        _financialProjection = financialProjection;
     }
 
     public async Task<ServiceResult<MarketplaceMarkPaidExecutionResult>> MarkPaidAsync(
@@ -239,6 +242,7 @@ public sealed class MarketplaceOrderPaymentService
             "v1",
             cancellationToken);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await _financialProjection.ConfirmProductCostsAsync(order.Id, nowUtc, cancellationToken);
 
         if (consumedBySku.Count > 0)
         {

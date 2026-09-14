@@ -155,6 +155,28 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
         return Ok(result.Data);
     }
 
+    [HttpPost("unmapped-items/reanalyze")]
+    public async Task<IActionResult> ReanalyzePendingItems(
+        [FromQuery] string provider = "MercadoLivre",
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        if (!TryParseProvider(provider, out var providerValue))
+        {
+            return BadRequest(CreateApiError("INVALID_PROVIDER", "Marketplace provider is invalid."));
+        }
+
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
+        var result = await _mappingService.ReanalyzePendingItemsAsync(
+            tenantId!, clientId, providerValue, actorId, cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+        {
+            return MapValidationErrors(result.Errors, result.ErrorCode);
+        }
+
+        return Ok(result.Data);
+    }
+
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> DeleteMapping(Guid id, CancellationToken cancellationToken = default)
     {
