@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, catalogo, estoque, marketplace, invariantes]
-updated: 2026-09-09
+updated: 2026-09-14
 ---
 
 # Catálogo e estoque omnichannel
@@ -32,7 +32,8 @@ updated: 2026-09-09
 
 - O editor de vínculo é oferecido dentro do item do pedido para Mercado Livre e demais providers normalizados; o cliente escolhe uma variante autorizada do catálogo sem editar o SKU mestre.
 - Ao criar um vínculo manual, somente itens ainda não resolvidos com a mesma identidade externa recebem o snapshot do mapping. Itens já resolvidos e pedidos históricos permanecem imutáveis.
-- Pedidos pendentes afetados são reconciliados imediatamente para criar a reserva de estoque. O pagamento repete a reconciliação de forma idempotente antes de consumir o saldo, cobrindo pedidos importados antes do vínculo.
+- O vínculo e os snapshots dos itens pendentes são persistidos antes da atualização derivada das reservas. A atualização de reservas é tentada imediatamente, mas uma falha nela não desfaz nem mascara um vínculo válido; o pagamento repete a reconciliação de forma transacional e idempotente antes de consumir o saldo, cobrindo pedidos importados antes do vínculo sem ignorar estoque.
+- Exceções não tratadas da API retornam um corpo de erro com `traceId` dentro do pipeline CORS. Assim, falhas internas deixam de aparecer no navegador como um falso erro genérico de CORS e podem ser correlacionadas nos logs.
 - Pagamento permanece bloqueado para item sem mapping, falta de estoque ou cancelamento pendente. No portal, os bloqueadores são apresentados antes da ação.
 - O botão de pagamento nunca fica silenciosamente indisponível por falta de mapping: ele muda para **Vincular produto para pagar**, abre o pedido e leva ao primeiro item pendente.
 - O editor apresenta explicitamente o caminho `anúncio do cliente -> SKU mestre`, permite pesquisar o catálogo autorizado e mostra SKU, preço e estoque antes da confirmação.

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Claims;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Diagnostics;
 using System.Text;
 using Serilog;
 using Serilog.Events;
@@ -567,6 +568,30 @@ app.UseSerilogRequestLogging(opts =>
 app.UseHttpLogging();
 
 app.UseCors("Spa");
+
+// Keep failures observable by the SPA. Without an exception response inside the
+// ASP.NET pipeline, the proxy/browser can surface an internal API failure as a
+// misleading CORS error because the error response has no CORS headers.
+app.UseExceptionHandler(exceptionApplication =>
+{
+    exceptionApplication.Run(async context =>
+    {
+        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+        var logger = context.RequestServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("UnhandledApiException");
+        logger.LogError(exception, "Unhandled API exception for {Method} {Path}", context.Request.Method, context.Request.Path);
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/problem+json";
+        await context.Response.WriteAsJsonAsync(new
+        {
+            code = "UNEXPECTED_ERROR",
+            message = "Nao foi possivel concluir a operacao.",
+            traceId = context.TraceIdentifier
+        });
+    });
+});
 
 app.UseRouting();
 

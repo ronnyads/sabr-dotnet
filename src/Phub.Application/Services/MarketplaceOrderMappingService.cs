@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Application.Validation;
@@ -14,15 +15,18 @@ public sealed class MarketplaceOrderMappingService
     private readonly IAppDbContext _dbContext;
     private readonly CatalogAuthorizationService _catalogAuthorizationService;
     private readonly MarketplaceOrderInventoryService _inventoryService;
+    private readonly ILogger<MarketplaceOrderMappingService> _logger;
 
     public MarketplaceOrderMappingService(
         IAppDbContext dbContext,
         CatalogAuthorizationService catalogAuthorizationService,
-        MarketplaceOrderInventoryService inventoryService)
+        MarketplaceOrderInventoryService inventoryService,
+        ILogger<MarketplaceOrderMappingService> logger)
     {
         _dbContext = dbContext;
         _catalogAuthorizationService = catalogAuthorizationService;
         _inventoryService = inventoryService;
+        _logger = logger;
     }
 
     public async Task<ServiceResult<List<MarketplaceMappingListItemDto>>> ListMappingsAsync(
@@ -409,25 +413,44 @@ public sealed class MarketplaceOrderMappingService
             ordersAffected = orderIds.Count;
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            var pendingOrders = await _dbContext.MarketplaceOrders
-                .Where(item => orderIds.Contains(item.Id))
-                .ToListAsync(cancellationToken);
-            var allOrderItems = await _dbContext.MarketplaceOrderItems
-                .Where(item => orderIds.Contains(item.MarketplaceOrderId))
-                .ToListAsync(cancellationToken);
-            foreach (var pendingOrder in pendingOrders.Where(item => !item.SabrPaymentConfirmedAt.HasValue))
+            // The mapping and the immutable resolution snapshots are already durable at
+            // this point. Reservation refresh is a derived operation and must never turn
+            // a valid mapping into a failed HTTP request. Checkout reconciles again
+            // transactionally, so a deferred refresh cannot bypass stock validation.
+            try
             {
-                pendingOrder.Items = allOrderItems
-                    .Where(item => item.MarketplaceOrderId == pendingOrder.Id)
-                    .ToList();
-                await _inventoryService.ReconcileReservationsAsync(
-                    pendingOrder,
-                    pendingOrder.SellerId,
-                    reservationTtlHours: 24,
-                    cancellationToken: cancellationToken);
-            }
+                var pendingOrders = await _dbContext.MarketplaceOrders
+                    .Where(item => orderIds.Contains(item.Id))
+                    .ToListAsync(cancellationToken);
+                var allOrderItems = await _dbContext.MarketplaceOrderItems
+                    .Where(item => orderIds.Contains(item.MarketplaceOrderId))
+                    .ToListAsync(cancellationToken);
+                foreach (var pendingOrder in pendingOrders.Where(item => !item.SabrPaymentConfirmedAt.HasValue))
+                {
+                    pendingOrder.Items = allOrderItems
+                        .Where(item => item.MarketplaceOrderId == pendingOrder.Id)
+                        .ToList();
+                    await _inventoryService.ReconcileReservationsAsync(
+                        pendingOrder,
+                        pendingOrder.SellerId,
+                        reservationTtlHours: 24,
+                        cancellationToken: cancellationToken);
+                }
 
-            await _dbContext.SaveChangesAsync(cancellationToken);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Mapping {MappingId} was saved but reservation refresh was deferred for {OrderCount} order(s).",
+                    existing.Id,
+                    ordersAffected);
+            }
         }
 
         var channelMetadata = new ChannelMetadata(existing.ChannelSku);
