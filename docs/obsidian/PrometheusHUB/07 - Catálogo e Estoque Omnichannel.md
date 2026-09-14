@@ -90,7 +90,7 @@ Endpoints do portal:
 - A seleção administrativa preserva cada SKU de variação e cria o vínculo com `itemId` + `variationId`; anúncios sem variação continuam usando a identidade do item.
 - O admin informa estoque físico inicial e Preço Catálogo no momento da importação. Esses valores também atualizam produtos já existentes escolhidos explicitamente, sem copiar o preço de venda do marketplace por engano.
 - Mudanças de estoque em variante existente incrementam `inventoryVersion`; o saldo disponível continua respeitando reservas e buffer.
-- A ação **Sincronizar pedidos agora** do portal executa somente a janela incremental. O catch-up de 365 dias permanece assíncrono, particionado e retomável pelo módulo financeiro, evitando timeout de uma requisição monolítica.
+- A ação **Sincronizar pedidos agora** enfileira sete janelas diárias idempotentes e retorna `202` com `jobId`; nenhuma chamada externa longa permanece presa à requisição do navegador. O catch-up de 365 dias também permanece assíncrono, particionado e retomável pelo módulo financeiro.
 - Reconciliação é proteção automatizada da integração e não é apresentada como ação manual ao cliente quando o recurso está desabilitado.
 
 ## Rollback

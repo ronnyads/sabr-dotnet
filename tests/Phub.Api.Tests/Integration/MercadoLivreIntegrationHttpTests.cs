@@ -253,8 +253,9 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var first = await client.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId });
         var second = await client.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId });
 
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, second.StatusCode);
+        await DrainFinancialSyncJobsAsync();
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -363,7 +364,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
         var sync = await client.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId });
-        Assert.Equal(HttpStatusCode.OK, sync.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, sync.StatusCode);
+        await DrainFinancialSyncJobsAsync();
 
         var mapping = await client.PostAsJsonAsync(
             "/api/v1/client/marketplace-mappings",
@@ -2122,6 +2124,15 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     private static long ParseSellerId(string sellerId)
     {
         return long.Parse(sellerId, NumberStyles.Integer, CultureInfo.InvariantCulture);
+    }
+
+    private async Task DrainFinancialSyncJobsAsync()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+        while (await service.ProcessNextAsync("integration-test", CancellationToken.None))
+        {
+        }
     }
 
     private static string? ExtractQueryValue(string url, string key)

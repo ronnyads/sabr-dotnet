@@ -21,7 +21,7 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
     private readonly MercadoLivreOAuthStateService _oauthStateService;
     private readonly MercadoLivreOAuthService _oauthService;
     private readonly MercadoLivreIntegrationService _integrationService;
-    private readonly MercadoLivreSyncService _syncService;
+    private readonly FinancialSyncJobService _financialSync;
     private readonly MercadoLivreMappingService _mappingService;
     private readonly MercadoLivrePublishValidationService _publishValidationService;
     private readonly MercadoLivrePublishService _publishService;
@@ -33,7 +33,7 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         MercadoLivreOAuthStateService oauthStateService,
         MercadoLivreOAuthService oauthService,
         MercadoLivreIntegrationService integrationService,
-        MercadoLivreSyncService syncService,
+        FinancialSyncJobService financialSync,
         MercadoLivreMappingService mappingService,
         MercadoLivrePublishValidationService publishValidationService,
         MercadoLivrePublishService publishService,
@@ -44,7 +44,7 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         _oauthStateService = oauthStateService;
         _oauthService = oauthService;
         _integrationService = integrationService;
-        _syncService = syncService;
+        _financialSync = financialSync;
         _mappingService = mappingService;
         _publishValidationService = publishValidationService;
         _publishService = publishService;
@@ -236,15 +236,29 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
             return error!;
         }
 
-        // This endpoint is the fast, incremental refresh used by the integration screen.
-        // Historical catch-up is intentionally handled by the chunked dashboard sync jobs.
-        var result = await _syncService.SyncNowAsync(tenantId!, clientId, request?.SellerId, cancellationToken);
-        if (!result.Succeeded || result.Data == null)
+        long? sellerId = null;
+        if (request?.SellerId is not null)
         {
-            return MapValidationError(result.Errors);
+            if (!long.TryParse(request.SellerId, out var parsedSellerId))
+            {
+                return BadRequest(CreateApiError("ML_SELLER_INVALID", "Seller Mercado Livre invalido"));
+            }
+            sellerId = parsedSellerId;
         }
 
-        return Ok(result.Data);
+        try
+        {
+            // A sincronizacao externa nunca deve manter a requisicao HTTP aberta.
+            // O worker processa janelas idempotentes e o cliente acompanha pelo jobId.
+            var result = await _financialSync.EnqueueOperationalBackfillAsync(
+                tenantId!, clientId, sellerId,
+                lookbackDays: 7, chunkDays: 1, cancellationToken: cancellationToken);
+            return Accepted(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(CreateApiError("ML_SYNC_NOT_AVAILABLE", ex.Message));
+        }
     }
 
     [HttpGet("mappings")]
