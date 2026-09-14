@@ -1775,6 +1775,39 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.NotNull(mappedItem.MappingSnapshotId);
     }
 
+    [Fact]
+    public async Task CreateMapping_AcceptsProviderNameSentByPortal()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-provider-name";
+        const string tenantSlug = "mlprovidername";
+        const string sellerId = "2496573592";
+        const string baseSku = "PH-PROVIDER";
+        const string variantSku = "PH-PROVIDER-01";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, variantSku, physicalStock: 1000, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsJsonAsync(
+            "/api/v1/client/marketplace-mappings",
+            new
+            {
+                provider = "MercadoLivre",
+                sellerId,
+                externalItemId = "MLB-PROVIDER-NAME",
+                selectedCatalogSku = variantSku
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<MarketplaceMappingListItemDto>();
+        Assert.NotNull(result);
+        Assert.Equal(variantSku, result!.SabrVariantSku);
+    }
+
     private async Task SeedTenantClientAsync(string tenantId, string tenantSlug, Guid clientId)
     {
         using var scope = _factory.Services.CreateScope();

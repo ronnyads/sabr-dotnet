@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Phub.Domain.Enums;
 
 namespace Phub.Application.Models;
@@ -52,6 +53,7 @@ public sealed class MarketplaceUnmappedItemDto
 
 public sealed class MarketplaceUpsertMappingRequest
 {
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public MarketplaceProvider Provider { get; set; }
     public Guid? IntegrationId { get; set; }
     public string? SellerId { get; set; }
