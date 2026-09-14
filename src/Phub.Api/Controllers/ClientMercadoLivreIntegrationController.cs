@@ -236,7 +236,9 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
             return error!;
         }
 
-        var result = await _syncService.SyncHistoryNowAsync(tenantId!, clientId, request?.SellerId, cancellationToken);
+        // This endpoint is the fast, incremental refresh used by the integration screen.
+        // Historical catch-up is intentionally handled by the chunked dashboard sync jobs.
+        var result = await _syncService.SyncNowAsync(tenantId!, clientId, request?.SellerId, cancellationToken);
         if (!result.Succeeded || result.Data == null)
         {
             return MapValidationError(result.Errors);

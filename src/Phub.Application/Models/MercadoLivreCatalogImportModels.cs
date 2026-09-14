@@ -5,6 +5,7 @@ public sealed class MercadoLivreCatalogImportRequest
     public string Query { get; set; } = string.Empty;
     public string[] Brands { get; set; } = ["Boca Rosa", "Principia"];
     public int PhysicalStock { get; set; } = 1000;
+    public long? CatalogPriceCents { get; set; }
     public bool PreviewOnly { get; set; }
     public string[] ItemIds { get; set; } = [];
 }

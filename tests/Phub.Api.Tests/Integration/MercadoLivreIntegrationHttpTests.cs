@@ -1808,6 +1808,56 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(variantSku, result!.SabrVariantSku);
     }
 
+    [Fact]
+    public async Task AdminCatalogImport_AppliesConfiguredCatalogPriceStockAndVariations()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-import";
+        const string tenantSlug = "mlimport";
+        const string sellerId = "1001099";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = "MLB-BASE-01",
+            Title = "Base Mate Boca Rosa",
+            Brand = "Boca Rosa",
+            Price = 49.90m,
+            Variations = new[]
+            {
+                new MercadoLivreSellerVariationDetails { VariationId = "TOM-1", SellerSku = "BR-BASE-TOM-1" },
+                new MercadoLivreSellerVariationDetails { VariationId = "TOM-2", SellerSku = "BR-BASE-TOM-2" }
+            }
+        });
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest
+            {
+                Brands = [],
+                ItemIds = ["MLB-BASE-01"],
+                PhysicalStock = 1000,
+                CatalogPriceCents = 800
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var variants = await db.ProductVariants.OrderBy(x => x.VariantSku).ToListAsync();
+        Assert.Equal(2, variants.Count);
+        Assert.All(variants, variant =>
+        {
+            Assert.Equal(800, variant.CatalogPriceCents);
+            Assert.Equal(1000, variant.PhysicalStock);
+            Assert.Equal(998, variant.AvailableStock);
+        });
+        Assert.Equal(2, await db.TenantMarketplaceListingMaps.CountAsync());
+    }
+
     private async Task SeedTenantClientAsync(string tenantId, string tenantSlug, Guid clientId)
     {
         using var scope = _factory.Services.CreateScope();

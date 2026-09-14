@@ -36,6 +36,8 @@ public sealed class MercadoLivreCatalogImportService
     {
         if (request.PhysicalStock < 0 || request.PhysicalStock > 1_000_000)
             return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("physicalStock", "Stock must be between 0 and 1000000")]);
+        if (request.CatalogPriceCents is < 0 or > 100_000_000_000)
+            return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("catalogPriceCents", "Catalog price must be between 0 and 100000000000 cents")]);
 
         var tenant = await _dbContext.Tenants.AsNoTracking()
             .FirstOrDefaultAsync(x => x.Slug == tenantSlug.Trim().ToLowerInvariant(), cancellationToken);
@@ -92,6 +94,8 @@ public sealed class MercadoLivreCatalogImportService
             {
                 result.ProductsMatched++;
                 var itemResult = ToResult(listing, sku, request.PreviewOnly ? "preview" : "mapped");
+                if (request.CatalogPriceCents.HasValue)
+                    itemResult.CatalogPriceCents = request.CatalogPriceCents.Value;
                 result.Items.Add(itemResult);
                 if (request.PreviewOnly) continue;
 
@@ -119,8 +123,11 @@ public sealed class MercadoLivreCatalogImportService
                     }
                     else
                     {
+                        product.CatalogPriceCents = itemResult.CatalogPriceCents;
+                        product.IsActive = true;
+                        product.UpdatedAt = DateTimeOffset.UtcNow;
                         result.ProductsUpdated++;
-                        itemResult.Action = "updated_stock";
+                        itemResult.Action = "updated_stock_and_catalog_price";
                     }
 
                     var variant = await _dbContext.ProductVariants.FirstOrDefaultAsync(x => x.VariantSku == sku, cancellationToken);
@@ -144,7 +151,9 @@ public sealed class MercadoLivreCatalogImportService
                     }
                     else
                     {
+                        variant.CatalogPriceCents = itemResult.CatalogPriceCents;
                         variant.PhysicalStock = request.PhysicalStock;
+                        variant.InventoryVersion++;
                         variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
                         variant.IsActive = true;
                         variant.UpdatedAt = DateTimeOffset.UtcNow;
@@ -199,7 +208,7 @@ public sealed class MercadoLivreCatalogImportService
                 Action = "AdminProducts.ImportFromMercadoLivre",
                 Entity = nameof(Product),
                 RequestId = Guid.NewGuid(),
-                MetadataJson = JsonSerializer.Serialize(new { connection.SellerId, request.Query, request.Brands, request.PhysicalStock, result.ProductsCreated, result.MappingsCreated })
+                MetadataJson = JsonSerializer.Serialize(new { connection.SellerId, request.Query, request.Brands, request.PhysicalStock, request.CatalogPriceCents, result.ProductsCreated, result.MappingsCreated })
             });
             await _dbContext.SaveChangesAsync(cancellationToken);
         }

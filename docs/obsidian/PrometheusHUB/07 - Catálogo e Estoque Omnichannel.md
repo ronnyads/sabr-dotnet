@@ -85,6 +85,14 @@ Endpoints do portal:
 - A lista agrupa todos os itens por SKU mestre; itens sem vínculo permanecem separados pela identidade externa e são sinalizados para revisão.
 - O portal exibe o painel **Pedidos para enviar hoje** com quantidade por SKU e atalho para **Meus Pedidos**.
 
+## Importação administrativa do Mercado Livre
+
+- A seleção administrativa preserva cada SKU de variação e cria o vínculo com `itemId` + `variationId`; anúncios sem variação continuam usando a identidade do item.
+- O admin informa estoque físico inicial e Preço Catálogo no momento da importação. Esses valores também atualizam produtos já existentes escolhidos explicitamente, sem copiar o preço de venda do marketplace por engano.
+- Mudanças de estoque em variante existente incrementam `inventoryVersion`; o saldo disponível continua respeitando reservas e buffer.
+- A ação **Sincronizar pedidos agora** do portal executa somente a janela incremental. O catch-up de 365 dias permanece assíncrono, particionado e retomável pelo módulo financeiro, evitando timeout de uma requisição monolítica.
+- Reconciliação é proteção automatizada da integração e não é apresentada como ação manual ao cliente quando o recurso está desabilitado.
+
 ## Rollback
 
 As migrations são aditivas. Em incidente, interromper workers/escrita remota antes de reverter a aplicação. Não apagar snapshots históricos nem diminuir `inventoryVersion`; manter colunas novas até a versão anterior voltar a operar com segurança.
