@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -10,11 +12,14 @@ public sealed class FinancialSyncJobService
 {
     private readonly IAppDbContext _db;
     private readonly MercadoLivreSyncService _sync;
+    private readonly ILogger<FinancialSyncJobService> _logger;
 
-    public FinancialSyncJobService(IAppDbContext db, MercadoLivreSyncService sync)
+    public FinancialSyncJobService(IAppDbContext db, MercadoLivreSyncService sync,
+        ILogger<FinancialSyncJobService>? logger = null)
     {
         _db = db;
         _sync = sync;
+        _logger = logger ?? NullLogger<FinancialSyncJobService>.Instance;
     }
 
     public async Task<FinancialSyncEnqueueResult> EnqueueOperationalBackfillAsync(
@@ -111,6 +116,8 @@ public sealed class FinancialSyncJobService
             if (transaction != null) await transaction.CommitAsync(cancellationToken);
         }
 
+        _logger.LogInformation("Financial sync chunk claimed job={JobId} seller={SellerId} attempt={Attempt} from={RangeFrom} to={RangeTo}",
+            job.Id, job.SellerId, job.Attempts, job.RangeFrom, job.RangeTo);
         try
         {
             var syncResult = await _sync.SyncRangeNowAsync(job.TenantId, job.ClientId, job.SellerId,
@@ -124,6 +131,8 @@ public sealed class FinancialSyncJobService
             job.ResultJson = System.Text.Json.JsonSerializer.Serialize(syncResult.Data);
             job.CompletedAt = DateTimeOffset.UtcNow;
             job.LastError = null;
+            _logger.LogInformation("Financial sync chunk completed job={JobId} seller={SellerId} attempt={Attempt}",
+                job.Id, job.SellerId, job.Attempts);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -140,6 +149,8 @@ public sealed class FinancialSyncJobService
             var ceilingSeconds = Math.Min(900, 30 * (1 << exponent));
             job.NextAttemptAt = DateTimeOffset.UtcNow.AddSeconds(Random.Shared.Next(30, ceilingSeconds + 1));
             job.LastError = ex.Message.Length > 2000 ? ex.Message[..2000] : ex.Message;
+            _logger.LogWarning("Financial sync chunk {Status} job={JobId} seller={SellerId} attempt={Attempt} errorType={ErrorType} nextAttempt={NextAttemptAt}",
+                job.Status, job.Id, job.SellerId, job.Attempts, ex.GetType().Name, job.NextAttemptAt);
         }
         finally
         {
