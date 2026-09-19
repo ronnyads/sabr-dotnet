@@ -92,16 +92,19 @@ public sealed class FinancialSyncJobService
         await using (var transaction = _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync(cancellationToken) : null)
         {
             var query = _db.FinancialSyncJobs.Where(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
-                && (x.Status == "PENDING" || x.Status == "RETRY")
+                && (x.Status == "PENDING" || x.Status == "RETRY" || x.Status == "RUNNING")
                 && (!x.NextAttemptAt.HasValue || x.NextAttemptAt <= now)
                 && (!x.LeaseUntil.HasValue || x.LeaseUntil < now)).OrderBy(x => x.CreatedAt);
             job = _db.Database.IsRelational()
-                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type = 'OPERATIONAL_SYNC_CHUNK' AND status IN ('PENDING','RETRY') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
+                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type = 'OPERATIONAL_SYNC_CHUNK' AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
                 : await query.FirstOrDefaultAsync(cancellationToken);
             if (job == null) return false;
             job.Status = "RUNNING";
             job.LockedBy = workerId;
-            job.LeaseUntil = now.AddMinutes(5);
+            // A 30-day chunk can fetch many orders and shipments. Keep the
+            // lease longer than one normal chunk, while allowing a crashed
+            // worker's RUNNING job to be reclaimed after expiry.
+            job.LeaseUntil = now.AddMinutes(30);
             job.Attempts++;
             job.UpdatedAt = now;
             await _db.SaveChangesAsync(cancellationToken);

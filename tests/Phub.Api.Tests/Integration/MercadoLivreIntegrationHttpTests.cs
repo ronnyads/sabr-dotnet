@@ -1086,6 +1086,51 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task FinancialSync_ReclaimsExpiredRunningChunkAfterWorkerRestart()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-reclaim";
+        const string tenantSlug = "mlreclaim";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001023";
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        var jobId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.FinancialSyncJobs.Add(new FinancialSyncJob
+            {
+                Id = jobId, TenantId = tenantId, ClientId = clientId,
+                SellerId = ParseSellerId(sellerId),
+                JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                Status = "RUNNING", LockedBy = "stopped-worker",
+                LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1),
+                RangeFrom = DateTimeOffset.UtcNow.AddDays(-1),
+                RangeTo = DateTimeOffset.UtcNow,
+                DedupeKey = $"test-reclaim-{jobId:N}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            Assert.True(await service.ProcessNextAsync("replacement-worker", CancellationToken.None));
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var job = await db.FinancialSyncJobs.SingleAsync(x => x.Id == jobId);
+            Assert.Equal("COMPLETED", job.Status);
+            Assert.Equal(1, job.Attempts);
+            Assert.Null(job.LockedBy);
+        }
+    }
+
+    [Fact]
     public async Task MercadoPagoCallback_WithoutState_RedirectsBeforeTenantResolution()
     {
         using var anonymousClient = _factory.CreateAnonymousClientWithoutRedirect("http://localhost");
