@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using System.Text.Json;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -164,8 +165,8 @@ public sealed class MarketplaceOrderInventoryService
         {
             await _dbContext.ProductVariants
                 .FromSqlRaw(
-                    "SELECT * FROM product_variants WHERE variant_sku = ANY ({0}) ORDER BY variant_sku FOR UPDATE",
-                    variantSkus.ToArray())
+                    "SELECT * FROM product_variants WHERE variant_sku IN (SELECT jsonb_array_elements_text({0}::jsonb)) ORDER BY variant_sku FOR UPDATE",
+                    JsonSerializer.Serialize(variantSkus))
                 .LoadAsync(cancellationToken);
         }
 
