@@ -38,7 +38,7 @@ Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da op
 - Webhook permanece primário.
 - O catch-up operacional de até 365 dias é particionado em chunks de no máximo 31 dias.
 - Cada chunk possui checkpoint, dedupe key, tentativas, lease e retomada durável.
-- A execução de um chunk avança no máximo um dia por tentativa. O checkpoint só avança após persistir a sincronização desse dia; uma interrupção repete apenas o dia incompleto. Timeout HTTP sem cancelamento do worker gera `RETRY`, não deixa o chunk em `RUNNING`.
+- A execução de um chunk avança no máximo uma hora por tentativa. O checkpoint só avança após persistir a sincronização dessa hora; uma interrupção repete apenas a hora incompleta. Timeout HTTP sem cancelamento do worker gera `RETRY`, não deixa o chunk em `RUNNING`.
 - Um `RUNNING` com lease vencido pode ser reclamado por outro worker. `lockedBy` e `leaseUntil` identificam a tentativa ativa; nunca limpar manualmente o lease de uma tentativa ainda viva.
 - A aquisição PostgreSQL usa `FOR UPDATE SKIP LOCKED`; a chamada HTTP ocorre fora da transação.
 - Retentativas usam backoff exponencial com full jitter.
