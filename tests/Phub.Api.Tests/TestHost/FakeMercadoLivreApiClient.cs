@@ -8,6 +8,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
     public Exception? ExchangeCodeException { get; set; }
     public Exception? CreateItemException { get; set; }
     public Exception? RefreshTokenException { get; set; }
+    public Exception? SearchOrdersException { get; set; }
 
     public MercadoLivreTokenResponse ExchangeCodeResponse { get; set; } = new()
     {
@@ -128,6 +129,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         string accessToken,
         CancellationToken cancellationToken = default)
     {
+        if (SearchOrdersException is not null) throw SearchOrdersException;
         if (SearchOrdersBySeller.TryGetValue(sellerId, out var orderIds))
         {
             return Task.FromResult<IReadOnlyList<string>>(orderIds);
@@ -339,6 +341,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         ExchangeCodeException = null;
         CreateItemException = null;
         RefreshTokenException = null;
+        SearchOrdersException = null;
         ExchangeCodeResponse = new MercadoLivreTokenResponse
         {
             AccessToken = "ml-access-token",

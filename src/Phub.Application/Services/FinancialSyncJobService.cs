@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Globalization;
+using System.Text.Json;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -116,25 +118,46 @@ public sealed class FinancialSyncJobService
             if (transaction != null) await transaction.CommitAsync(cancellationToken);
         }
 
+        var segmentFrom = job.RangeFrom;
+        if (DateTimeOffset.TryParse(job.Checkpoint, CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind, out var checkpoint)
+            && checkpoint > job.RangeFrom && checkpoint < job.RangeTo)
+            segmentFrom = checkpoint;
+        var segmentTo = segmentFrom.AddDays(1) < job.RangeTo ? segmentFrom.AddDays(1) : job.RangeTo;
         _logger.LogInformation("Financial sync chunk claimed job={JobId} seller={SellerId} attempt={Attempt} from={RangeFrom} to={RangeTo}",
-            job.Id, job.SellerId, job.Attempts, job.RangeFrom, job.RangeTo);
+            job.Id, job.SellerId, job.Attempts, segmentFrom, segmentTo);
         try
         {
             var syncResult = await _sync.SyncRangeNowAsync(job.TenantId, job.ClientId, job.SellerId,
-                job.RangeFrom, job.RangeTo, cancellationToken);
+                segmentFrom, segmentTo, cancellationToken);
             if (!syncResult.Succeeded)
                 throw new InvalidOperationException(string.Join("; ", syncResult.Errors.Select(x => x.Message)));
-            job.Status = "COMPLETED";
-            job.Processed = 1;
-            job.Total = 1;
-            job.Checkpoint = job.RangeTo.ToString("O");
-            job.ResultJson = System.Text.Json.JsonSerializer.Serialize(syncResult.Data);
-            job.CompletedAt = DateTimeOffset.UtcNow;
+            var totals = JsonSerializer.Deserialize<MercadoLivreSyncNowResult>(job.ResultJson) ?? new();
+            totals.OrdersUpserted += syncResult.Data?.OrdersUpserted ?? 0;
+            totals.ItemsUpserted += syncResult.Data?.ItemsUpserted ?? 0;
+            totals.ReservationsCreated += syncResult.Data?.ReservationsCreated ?? 0;
+            job.ResultJson = JsonSerializer.Serialize(totals);
+            job.Checkpoint = segmentTo.ToString("O", CultureInfo.InvariantCulture);
+            if (segmentTo >= job.RangeTo)
+            {
+                job.Status = "COMPLETED";
+                job.Processed = 1;
+                job.Total = 1;
+                job.CompletedAt = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                // Persist one day at a time. A restart repeats at most the
+                // unfinished day, never the full 30-day chunk.
+                job.Status = "PENDING";
+                job.Attempts = 0;
+                job.NextAttemptAt = null;
+            }
             job.LastError = null;
-            _logger.LogInformation("Financial sync chunk completed job={JobId} seller={SellerId} attempt={Attempt}",
-                job.Id, job.SellerId, job.Attempts);
+            _logger.LogInformation("Financial sync segment completed job={JobId} seller={SellerId} checkpoint={Checkpoint} chunkComplete={ChunkComplete}",
+                job.Id, job.SellerId, job.Checkpoint, job.Status == "COMPLETED");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // A failed sync may leave invalid order entities tracked. Persisting the
             // retry status with that same change tracker would replay the failed write.

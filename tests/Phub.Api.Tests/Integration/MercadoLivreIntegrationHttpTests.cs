@@ -1097,6 +1097,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         await SeedConnectionAsync(tenantId, clientId, sellerId);
 
         var jobId = Guid.NewGuid();
+        var rangeTo = DateTimeOffset.UtcNow;
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -1107,8 +1108,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 JobType = FinancialSyncJobTypes.OperationalSyncChunk,
                 Status = "RUNNING", LockedBy = "stopped-worker",
                 LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1),
-                RangeFrom = DateTimeOffset.UtcNow.AddDays(-1),
-                RangeTo = DateTimeOffset.UtcNow,
+                RangeFrom = rangeTo.AddDays(-1),
+                RangeTo = rangeTo,
                 DedupeKey = $"test-reclaim-{jobId:N}"
             });
             await db.SaveChangesAsync();
@@ -1127,6 +1128,89 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             Assert.Equal("COMPLETED", job.Status);
             Assert.Equal(1, job.Attempts);
             Assert.Null(job.LockedBy);
+        }
+    }
+
+    [Fact]
+    public async Task FinancialSync_CheckpointsLongChunkOneDayAtATime()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-checkpoint";
+        const string tenantSlug = "mlcheckpoint";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001024";
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        var jobId = Guid.NewGuid();
+        var rangeTo = DateTimeOffset.UtcNow.AddDays(-1);
+        var rangeFrom = rangeTo.AddDays(-3);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.FinancialSyncJobs.Add(new FinancialSyncJob
+            {
+                Id = jobId, TenantId = tenantId, ClientId = clientId,
+                SellerId = ParseSellerId(sellerId),
+                JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                RangeFrom = rangeFrom, RangeTo = rangeTo,
+                Checkpoint = rangeFrom.ToString("O"),
+                DedupeKey = $"test-checkpoint-{jobId:N}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        for (var day = 1; day <= 3; day++)
+        {
+            using var scope = _factory.Services.CreateScope();
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            Assert.True(await service.ProcessNextAsync("checkpoint-worker", CancellationToken.None));
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var job = await db.FinancialSyncJobs.AsNoTracking().SingleAsync(x => x.Id == jobId);
+            Assert.Equal(rangeFrom.AddDays(day), DateTimeOffset.Parse(job.Checkpoint!));
+            Assert.Equal(day == 3 ? "COMPLETED" : "PENDING", job.Status);
+            Assert.Null(job.LeaseUntil);
+        }
+    }
+
+    [Fact]
+    public async Task FinancialSync_ProviderTimeoutPersistsRetryInsteadOfStrandingRunningJob()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-timeout";
+        const string tenantSlug = "mltimeout";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001025";
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+        _factory.FakeMercadoLivreApiClient.SearchOrdersException = new TaskCanceledException("Provider request timed out");
+
+        var jobId = Guid.NewGuid();
+        var rangeTo = DateTimeOffset.UtcNow;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.FinancialSyncJobs.Add(new FinancialSyncJob
+            {
+                Id = jobId, TenantId = tenantId, ClientId = clientId,
+                SellerId = ParseSellerId(sellerId),
+                JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                RangeFrom = rangeTo.AddDays(-1), RangeTo = rangeTo,
+                DedupeKey = $"test-timeout-{jobId:N}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            Assert.True(await service.ProcessNextAsync("timeout-worker", CancellationToken.None));
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var job = await db.FinancialSyncJobs.AsNoTracking().SingleAsync(x => x.Id == jobId);
+            Assert.Equal("RETRY", job.Status);
+            Assert.Null(job.LockedBy);
+            Assert.Null(job.LeaseUntil);
+            Assert.NotNull(job.NextAttemptAt);
         }
     }
 
