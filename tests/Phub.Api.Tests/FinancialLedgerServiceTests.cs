@@ -44,6 +44,24 @@ public sealed class FinancialLedgerServiceTests
     }
 
     [Fact]
+    public async Task AppendAsync_NormalizesProviderLocalOffsetsToUtc()
+    {
+        await using var db = CreateDb();
+        var service = new FinancialLedgerService(db);
+        var request = CreateRequest(FinancialEntryTypes.GrossSale, 100, "offset-v1", FinancialEntryStatuses.Confirmed);
+        request.FinancialConfirmedAt = new DateTimeOffset(2026, 9, 18, 22, 30, 0, TimeSpan.FromHours(-4));
+        request.EconomicOccurredAt = request.FinancialConfirmedAt.Value.AddMinutes(-10);
+        request.ProviderUpdatedAt = request.FinancialConfirmedAt;
+
+        var entry = await service.AppendAsync(request);
+
+        Assert.Equal(TimeSpan.Zero, entry.EconomicOccurredAt.Offset);
+        Assert.Equal(TimeSpan.Zero, entry.FinancialConfirmedAt!.Value.Offset);
+        Assert.Equal(TimeSpan.Zero, entry.ProviderUpdatedAt!.Value.Offset);
+        Assert.Equal(new DateTimeOffset(2026, 9, 19, 2, 20, 0, TimeSpan.Zero), entry.EconomicOccurredAt);
+    }
+
+    [Fact]
     public async Task Profitability_KeepsUnallocatedRefundOutsideSkuAllocationAndReportsDelta()
     {
         await using var db = CreateDb();

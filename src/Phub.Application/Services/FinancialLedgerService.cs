@@ -99,9 +99,11 @@ public sealed class FinancialLedgerService
             ExternalPackId = request.ExternalPackId,
             ExternalClaimId = request.ExternalClaimId,
             ExternalReturnId = request.ExternalReturnId,
-            EconomicOccurredAt = request.EconomicOccurredAt,
-            FinancialConfirmedAt = request.FinancialConfirmedAt,
-            ProviderUpdatedAt = request.ProviderUpdatedAt,
+            // PostgreSQL timestamptz accepts UTC DateTimeOffset values only.
+            // Preserve the instant while normalizing provider-local offsets.
+            EconomicOccurredAt = request.EconomicOccurredAt.ToUniversalTime(),
+            FinancialConfirmedAt = request.FinancialConfirmedAt?.ToUniversalTime(),
+            ProviderUpdatedAt = request.ProviderUpdatedAt?.ToUniversalTime(),
             ObservedAt = DateTimeOffset.UtcNow,
             SourceEndpoint = request.SourceEndpoint,
             SourceRecordId = request.SourceRecordId,

@@ -321,7 +321,7 @@ public sealed class OperationalFinancialProjectionService
         && (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number)
             || value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), System.Globalization.NumberStyles.Number,
                 System.Globalization.CultureInfo.InvariantCulture, out number)) ? number : 0m;
-    private static DateTimeOffset? ReadDate(JsonElement node, string property) => DateTimeOffset.TryParse(ReadString(node, property), out var value) ? value : null;
+    private static DateTimeOffset? ReadDate(JsonElement node, string property) => DateTimeOffset.TryParse(ReadString(node, property), out var value) ? value.ToUniversalTime() : null;
     private sealed record RefundFact(string PaymentId, string RefundId, long AmountCents, DateTimeOffset? OccurredAt, string RawJson);
 
     private static string BuildDivergenceJson(IEnumerable<MarketplaceFinancialEntry> entries)
