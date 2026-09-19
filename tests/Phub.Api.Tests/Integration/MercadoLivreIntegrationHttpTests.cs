@@ -1108,7 +1108,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 JobType = FinancialSyncJobTypes.OperationalSyncChunk,
                 Status = "RUNNING", LockedBy = "stopped-worker",
                 LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(-1),
-                RangeFrom = rangeTo.AddDays(-1),
+                RangeFrom = rangeTo.AddHours(-1),
                 RangeTo = rangeTo,
                 DedupeKey = $"test-reclaim-{jobId:N}"
             });
@@ -1132,7 +1132,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
-    public async Task FinancialSync_CheckpointsLongChunkOneDayAtATime()
+    public async Task FinancialSync_CheckpointsLongChunkOneHourAtATime()
     {
         await _factory.ResetDatabaseAsync();
         const string tenantId = "tenant-ml-checkpoint";
@@ -1144,7 +1144,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         var jobId = Guid.NewGuid();
         var rangeTo = DateTimeOffset.UtcNow.AddDays(-1);
-        var rangeFrom = rangeTo.AddDays(-3);
+        var rangeFrom = rangeTo.AddHours(-3);
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -1160,15 +1160,15 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             await db.SaveChangesAsync();
         }
 
-        for (var day = 1; day <= 3; day++)
+        for (var hour = 1; hour <= 3; hour++)
         {
             using var scope = _factory.Services.CreateScope();
             var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
             Assert.True(await service.ProcessNextAsync("checkpoint-worker", CancellationToken.None));
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var job = await db.FinancialSyncJobs.AsNoTracking().SingleAsync(x => x.Id == jobId);
-            Assert.Equal(rangeFrom.AddDays(day), DateTimeOffset.Parse(job.Checkpoint!));
-            Assert.Equal(day == 3 ? "COMPLETED" : "PENDING", job.Status);
+            Assert.Equal(rangeFrom.AddHours(hour), DateTimeOffset.Parse(job.Checkpoint!));
+            Assert.Equal(hour == 3 ? "COMPLETED" : "PENDING", job.Status);
             Assert.Null(job.LeaseUntil);
         }
     }

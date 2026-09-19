@@ -108,9 +108,9 @@ public sealed class FinancialSyncJobService
             if (job == null) return false;
             job.Status = "RUNNING";
             job.LockedBy = workerId;
-            // A 30-day chunk can fetch many orders and shipments. Keep the
-            // lease longer than one normal chunk, while allowing a crashed
-            // worker's RUNNING job to be reclaimed after expiry.
+            // Each claim processes at most one hour. A bounded segment keeps
+            // the lease meaningful even for a seller with hundreds of daily
+            // orders, while a crashed worker can be reclaimed after expiry.
             job.LeaseUntil = now.AddMinutes(30);
             job.Attempts++;
             job.UpdatedAt = now;
@@ -123,7 +123,7 @@ public sealed class FinancialSyncJobService
                 DateTimeStyles.RoundtripKind, out var checkpoint)
             && checkpoint > job.RangeFrom && checkpoint < job.RangeTo)
             segmentFrom = checkpoint;
-        var segmentTo = segmentFrom.AddDays(1) < job.RangeTo ? segmentFrom.AddDays(1) : job.RangeTo;
+        var segmentTo = segmentFrom.AddHours(1) < job.RangeTo ? segmentFrom.AddHours(1) : job.RangeTo;
         _logger.LogInformation("Financial sync chunk claimed job={JobId} seller={SellerId} attempt={Attempt} from={RangeFrom} to={RangeTo}",
             job.Id, job.SellerId, job.Attempts, segmentFrom, segmentTo);
         try
@@ -147,8 +147,8 @@ public sealed class FinancialSyncJobService
             }
             else
             {
-                // Persist one day at a time. A restart repeats at most the
-                // unfinished day, never the full 30-day chunk.
+                // Persist one hour at a time. A restart repeats at most the
+                // unfinished hour, never the full 30-day chunk.
                 job.Status = "PENDING";
                 job.Attempts = 0;
                 job.NextAttemptAt = null;
