@@ -167,15 +167,34 @@ public sealed class MercadoPagoOAuthService
             }
 
             var verified = false;
+            string? providerErrorCode = null;
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.PartialContent)
             {
-                var body = await response.Content.ReadAsStringAsync(cancellationToken);
                 try
                 {
                     using var document = JsonDocument.Parse(body);
                     verified = document.RootElement.ValueKind == JsonValueKind.Object &&
                         document.RootElement.TryGetProperty("results", out var results) &&
                         results.ValueKind == JsonValueKind.Array;
+                }
+                catch (JsonException) { }
+            }
+            else
+            {
+                // Retain only a machine-readable provider code, never the raw
+                // response (which may contain identifiers or sensitive details).
+                try
+                {
+                    using var document = JsonDocument.Parse(body);
+                    var root = document.RootElement;
+                    if (root.ValueKind == JsonValueKind.Object)
+                    {
+                        var candidate = ReadOptionalString(root, "error") ?? ReadOptionalString(root, "code");
+                        if (candidate is { Length: > 0 and <= 64 } &&
+                            candidate.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.'))
+                            providerErrorCode = candidate;
+                    }
                 }
                 catch (JsonException) { }
             }
@@ -188,7 +207,8 @@ public sealed class MercadoPagoOAuthService
                 verifiedSellerIdentity = true
             });
             grant.LastCapabilityVerifiedAt = checkedAt;
-            grant.CapabilityError = verified ? null : $"MP_BILLING_HTTP_{(int)response.StatusCode}";
+            grant.CapabilityError = verified ? null : $"MP_BILLING_HTTP_{(int)response.StatusCode}" +
+                (providerErrorCode == null ? "" : $":{providerErrorCode}");
             grant.UpdatedAt = checkedAt;
             await _db.SaveChangesAsync(cancellationToken);
             return new MercadoPagoBillingProbeResult(sellerId, verified, grant.CapabilityError, checkedAt);

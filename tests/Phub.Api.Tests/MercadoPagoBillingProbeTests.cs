@@ -15,6 +15,7 @@ public sealed class MercadoPagoBillingProbeTests
     [Theory]
     [InlineData(HttpStatusCode.OK, "{\"results\":[]}", true, null)]
     [InlineData(HttpStatusCode.Forbidden, "{}", false, "MP_BILLING_HTTP_403")]
+    [InlineData(HttpStatusCode.Forbidden, "{\"error\":\"ABUSE_PREVENTION_ERROR\"}", false, "MP_BILLING_HTTP_403:ABUSE_PREVENTION_ERROR")]
     [InlineData(HttpStatusCode.OK, "<html>not billing</html>", false, "MP_BILLING_HTTP_200")]
     public async Task ProbeBillingAsync_OnlyVerifiesARealBillingResponse(
         HttpStatusCode status, string body, bool expectedVerified, string? expectedError)
