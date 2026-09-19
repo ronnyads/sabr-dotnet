@@ -47,11 +47,13 @@ public sealed class ClientMercadoPagoIntegrationController : ControllerBase
             .Select(x => new
             {
                 x.SellerId,
-                Connected = !x.RequiresReauthorization && x.TokenExpiresAt > DateTimeOffset.UtcNow,
+                Connected = !x.RequiresReauthorization &&
+                    (x.TokenExpiresAt > DateTimeOffset.UtcNow || x.RefreshTokenProtected != ""),
                 x.TokenExpiresAt,
                 x.LastCapabilityVerifiedAt,
                 x.RequiresReauthorization,
-                x.CapabilitiesJson
+                x.CapabilitiesJson,
+                x.CapabilityError
             })
             .ToListAsync(cancellationToken);
         return Ok(new
@@ -61,8 +63,22 @@ public sealed class ClientMercadoPagoIntegrationController : ControllerBase
             billingVerified = grants.Any(x => x.Connected && x.LastCapabilityVerifiedAt.HasValue &&
                 x.CapabilitiesJson.Contains("\"billingMercadoPago\":true")),
             grants = grants.Select(x => new { x.SellerId, x.Connected, x.TokenExpiresAt,
-                x.LastCapabilityVerifiedAt, x.RequiresReauthorization })
+                x.LastCapabilityVerifiedAt, x.RequiresReauthorization, x.CapabilityError })
         });
+    }
+
+    [HttpPost("billing-probe")]
+    public async Task<IActionResult> ProbeBilling(CancellationToken cancellationToken)
+    {
+        if (!TryGetClient(out var tenantId, out var clientId, out var error)) return error!;
+        var sellerIds = await _db.TenantMarketplaceConnections.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId &&
+                        x.Provider == MarketplaceProvider.MercadoLivre)
+            .Select(x => x.SellerId).Distinct().ToListAsync(cancellationToken);
+        var results = new List<MercadoPagoBillingProbeResult>();
+        foreach (var sellerId in sellerIds)
+            results.Add(await _oauth.ProbeBillingAsync(tenantId!, clientId, sellerId, cancellationToken));
+        return Ok(results);
     }
 
     [HttpPost("connect-url")]

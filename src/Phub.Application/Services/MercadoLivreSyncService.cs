@@ -501,6 +501,12 @@ public sealed class MercadoLivreSyncService
         var itemsTouched = 0;
         foreach (var incomingItem in details.Items)
         {
+            if (incomingItem.Quantity <= 0)
+            {
+                _logger.LogWarning("Skipping Mercado Livre order item with invalid quantity seller={SellerId} order={OrderId} item={ItemId} quantity={Quantity}",
+                    connection.SellerId, details.MlOrderId, incomingItem.MlItemId, incomingItem.Quantity);
+                continue;
+            }
             var itemKey = BuildItemKey(incomingItem.MlItemId, incomingItem.MlVariationId);
             if (!existingByKey.TryGetValue(itemKey, out var orderItem))
             {
@@ -512,7 +518,8 @@ public sealed class MercadoLivreSyncService
                     Provider = MarketplaceProvider.MercadoLivre,
                     SellerId = connection.SellerId,
                     MlItemId = incomingItem.MlItemId,
-                    MlVariationId = incomingItem.MlVariationId
+                    MlVariationId = incomingItem.MlVariationId,
+                    Quantity = incomingItem.Quantity
                 };
                 _dbContext.MarketplaceOrderItems.Add(orderItem);
                 existingByKey[itemKey] = orderItem;

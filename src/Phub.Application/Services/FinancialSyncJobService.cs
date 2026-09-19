@@ -124,6 +124,14 @@ public sealed class FinancialSyncJobService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // A failed sync may leave invalid order entities tracked. Persisting the
+            // retry status with that same change tracker would replay the failed write.
+            if (_db is DbContext context)
+            {
+                var jobId = job.Id;
+                context.ChangeTracker.Clear();
+                job = await _db.FinancialSyncJobs.SingleAsync(x => x.Id == jobId, cancellationToken);
+            }
             job.Status = job.Attempts >= 8 ? "FAILED" : "RETRY";
             var exponent = Math.Min(job.Attempts, 5);
             var ceilingSeconds = Math.Min(900, 30 * (1 << exponent));

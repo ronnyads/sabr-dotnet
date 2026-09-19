@@ -1044,6 +1044,48 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task SyncNow_AutoMapsExactSku_BeforePersistingNewOrderItem()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-automap";
+        const string tenantSlug = "mlautomap";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001022";
+        const string baseSku = "SKU-BASE-ML-AUTO";
+        const string variantSku = "SKU-VAR-ML-AUTO";
+
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, variantSku, physicalStock: 10, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = ["ORDER-ML-AUTO"];
+        _factory.FakeMercadoLivreApiClient.OrdersById["ORDER-ML-AUTO"] = new MercadoLivreOrderDetails
+        {
+            MlOrderId = "ORDER-ML-AUTO",
+            Status = "paid",
+            Items = [new MercadoLivreOrderItemDetails
+            {
+                MlItemId = "ITEM-ML-AUTO", ChannelSku = variantSku, Quantity = 2, RawJson = "{}"
+            }],
+            RawJson = "{}"
+        };
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await DrainFinancialSyncJobsAsync();
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var item = await db.MarketplaceOrderItems.SingleAsync();
+        Assert.Equal(2, item.Quantity);
+        Assert.Equal(variantSku, item.SabrVariantSku);
+        Assert.Equal(1, await db.TenantMarketplaceListingMaps.CountAsync());
+    }
+
+    [Fact]
     public async Task MercadoPagoCallback_WithoutState_RedirectsBeforeTenantResolution()
     {
         using var anonymousClient = _factory.CreateAnonymousClientWithoutRedirect("http://localhost");

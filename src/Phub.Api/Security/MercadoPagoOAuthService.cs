@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
@@ -118,6 +120,141 @@ public sealed class MercadoPagoOAuthService
         return new MercadoPagoGrantResult(token.UserId, scopes, now);
     }
 
+    public async Task<MercadoPagoBillingProbeResult> ProbeBillingAsync(
+        string tenantId, Guid clientId, long sellerId, CancellationToken cancellationToken)
+    {
+        var grant = await _db.MarketplaceOAuthGrants.FirstOrDefaultAsync(x =>
+            x.TenantId == tenantId && x.ClientId == clientId &&
+            x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId &&
+            x.AppFamily == AppFamily, cancellationToken);
+        if (grant == null)
+            return new MercadoPagoBillingProbeResult(sellerId, false, "MP_GRANT_NOT_FOUND", null);
+
+        string accessToken;
+        try
+        {
+            accessToken = await GetValidAccessTokenAsync(grant, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            grant.CapabilityError = ex is MercadoPagoReauthorizationRequiredException
+                ? "MP_REAUTHORIZATION_REQUIRED" : "MP_TOKEN_REFRESH_FAILED";
+            grant.RequiresReauthorization = ex is MercadoPagoReauthorizationRequiredException;
+            grant.UpdatedAt = DateTimeOffset.UtcNow;
+            await _db.SaveChangesAsync(cancellationToken);
+            return new MercadoPagoBillingProbeResult(sellerId, false, grant.CapabilityError, null);
+        }
+
+        // Read-only, minimal Billing request. A successful OAuth grant alone is
+        // not evidence that the separate MP Billing capability is available.
+        var endpoint = new Uri(new Uri(_options.BillingApiBaseUrl.TrimEnd('/') + "/"),
+            "billing/integration/monthly/periods?group=MP&document_type=BILL&limit=1");
+        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        try
+        {
+            using var response = await _httpClientFactory.CreateClient("MercadoPagoOAuth")
+                .SendAsync(request, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
+            {
+                // Transient failures must not erase a previously verified capability.
+                grant.CapabilityError = response.StatusCode == HttpStatusCode.TooManyRequests
+                    ? "MP_BILLING_RATE_LIMITED" : "MP_BILLING_UNAVAILABLE";
+                grant.UpdatedAt = DateTimeOffset.UtcNow;
+                await _db.SaveChangesAsync(cancellationToken);
+                return new MercadoPagoBillingProbeResult(sellerId, IsBillingVerified(grant.CapabilitiesJson),
+                    grant.CapabilityError, grant.LastCapabilityVerifiedAt);
+            }
+
+            var verified = false;
+            if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.PartialContent)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                try
+                {
+                    using var document = JsonDocument.Parse(body);
+                    verified = document.RootElement.ValueKind == JsonValueKind.Object &&
+                        document.RootElement.TryGetProperty("results", out var results) &&
+                        results.ValueKind == JsonValueKind.Array;
+                }
+                catch (JsonException) { }
+            }
+
+            var checkedAt = DateTimeOffset.UtcNow;
+            grant.CapabilitiesJson = JsonSerializer.Serialize(new
+            {
+                billingMercadoPago = verified,
+                oauth = true,
+                verifiedSellerIdentity = true
+            });
+            grant.LastCapabilityVerifiedAt = checkedAt;
+            grant.CapabilityError = verified ? null : $"MP_BILLING_HTTP_{(int)response.StatusCode}";
+            grant.UpdatedAt = checkedAt;
+            await _db.SaveChangesAsync(cancellationToken);
+            return new MercadoPagoBillingProbeResult(sellerId, verified, grant.CapabilityError, checkedAt);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            grant.CapabilityError = "MP_BILLING_PROBE_FAILED";
+            grant.UpdatedAt = DateTimeOffset.UtcNow;
+            await _db.SaveChangesAsync(cancellationToken);
+            return new MercadoPagoBillingProbeResult(sellerId, IsBillingVerified(grant.CapabilitiesJson),
+                grant.CapabilityError, grant.LastCapabilityVerifiedAt);
+        }
+    }
+
+    private async Task<string> GetValidAccessTokenAsync(MarketplaceOAuthGrant grant, CancellationToken cancellationToken)
+    {
+        if (grant.RequiresReauthorization)
+            throw new MercadoPagoReauthorizationRequiredException();
+        if (grant.TokenExpiresAt > DateTimeOffset.UtcNow.AddMinutes(2))
+            return _protector.Unprotect(grant.AccessTokenProtected);
+        if (string.IsNullOrWhiteSpace(grant.RefreshTokenProtected))
+            throw new MercadoPagoReauthorizationRequiredException();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, _options.TokenUrl)
+        {
+            Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["grant_type"] = "refresh_token",
+                ["client_id"] = _options.ClientId,
+                ["client_secret"] = _options.ClientSecret,
+                ["refresh_token"] = _protector.Unprotect(grant.RefreshTokenProtected)
+            })
+        };
+        using var response = await _httpClientFactory.CreateClient("MercadoPagoOAuth")
+            .SendAsync(request, cancellationToken);
+        if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
+            throw new MercadoPagoReauthorizationRequiredException();
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var root = document.RootElement;
+        var userId = ReadLong(root, "user_id");
+        if (userId != grant.SellerId)
+            throw new MercadoPagoReauthorizationRequiredException();
+        var accessToken = ReadRequiredString(root, "access_token");
+        var refreshToken = ReadOptionalString(root, "refresh_token");
+        grant.AccessTokenProtected = _protector.Protect(accessToken);
+        if (!string.IsNullOrWhiteSpace(refreshToken))
+            grant.RefreshTokenProtected = _protector.Protect(refreshToken);
+        grant.TokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(Math.Max(60, ReadLong(root, "expires_in")));
+        grant.UpdatedAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
+        return accessToken;
+    }
+
+    private static bool IsBillingVerified(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("billingMercadoPago", out var value) &&
+                value.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { return false; }
+    }
+
     private async Task<MercadoPagoTokenResponse> ExchangeCodeAsync(string code, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, _options.TokenUrl)
@@ -186,3 +323,5 @@ public sealed class MercadoPagoOAuthService
 }
 
 public sealed record MercadoPagoGrantResult(long SellerId, IReadOnlyList<string> Scopes, DateTimeOffset ConnectedAt);
+public sealed record MercadoPagoBillingProbeResult(long SellerId, bool Verified, string? ErrorCode, DateTimeOffset? CheckedAt);
+internal sealed class MercadoPagoReauthorizationRequiredException : Exception { }
