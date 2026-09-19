@@ -19,6 +19,7 @@ public sealed class MercadoLivreSyncService
     private readonly MarketplaceOrderNumberService _orderNumberService;
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly MarketplaceOrderMappingService _mappingService;
+    private readonly MarketplaceOrderInventoryService _inventoryService;
     private readonly OperationalFinancialProjectionService _financialProjection;
     private readonly MercadoLivreOptions _options;
     private readonly ILogger<MercadoLivreSyncService> _logger;
@@ -31,6 +32,7 @@ public sealed class MercadoLivreSyncService
         MarketplaceOrderNumberService orderNumberService,
         MarketplaceAuditLogService auditLogService,
         MarketplaceOrderMappingService mappingService,
+        MarketplaceOrderInventoryService inventoryService,
         OperationalFinancialProjectionService financialProjection,
         IOptions<MercadoLivreOptions> options,
         ILogger<MercadoLivreSyncService> logger)
@@ -42,6 +44,7 @@ public sealed class MercadoLivreSyncService
         _orderNumberService = orderNumberService;
         _auditLogService = auditLogService;
         _mappingService = mappingService;
+        _inventoryService = inventoryService;
         _financialProjection = financialProjection;
         _options = options.Value;
         _logger = logger;
@@ -551,45 +554,24 @@ public sealed class MercadoLivreSyncService
             orderItem.UpdatedAt = nowUtc;
             itemsTouched++;
 
-            if (string.IsNullOrWhiteSpace(orderItem.SabrVariantSku))
-            {
-                continue;
-            }
-
-            var desiredReservation = incomingItem.Quantity;
-            var currentReservation = Math.Max(0, orderItem.ReservedQuantity);
-            var delta = desiredReservation - currentReservation;
-            if (delta > 0)
-            {
-                var reservation = new StockReservation
-                {
-                    TenantId = connection.TenantId,
-                    ClientId = connection.ClientId,
-                    SabrVariantSku = resolution.SabrVariantSku,
-                    MarketplaceOrderId = order.Id,
-                    MarketplaceOrderItemId = orderItem.Id,
-                    Quantity = delta,
-                    Status = StockReservationStatus.Reserved,
-                    ReservedAt = nowUtc,
-                    ExpiresAt = nowUtc.AddHours(Math.Max(1, _options.ReservationTtlHours))
-                };
-                _dbContext.StockReservations.Add(reservation);
-                reservationsCreated += 1;
-                orderItem.ReservedQuantity = currentReservation + delta;
-
-                var variant = await _dbContext.ProductVariants.FirstOrDefaultAsync(
-                    item => item.VariantSku == resolution.SabrVariantSku,
-                    cancellationToken);
-                if (variant != null)
-                {
-                    variant.ReservedStock += delta;
-                    variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
-                    changedSkus.Add(variant.VariantSku);
-                }
-            }
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        var activeReservationsBefore = await _dbContext.StockReservations.AsNoTracking()
+            .CountAsync(item => item.MarketplaceOrderId == order.Id
+                && item.Status == StockReservationStatus.Reserved, cancellationToken);
+        order.Items = await _dbContext.MarketplaceOrderItems
+            .Where(item => item.MarketplaceOrderId == order.Id).ToListAsync(cancellationToken);
+        var reservedBeforeByItem = order.Items.ToDictionary(item => item.Id, item => item.ReservedQuantity);
+        await _inventoryService.ReconcileReservationsAsync(order, connection.SellerId,
+            _options.ReservationTtlHours, cancellationToken);
+        var activeReservationsAfter = await _dbContext.StockReservations.AsNoTracking()
+            .CountAsync(item => item.MarketplaceOrderId == order.Id
+                && item.Status == StockReservationStatus.Reserved, cancellationToken);
+        reservationsCreated = Math.Max(0, activeReservationsAfter - activeReservationsBefore);
+        foreach (var item in order.Items.Where(item => !string.IsNullOrWhiteSpace(item.SabrVariantSku)
+                     && item.ReservedQuantity != reservedBeforeByItem.GetValueOrDefault(item.Id)))
+            changedSkus.Add(item.SabrVariantSku!);
 
         if (createdOrder)
         {

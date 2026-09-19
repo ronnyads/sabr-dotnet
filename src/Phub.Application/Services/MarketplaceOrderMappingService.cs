@@ -648,7 +648,7 @@ public sealed class MarketplaceOrderMappingService
 
         var manualMapping = await _dbContext.TenantMarketplaceListingMaps
             .AsNoTracking()
-            .FirstOrDefaultAsync(
+            .Where(
                 item => item.TenantId == tenantId
                         && item.ClientId == clientId
                         && item.Provider == provider
@@ -656,8 +656,11 @@ public sealed class MarketplaceOrderMappingService
                         && item.SellerId == sellerId
                         && item.MlItemId == normalizedItemId
                         && item.MlVariationId == normalizedVariationId
-                        && (!integrationId.HasValue || item.IntegrationId == integrationId.Value),
-                cancellationToken);
+                        && (integrationId.HasValue
+                            ? item.IntegrationId == integrationId.Value || item.IntegrationId == null
+                            : item.IntegrationId == null))
+            .OrderByDescending(item => item.IntegrationId == integrationId)
+            .FirstOrDefaultAsync(cancellationToken);
 
         if (manualMapping != null)
         {

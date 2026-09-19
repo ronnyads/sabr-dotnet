@@ -126,6 +126,17 @@ public sealed class MarketplaceOrderInventoryService
         CancellationToken cancellationToken)
     {
         var nowUtc = DateTimeOffset.UtcNow;
+        var terminalOrder = order.Status?.Trim().ToLowerInvariant() is "shipped" or "delivered" or "cancelled" or "refunded";
+        var terminalShipment = !string.IsNullOrWhiteSpace(order.ShipmentId)
+            && await _dbContext.MarketplaceShipments.AsNoTracking().AnyAsync(shipment =>
+                shipment.TenantId == order.TenantId && shipment.ClientId == order.ClientId
+                && shipment.Provider == order.Provider && shipment.SellerId == sellerId
+                && shipment.ShipmentId == order.ShipmentId
+                && (shipment.ShippedAt.HasValue || shipment.Status == "shipped"
+                    || shipment.Status == "delivered" || shipment.Status == "returned"
+                    || shipment.Status == "cancelled" || shipment.Status == "not_delivered"),
+                cancellationToken);
+        var holdInventory = !terminalOrder && !terminalShipment;
         var items = order.Items.ToList();
         var itemIds = items.Select(item => item.Id).ToList();
         var reservations = itemIds.Count == 0
@@ -209,7 +220,7 @@ public sealed class MarketplaceOrderInventoryService
                 }
             }
 
-            var desiredReservation = MarketplaceMappingStates.IsMapped(item.MappingState)
+            var desiredReservation = holdInventory && MarketplaceMappingStates.IsMapped(item.MappingState)
                                      && !string.IsNullOrWhiteSpace(item.SabrVariantSku)
                 ? Math.Max(0, item.Quantity)
                 : 0;

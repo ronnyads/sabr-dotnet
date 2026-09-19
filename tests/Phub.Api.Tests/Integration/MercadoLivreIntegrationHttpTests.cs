@@ -229,6 +229,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
         await SeedVariantAsync(baseSku, variantSku, physicalStock: 10, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
         await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, "ITEM-ML-03", null, variantSku);
 
         _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = new List<string> { "ORDER-ML-03" };
@@ -267,7 +268,67 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var variant = await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku);
         Assert.Equal(10, variant.PhysicalStock);
         Assert.Equal(2, variant.ReservedStock);
-        Assert.Equal(8, variant.AvailableStock);
+        Assert.Equal(6, variant.AvailableStock);
+    }
+
+    [Fact]
+    public async Task SyncNow_DeliveredShipmentReleasesReservationAndDoesNotRecreateIt()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-delivered-stock";
+        const string tenantSlug = "mldeliveredstock";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001099";
+        const string variantSku = "SKU-VAR-ML-DELIVERED";
+        const string orderId = "ORDER-ML-DELIVERED";
+        const string shipmentId = "SHIPMENT-ML-DELIVERED";
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync("SKU-BASE-ML-DELIVERED", variantSku, physicalStock: 10, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync("SKU-BASE-ML-DELIVERED");
+        await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, "ITEM-ML-DELIVERED", null, variantSku);
+        _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = new List<string> { orderId };
+        _factory.FakeMercadoLivreApiClient.OrdersById[orderId] = new MercadoLivreOrderDetails
+        {
+            MlOrderId = orderId, Status = "paid", ShipmentId = shipmentId,
+            Items = new List<MercadoLivreOrderItemDetails>
+            {
+                new() { MlItemId = "ITEM-ML-DELIVERED", Quantity = 2, RawJson = "{}" }
+            },
+            RawJson = "{}"
+        };
+        _factory.FakeMercadoLivreApiClient.ShipmentsById[shipmentId] = new MercadoLivreShipmentDetails
+        {
+            ShipmentId = shipmentId, Status = "ready_to_ship"
+        };
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        Assert.Equal(HttpStatusCode.Accepted,
+            (await client.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId })).StatusCode);
+        await DrainFinancialSyncJobsAsync();
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(2, (await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku)).ReservedStock);
+        }
+
+        _factory.FakeMercadoLivreApiClient.ShipmentsById[shipmentId] = new MercadoLivreShipmentDetails
+        {
+            ShipmentId = shipmentId, Status = "delivered", ShippedAt = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+        Assert.Equal(HttpStatusCode.Accepted,
+            (await client.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId })).StatusCode);
+        await DrainFinancialSyncJobsAsync();
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var variant = await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku);
+            Assert.Equal(0, variant.ReservedStock);
+            Assert.Equal(8, variant.AvailableStock);
+            Assert.Equal(0, (await db.MarketplaceOrderItems.SingleAsync()).ReservedQuantity);
+            Assert.Equal(0, await db.StockReservations.CountAsync(item => item.Status == StockReservationStatus.Reserved));
+        }
     }
 
     [Fact]
