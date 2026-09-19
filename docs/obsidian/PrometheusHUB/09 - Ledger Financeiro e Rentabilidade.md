@@ -38,6 +38,8 @@ Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da op
 - Webhook permanece primário.
 - O catch-up operacional de até 365 dias é particionado em chunks de no máximo 31 dias.
 - Cada chunk possui checkpoint, dedupe key, tentativas, lease e retomada durável.
+- A execução de um chunk avança no máximo um dia por tentativa. O checkpoint só avança após persistir a sincronização desse dia; uma interrupção repete apenas o dia incompleto. Timeout HTTP sem cancelamento do worker gera `RETRY`, não deixa o chunk em `RUNNING`.
+- Um `RUNNING` com lease vencido pode ser reclamado por outro worker. `lockedBy` e `leaseUntil` identificam a tentativa ativa; nunca limpar manualmente o lease de uma tentativa ainda viva.
 - A aquisição PostgreSQL usa `FOR UPDATE SKIP LOCKED`; a chamada HTTP ocorre fora da transação.
 - Retentativas usam backoff exponencial com full jitter.
 - Billing é processado sequencialmente por seller, grupo e período, preservando `from_id`; respostas parciais e rate limit não viram zero confirmado.
@@ -65,4 +67,5 @@ As migrações são aditivas. Ativar primeiro em shadow mode, auditar grants sep
 - Registrar exatamente o mesmo redirect URI na aplicação Mercado Pago correta. O cliente inicia em Integrações → Mercado Livre → Conectar Mercado Pago.
 - O callback exige que o `user_id` autorizado corresponda ao seller de uma conexão ML do mesmo tenant/cliente. O grant é armazenado criptografado em `MarketplaceOAuthGrant` com `AppFamily=MERCADO_PAGO`.
 - `Conta autorizada` significa somente que o OAuth concluiu. `billingMercadoPago` continua falso até um probe real dos recursos Billing e a conciliação; o dashboard não deve chamar valores estimados de confirmados.
+- `PA_UNAUTHORIZED_RESULT_FROM_POLICIES` no probe indica que o provider negou a consulta de Billing apesar do OAuth válido. Conferir a permissão funcional de Faturamento na aplicação correta, renovar a autorização e repetir o probe. Não converter essa falha em valor confirmado zero.
 - Ao trocar o segredo da aplicação, revisar grants e solicitar nova autorização. Não reutilizar grants de outro aplicativo.
