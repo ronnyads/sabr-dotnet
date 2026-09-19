@@ -158,6 +158,9 @@ builder.Services.AddOptions<TikTokShopOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.Configure<MercadoPagoOptions>(
+    builder.Configuration.GetSection(MercadoPagoOptions.SectionName));
+
 builder.Services.AddOptions<ShopeeOptions>()
     .Bind(builder.Configuration.GetSection(ShopeeOptions.SectionName))
     .ValidateDataAnnotations()
@@ -356,6 +359,7 @@ builder.Services.AddScoped<SupplierWithdrawalService>();
 builder.Services.AddScoped<AdminSupplierService>();
 builder.Services.AddScoped<PlatformFinancialConfigService>();
 builder.Services.AddScoped<MercadoLivreOAuthService>();
+builder.Services.AddScoped<MercadoPagoOAuthService>();
 builder.Services.AddScoped<MercadoLivreMappingService>();
 builder.Services.AddScoped<MercadoLivreIntegrationService>();
 builder.Services.AddScoped<MercadoLivreSyncService>();
@@ -489,6 +493,10 @@ builder.Services.AddHttpClient<IShopeeApiClient, ShopeeApiClient>((sp, client) =
 {
     var options = sp.GetRequiredService<IOptions<ShopeeOptions>>().Value;
     client.BaseAddress = new Uri(options.ApiBaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddHttpClient("MercadoPagoOAuth", client =>
+{
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 builder.Services.AddScoped<ShopeeOAuthService>();

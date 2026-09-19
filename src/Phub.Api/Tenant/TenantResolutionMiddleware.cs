@@ -22,7 +22,8 @@ public sealed class TenantResolutionMiddleware
             return;
         }
 
-        if (path.StartsWith("/api/v1/client/integrations/mercadolivre/callback", StringComparison.OrdinalIgnoreCase))
+        if (path.StartsWith("/api/v1/client/integrations/mercadolivre/callback", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("/api/v1/client/integrations/mercadopago/callback", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context);
             return;

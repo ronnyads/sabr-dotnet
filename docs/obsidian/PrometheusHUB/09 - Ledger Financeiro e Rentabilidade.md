@@ -57,3 +57,12 @@ Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da op
 ## Rollout e recuperação
 
 As migrações são aditivas. Ativar primeiro em shadow mode, auditar grants separados do Mercado Livre e Mercado Pago e validar manualmente a amostra do seller piloto. Qualquer centavo sem causa identificada bloqueia o rollout. Em incidente, pausar consumidores financeiros; o fluxo operacional de pedidos continua independente e as filas retomam do checkpoint.
+
+## Autorização Mercado Pago (preparação)
+
+- Aplicação separada da integração Mercado Livre; nunca reutilizar o token ML como se fosse MP.
+- Configurar `MercadoPago__ClientId`, `MercadoPago__ClientSecret`, `MercadoPago__RedirectUri=https://api.marketplaceonline.site/api/v1/client/integrations/mercadopago/callback` e `MercadoPago__ClientPortalBaseUrl=https://app.marketplaceonline.site` como secrets do backend. Não registrar valores secretos neste vault ou no Git.
+- Registrar exatamente o mesmo redirect URI na aplicação Mercado Pago correta. O cliente inicia em Integrações → Mercado Livre → Conectar Mercado Pago.
+- O callback exige que o `user_id` autorizado corresponda ao seller de uma conexão ML do mesmo tenant/cliente. O grant é armazenado criptografado em `MarketplaceOAuthGrant` com `AppFamily=MERCADO_PAGO`.
+- `Conta autorizada` significa somente que o OAuth concluiu. `billingMercadoPago` continua falso até um probe real dos recursos Billing e a conciliação; o dashboard não deve chamar valores estimados de confirmados.
+- Ao trocar o segredo da aplicação, revisar grants e solicitar nova autorização. Não reutilizar grants de outro aplicativo.

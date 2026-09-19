@@ -1044,6 +1044,15 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task MercadoPagoCallback_WithoutState_RedirectsBeforeTenantResolution()
+    {
+        using var anonymousClient = _factory.CreateAnonymousClientWithoutRedirect("http://localhost");
+        var response = await anonymousClient.GetAsync("/api/v1/client/integrations/mercadopago/callback");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Contains("mp=missing_code_or_state", response.Headers.Location!.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task SellerListings_ReturnsSelectableVariationsFromAuthorizedConnection()
     {
         await _factory.ResetDatabaseAsync();

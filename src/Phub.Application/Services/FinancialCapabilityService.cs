@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Enums;
@@ -24,7 +25,10 @@ public sealed class FinancialCapabilityService
             var result = new FinancialCapabilityResult { SellerId = connection.SellerId, Orders = true, Shipments = true, Discounts = true };
             var sellerGrants = grants.Where(x => x.SellerId == connection.SellerId).ToList();
             result.BillingMercadoLivre = sellerGrants.Any(x => x.AppFamily == "MERCADO_LIVRE" && !x.RequiresReauthorization);
-            result.BillingMercadoPago = sellerGrants.Any(x => x.AppFamily == "MERCADO_PAGO" && !x.RequiresReauthorization);
+            result.BillingMercadoPago = sellerGrants.Any(x => x.AppFamily == "MERCADO_PAGO" &&
+                !x.RequiresReauthorization && x.TokenExpiresAt > DateTimeOffset.UtcNow &&
+                x.LastCapabilityVerifiedAt.HasValue &&
+                IsBillingVerified(x.CapabilitiesJson));
             result.VerifiedAt = sellerGrants.MaxBy(x => x.LastCapabilityVerifiedAt)?.LastCapabilityVerifiedAt;
             if (probe)
             {
@@ -45,5 +49,17 @@ public sealed class FinancialCapabilityService
             results.Add(result);
         }
         return results;
+    }
+
+    private static bool IsBillingVerified(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("billingMercadoPago", out var value) &&
+                value.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { return false; }
     }
 }
