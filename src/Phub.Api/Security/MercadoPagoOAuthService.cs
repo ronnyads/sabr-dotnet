@@ -70,12 +70,12 @@ public sealed class MercadoPagoOAuthService
         if (token.UserId <= 0)
             throw new InvalidOperationException("MP_SELLER_NOT_RESOLVED");
 
-        var linkedSeller = await _db.TenantMarketplaceConnections.AsNoTracking().AnyAsync(x =>
+        var linkedSellerIds = await _db.TenantMarketplaceConnections.AsNoTracking().Where(x =>
             x.TenantId == tenantId && x.ClientId == clientId &&
-            x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == token.UserId,
-            cancellationToken);
-        if (!linkedSeller)
-            throw new InvalidOperationException("MP_SELLER_MISMATCH");
+            x.Provider == MarketplaceProvider.MercadoLivre)
+            .Select(x => x.SellerId).Distinct().ToListAsync(cancellationToken);
+        if (!linkedSellerIds.Contains(token.UserId))
+            throw new MercadoPagoSellerMismatchException(token.UserId, linkedSellerIds);
 
         var now = DateTimeOffset.UtcNow;
         var grant = await _db.MarketplaceOAuthGrants.FirstOrDefaultAsync(x =>
@@ -345,3 +345,15 @@ public sealed class MercadoPagoOAuthService
 public sealed record MercadoPagoGrantResult(long SellerId, IReadOnlyList<string> Scopes, DateTimeOffset ConnectedAt);
 public sealed record MercadoPagoBillingProbeResult(long SellerId, bool Verified, string? ErrorCode, DateTimeOffset? CheckedAt);
 internal sealed class MercadoPagoReauthorizationRequiredException : Exception { }
+internal sealed class MercadoPagoSellerMismatchException : Exception
+{
+    public MercadoPagoSellerMismatchException(long authorizedUserId, IReadOnlyCollection<long> expectedSellerIds)
+        : base("MP_SELLER_MISMATCH")
+    {
+        AuthorizedUserId = authorizedUserId;
+        ExpectedSellerIds = expectedSellerIds;
+    }
+
+    public long AuthorizedUserId { get; }
+    public IReadOnlyCollection<long> ExpectedSellerIds { get; }
+}

@@ -104,8 +104,11 @@ public sealed class ClientMercadoPagoIntegrationController : ControllerBase
             await _oauth.HandleCallbackAsync(payload.TenantId, payload.ClientId, code, cancellationToken);
             return Redirect(BuildClientRedirect(AppendQuery(payload.ReturnUrl, "mp", "connected")));
         }
-        catch (InvalidOperationException ex) when (ex.Message == "MP_SELLER_MISMATCH")
+        catch (MercadoPagoSellerMismatchException ex)
         {
+            _logger.LogWarning(
+                "Mercado Pago OAuth seller mismatch. tenantId={TenantId} clientId={ClientId} authorizedUserId={AuthorizedUserId} expectedSellerIds={ExpectedSellerIds}",
+                payload.TenantId, payload.ClientId, ex.AuthorizedUserId, string.Join(',', ex.ExpectedSellerIds));
             return Redirect(BuildClientRedirect(AppendQuery(payload.ReturnUrl, "mp", "seller_mismatch")));
         }
         catch (Exception ex)
