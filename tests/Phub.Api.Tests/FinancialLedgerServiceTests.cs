@@ -98,6 +98,92 @@ public sealed class FinancialLedgerServiceTests
         Assert.Equal(0, result.Coverage.ItemAllocationPercent);
     }
 
+    [Fact]
+    public async Task Profitability_DivergenceOnlyCountsKeysWithBothEstimateAndConfirmation()
+    {
+        // Regressão do achado 2.6 da auditoria: uma confirmação sem estimativa prévia
+        // (ou vice-versa) não pode virar divergência total, conforme a regra do plano
+        // ("falta de confirmação não equivale a diferença negativa"). componentDeltas
+        // já respeitava isso; os totais do topo (AbsoluteCents) não respeitavam.
+        await using var db = CreateDb();
+        var tenant = "tenant-finance-pairing";
+        var client = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenant, ClientId = client, Provider = MarketplaceProvider.MercadoLivre, SellerId = 992,
+            MlOrderId = "ORDER-PAIRING", Status = "paid", PaidAt = DateTimeOffset.UtcNow.AddDays(-1), ImportedAt = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+        var ledger = new FinancialLedgerService(db);
+
+        // Paired key: estimated -450, confirmed -500 => delta -50. This is the only
+        // amount the top-level divergence should reflect.
+        var pairedEstimated = CreateRequest(FinancialEntryTypes.Refund, -450, "pair-est", FinancialEntryStatuses.Estimated, tenant, client, order.Id, 992);
+        pairedEstimated.EconomicKey = "ML:992:PAYMENT:1:REFUND:1";
+        await ledger.AppendAsync(pairedEstimated);
+        var pairedConfirmed = CreateRequest(FinancialEntryTypes.Refund, -500, "pair-conf", FinancialEntryStatuses.Confirmed, tenant, client, order.Id, 992);
+        pairedConfirmed.EconomicKey = pairedEstimated.EconomicKey;
+        pairedConfirmed.Layer = FinancialLayers.Reconciled;
+        pairedConfirmed.FinancialConfirmedAt = DateTimeOffset.UtcNow;
+        await ledger.AppendAsync(pairedConfirmed);
+
+        // Unpaired: a confirmed fee with no prior estimate at all (different economic
+        // key). Before the fix, its full -1000 would be folded into confirmedTotal and
+        // therefore into AbsoluteCents, even though there is nothing to compare it to.
+        var unpairedConfirmed = CreateRequest(FinancialEntryTypes.SaleFee, -1000, "unpaired-conf", FinancialEntryStatuses.Confirmed, tenant, client, order.Id, 992);
+        unpairedConfirmed.EconomicKey = "ML:992:PAYMENT:1:FEE:1";
+        unpairedConfirmed.Layer = FinancialLayers.Reconciled;
+        unpairedConfirmed.FinancialConfirmedAt = DateTimeOffset.UtcNow;
+        await ledger.AppendAsync(unpairedConfirmed);
+
+        var result = await new FinancialProfitabilityService(db).GetAsync(tenant, client,
+            DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow, MarketplaceProvider.MercadoLivre, 992);
+
+        Assert.Equal(-50, result.Divergence.AbsoluteCents);
+        Assert.False(result.Divergence.ComponentsCents.ContainsKey("commission"));
+    }
+
+    [Fact]
+    public async Task Profitability_KeepsTotalsInOneCurrency_WhenEntriesAreMixed()
+    {
+        // Regressão do achado 2.6 da auditoria: somar AmountCents entre moedas
+        // diferentes produz um número sem sentido. Os totais devem ficar restritos à
+        // mesma moeda dominante que o próprio CurrencyId da resposta.
+        await using var db = CreateDb();
+        var tenant = "tenant-finance-currency";
+        var client = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenant, ClientId = client, Provider = MarketplaceProvider.MercadoLivre, SellerId = 993,
+            MlOrderId = "ORDER-CURRENCY", Status = "paid", PaidAt = DateTimeOffset.UtcNow.AddDays(-1), ImportedAt = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+        var ledger = new FinancialLedgerService(db);
+
+        var brlSale = CreateRequest(FinancialEntryTypes.GrossSale, 10_000, "brl-sale", FinancialEntryStatuses.Confirmed, tenant, client, order.Id, 993);
+        brlSale.EconomicKey = "ML:993:PAYMENT:1:GROSS:1";
+        brlSale.Layer = FinancialLayers.Reconciled;
+        brlSale.FinancialConfirmedAt = DateTimeOffset.UtcNow;
+        brlSale.CurrencyId = "BRL";
+        await ledger.AppendAsync(brlSale);
+
+        var usdSale = CreateRequest(FinancialEntryTypes.GrossSale, 5_000, "usd-sale", FinancialEntryStatuses.Confirmed, tenant, client, order.Id, 993);
+        usdSale.EconomicKey = "ML:993:PAYMENT:2:GROSS:1";
+        usdSale.Layer = FinancialLayers.Reconciled;
+        usdSale.FinancialConfirmedAt = DateTimeOffset.UtcNow;
+        usdSale.CurrencyId = "USD";
+        await ledger.AppendAsync(usdSale);
+
+        var result = await new FinancialProfitabilityService(db).GetAsync(tenant, client,
+            DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow, MarketplaceProvider.MercadoLivre, 993);
+
+        var expected = result.CurrencyId == "BRL" ? 10_000 : 5_000;
+        Assert.Equal(expected, result.GrossRevenueCents);
+        Assert.NotEqual(15_000, result.GrossRevenueCents);
+    }
+
     private static AppendFinancialEntryRequest CreateRequest(string type, long cents, string idempotency, string status,
         string tenant = "tenant", Guid? client = null, Guid? order = null, long seller = 10) => new()
     {

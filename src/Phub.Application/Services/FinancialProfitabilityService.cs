@@ -62,7 +62,16 @@ public sealed class FinancialProfitabilityService
             .GroupBy(x => x.EconomicKey).ToDictionary(x => x.Key, x => x.OrderByDescending(e => e.ObservedAt).First());
         var confirmedByKey = allEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed)
             .GroupBy(x => x.EconomicKey).ToDictionary(x => x.Key, x => x.OrderByDescending(e => e.FinancialConfirmedAt).First());
+        // Divergence is only meaningful between an estimate and its matching
+        // confirmation. Summing every key present in either dictionary (regardless of
+        // whether it has both sides) would count a not-yet-confirmed estimate, or a
+        // confirmation with no prior estimate, as if it were a full divergence — the
+        // plan explicitly forbids this ("falta de confirmação não equivale a diferença
+        // negativa"). componentDeltas already restricts to paired keys; the totals now
+        // do too, so AbsoluteCents stays consistent with the sum of ComponentsCents.
         var componentDeltas = new Dictionary<string, long>(StringComparer.Ordinal);
+        long estimatedTotal = 0;
+        long confirmedTotal = 0;
         foreach (var key in estimatedByKey.Keys.Union(confirmedByKey.Keys))
         {
             estimatedByKey.TryGetValue(key, out var estimated);
@@ -70,18 +79,25 @@ public sealed class FinancialProfitabilityService
             if (estimated == null || confirmed == null) continue;
             var component = ToComponent(confirmed.EntryType);
             componentDeltas[component] = componentDeltas.GetValueOrDefault(component) + confirmed.AmountCents - estimated.AmountCents;
+            estimatedTotal += estimated.AmountCents;
+            confirmedTotal += confirmed.AmountCents;
         }
 
-        var estimatedTotal = estimatedByKey.Values.Sum(x => x.AmountCents);
-        var confirmedTotal = confirmedByKey.Values.Sum(x => x.AmountCents);
         var delta = confirmedTotal - estimatedTotal;
         var count = states.Count;
         var taxRate = await ResolveTaxRateAsync(tenantId, clientId, sellerId, rangeTo, cancellationToken);
-        var gross = activeEntries.Where(x => x.EntryType == FinancialEntryTypes.GrossSale).Sum(x => x.AmountCents);
-        var externalNet = activeEntries.Where(x => x.EntryType is not FinancialEntryTypes.ProductCost
+        // Every total below must stay in one currency: activeEntries can in principle
+        // span sellers/providers with different currencies, and summing AmountCents
+        // across currencies would produce a meaningless number. The API surfaces a
+        // single CurrencyId per response, so totals are scoped to that same dominant
+        // currency rather than silently mixing units.
+        var dominantCurrencyId = activeEntries.Select(x => x.CurrencyId).FirstOrDefault() ?? "BRL";
+        var sameCurrencyEntries = activeEntries.Where(x => x.CurrencyId == dominantCurrencyId).ToList();
+        var gross = sameCurrencyEntries.Where(x => x.EntryType == FinancialEntryTypes.GrossSale).Sum(x => x.AmountCents);
+        var externalNet = sameCurrencyEntries.Where(x => x.EntryType is not FinancialEntryTypes.ProductCost
                                                    and not FinancialEntryTypes.ProductCostRecovery
                                                    and not FinancialEntryTypes.SellerTaxEstimate).Sum(x => x.AmountCents);
-        var productCost = activeEntries.Where(x => x.EntryType is FinancialEntryTypes.ProductCost or FinancialEntryTypes.ProductCostRecovery)
+        var productCost = sameCurrencyEntries.Where(x => x.EntryType is FinancialEntryTypes.ProductCost or FinancialEntryTypes.ProductCostRecovery)
             .Sum(x => x.AmountCents);
         var profit = externalNet + productCost;
         var tax = taxRate <= 0 ? 0L : -checked((long)Math.Round(gross * taxRate / 10_000m, MidpointRounding.AwayFromZero));
@@ -101,11 +117,11 @@ public sealed class FinancialProfitabilityService
             GeneratedAt = now,
             LastOperationalSyncAt = lastOperational,
             LastBillingSyncAt = lastBilling,
-            CurrencyId = activeEntries.Select(x => x.CurrencyId).FirstOrDefault() ?? "BRL",
+            CurrencyId = dominantCurrencyId,
             Maturity = AggregateMaturity(states),
             GrossRevenueCents = gross,
             EstimatedEconomicNetCents = externalNet,
-            ReconciledConfirmedValueCents = activeEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents),
+            ReconciledConfirmedValueCents = sameCurrencyEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents),
             OperationalProfitCents = profit,
             SellerReportedEstimatedTaxCents = tax,
             ProfitAfterSellerTaxEstimateCents = profit + tax,

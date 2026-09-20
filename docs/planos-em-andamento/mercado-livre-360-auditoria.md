@@ -68,10 +68,12 @@ O serviço já processa por tópico/recurso específico (melhor do que o apêndi
 
 **Limitação:** não adicionei teste de integração em C# para o reclaim de eventos travados (não havia nenhum teste de webhook existente no arquivo, e montar o cenário completo — ingest, validação de recurso via cliente fake, sync — exigiria bastante andaime novo que não consigo compilar para checar). A validação ficou no nível do SQL do guard, que é exatamente o mesmo executado em produção no provider relacional.
 
-### 2.6 Médio — `FinancialProfitabilityService`: soma entre moedas e divergência global não pareada
+### 2.6 [CORRIGIDO em 20/09/2026] Médio — `FinancialProfitabilityService`: soma entre moedas e divergência global não pareada
 
 - `gross`, `externalNet`, `productCost` (e portanto `profit`) somam `AmountCents` de todas as `activeEntries` sem agrupar por `CurrencyId` — se um seller tiver entradas em moedas diferentes, os totais viram uma mistura sem sentido.
 - `Divergence.AbsoluteCents` é `sum(confirmedTotal) - sum(estimatedTotal)` calculado sobre **todas** as entradas estimadas/confirmadas, não apenas as chaves econômicas que têm os dois lados. Isso contraria a regra do plano: "Calcular divergência apenas entre estimativa e confirmação correspondentes. Falta de confirmação não equivale a diferença negativa." (O `componentDeltas`, usado só para o detalhamento por componente, já faz o pareamento certo — o total exibido no topo, não.)
+
+**Evidência da correção (20/09/2026):** `estimatedTotal`/`confirmedTotal` agora são acumulados dentro do mesmo laço que já monta `componentDeltas`, somando `AmountCents` apenas quando a chave econômica tem estimativa **e** confirmação ao mesmo tempo — a mesma regra de pareamento que o detalhamento por componente já aplicava. Além disso, `gross`, `externalNet`, `productCost`, `ReconciledConfirmedValueCents` e o `CurrencyId` retornado agora derivam de `sameCurrencyEntries` (as `activeEntries` filtradas pela `dominantCurrencyId` — a moeda da primeira entrada, mesma regra que já definia o `CurrencyId` da resposta), em vez de somar `AmountCents` de todas as moedas juntas. Dois testes novos em `tests/Phub.Api.Tests/FinancialLedgerServiceTests.cs`: `Profitability_DivergenceOnlyCountsKeysWithBothEstimateAndConfirmation` (confirma que uma confirmação sem estimativa pareada não entra em `AbsoluteCents`, e que o componente correspondente nem aparece em `ComponentsCents`) e `Profitability_KeepsTotalsInOneCurrency_WhenEntriesAreMixed` (duas vendas confirmadas em moedas diferentes; `GrossRevenueCents` reflete só a moeda dominante, nunca a soma das duas). Ambos usam `AppDbContext` InMemory isolado por teste (`CreateDb()`), sem risco de vazamento entre testes.
 
 ### 2.7 Baixo/Médio — `MercadoLivreCatalogImportService.ImportAsync`: `ItemIds` vazio ainda pode selecionar tudo
 
@@ -110,7 +112,7 @@ Por risco decrescente:
 3. ~~Compare-and-set de lease no `FinancialSyncJobService` (2.3)~~ — **corrigido em 20/09/2026**, ver evidência acima.
 4. ~~Revalidação de mapping no `StockAvailabilityService.ProcessStockJobAsync` (2.4)~~ — **corrigido em 20/09/2026**, sem teste automatizado (ver evidência acima).
 5. ~~Lease/heartbeat no webhook (2.5, item b)~~ — **corrigido em 20/09/2026**. Sincronização pontual (item a) segue pendente, ver evidência acima.
-6. Segregação de moeda e divergência pareada no `FinancialProfitabilityService` (2.6).
+6. ~~Segregação de moeda e divergência pareada no `FinancialProfitabilityService` (2.6)~~ — **corrigido em 20/09/2026**, ver evidência acima.
 7. Validação de `ItemIds` na importação de catálogo (2.7).
 
 Cada item seria implementado como incremento verificável isolado, com teste e evidência, atualizando esta auditoria e as notas do Obsidian afetadas, conforme o próprio plano exige.
