@@ -71,6 +71,27 @@ public sealed class FinancialCapabilityServiceTests
         Assert.Contains("BILLING_ML_GRANT_REQUIRED", result.Pending);
     }
 
+    [Fact]
+    public async Task BillingMl_RateLimitEnforcesFiveMinuteProbeCooldown()
+    {
+        await using var db = NewDb();
+        var connection = NewConnection();
+        db.TenantMarketplaceConnections.Add(connection);
+        await db.SaveChangesAsync();
+        var api = new FakeMercadoLivreApiClient();
+        api.UserMeResponse.SellerId = connection.SellerId.ToString();
+        var service = NewService(db, api);
+
+        api.BillingProbeResponse = new FinancialBillingProbeResponse(false, true, "ML_BILLING_RATE_LIMITED");
+        await service.GetAsync(connection.TenantId, connection.ClientId, true, default);
+        api.BillingProbeResponse = new FinancialBillingProbeResponse(true, false, null);
+        var result = (await service.GetAsync(connection.TenantId, connection.ClientId, true, default)).Single();
+
+        Assert.Equal(1, api.BillingProbeCalls);
+        Assert.False(result.BillingMercadoLivre);
+        Assert.Contains("ML_BILLING_RATE_LIMITED", result.Pending);
+    }
+
     private static AppDbContext NewDb() => new(new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase($"financial-capabilities-{Guid.NewGuid():N}").Options);
 

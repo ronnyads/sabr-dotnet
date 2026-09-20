@@ -58,13 +58,22 @@ public sealed class FinancialCapabilityService
                     if (identityMatches)
                     {
                         FinancialBillingProbeResponse billing;
-                        try
+                        var billingProbeSkippedForCooldown = mlGrant?.CapabilityError == "ML_BILLING_RATE_LIMITED" &&
+                            mlGrant.UpdatedAt > DateTimeOffset.UtcNow.AddMinutes(-5);
+                        if (billingProbeSkippedForCooldown)
                         {
-                            billing = await _api.ProbeBillingPeriodsAsync(token, ct);
+                            billing = new FinancialBillingProbeResponse(false, true, "ML_BILLING_RATE_LIMITED");
                         }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        else
                         {
-                            billing = new FinancialBillingProbeResponse(false, true, "ML_BILLING_PROBE_FAILED");
+                            try
+                            {
+                                billing = await _api.ProbeBillingPeriodsAsync(token, ct);
+                            }
+                            catch (Exception ex) when (ex is not OperationCanceledException)
+                            {
+                                billing = new FinancialBillingProbeResponse(false, true, "ML_BILLING_PROBE_FAILED");
+                            }
                         }
                         mlGrant ??= new Phub.Domain.Entities.MarketplaceOAuthGrant
                         {
@@ -76,22 +85,25 @@ public sealed class FinancialCapabilityService
                             _db.MarketplaceOAuthGrants.Add(mlGrant);
                             sellerGrants.Add(mlGrant);
                         }
-                        if (!billing.TransientFailure)
+                        if (!billingProbeSkippedForCooldown && !billing.TransientFailure)
                         {
                             mlGrant.CapabilitiesJson = JsonSerializer.Serialize(new { billingMercadoLivre = billing.Verified });
                             mlGrant.LastCapabilityVerifiedAt = DateTimeOffset.UtcNow;
                             result.BillingMercadoLivre = billing.Verified;
                         }
-                        mlGrant.CapabilityError = billing.ErrorCode;
-                        mlGrant.UpdatedAt = DateTimeOffset.UtcNow;
-                        await _db.SaveChangesAsync(ct);
-                        if (!billing.Verified)
+                        if (!billingProbeSkippedForCooldown)
                         {
-                            _logger?.LogWarning(
-                                "Mercado Livre Billing capability probe did not verify access. sellerId={SellerId} errorCode={ErrorCode} transient={TransientFailure}",
-                                connection.SellerId,
-                                billing.ErrorCode,
-                                billing.TransientFailure);
+                            mlGrant.CapabilityError = billing.ErrorCode;
+                            mlGrant.UpdatedAt = DateTimeOffset.UtcNow;
+                            await _db.SaveChangesAsync(ct);
+                            if (!billing.Verified)
+                            {
+                                _logger?.LogWarning(
+                                    "Mercado Livre Billing capability probe did not verify access. sellerId={SellerId} errorCode={ErrorCode} transient={TransientFailure}",
+                                    connection.SellerId,
+                                    billing.ErrorCode,
+                                    billing.TransientFailure);
+                            }
                         }
                         if (billing.TransientFailure) result.Pending.Add(billing.ErrorCode!);
                     }

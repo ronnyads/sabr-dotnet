@@ -30,8 +30,12 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         Nickname = "seller-test"
     };
     public FinancialBillingProbeResponse BillingProbeResponse { get; set; } = new(false, false, "ML_BILLING_HTTP_403");
+    public int BillingProbeCalls { get; private set; }
     public Task<FinancialBillingProbeResponse> ProbeBillingPeriodsAsync(string accessToken, CancellationToken cancellationToken = default)
-        => Task.FromResult(BillingProbeResponse);
+    {
+        BillingProbeCalls++;
+        return Task.FromResult(BillingProbeResponse);
+    }
 
     public Dictionary<string, List<string>> SearchOrdersBySeller { get; } = new(StringComparer.Ordinal);
     public List<MercadoLivreSellerItemDetails> SellerItems { get; } = new();
@@ -369,6 +373,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
             SellerId = "1000001",
             Nickname = "seller-test"
         };
+        BillingProbeCalls = 0;
         SearchOrdersBySeller.Clear();
         SellerItems.Clear();
         OrdersById.Clear();
