@@ -367,6 +367,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
             Nickname = "seller-test"
         };
         SearchOrdersBySeller.Clear();
+        SellerItems.Clear();
         OrdersById.Clear();
         ShipmentsById.Clear();
         ShipmentLabelsById.Clear();
