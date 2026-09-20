@@ -8,6 +8,16 @@ public sealed class MercadoLivreCatalogImportRequest
     public long? CatalogPriceCents { get; set; }
     public bool PreviewOnly { get; set; }
     public string[] ItemIds { get; set; } = [];
+    public MercadoLivreCatalogSkuAssignment[] SkuAssignments { get; set; } = [];
+}
+
+public sealed class MercadoLivreCatalogSkuAssignment
+{
+    public string ItemId { get; set; } = string.Empty;
+    public string? VariationId { get; set; }
+    public string InternalSku { get; set; } = string.Empty;
+    public bool CreateNewProduct { get; set; }
+    public long? CatalogPriceCents { get; set; }
 }
 
 public sealed class MercadoLivreCatalogImportResult
@@ -16,7 +26,9 @@ public sealed class MercadoLivreCatalogImportResult
     public int ProductsMatched { get; set; }
     public int ProductsCreated { get; set; }
     public int ProductsUpdated { get; set; }
+    public int ProductsLinkedExisting { get; set; }
     public int MappingsCreated { get; set; }
+    public int MappingsUpdated { get; set; }
     public List<MercadoLivreCatalogImportItemResult> Items { get; set; } = [];
     public List<string> Warnings { get; set; } = [];
 }
@@ -26,6 +38,8 @@ public sealed class MercadoLivreCatalogImportItemResult
     public string ItemId { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string? Sku { get; set; }
+    public string? VariationId { get; set; }
+    public string? InternalSku { get; set; }
     public string Brand { get; set; } = string.Empty;
     public string? ThumbnailUrl { get; set; }
     public long CatalogPriceCents { get; set; }

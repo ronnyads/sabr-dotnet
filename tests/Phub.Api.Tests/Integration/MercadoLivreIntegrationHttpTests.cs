@@ -2084,7 +2084,12 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 Brands = [],
                 ItemIds = ["MLB-BASE-01"],
                 PhysicalStock = 1000,
-                CatalogPriceCents = 800
+                CatalogPriceCents = 800,
+                SkuAssignments =
+                [
+                    new() { ItemId = "MLB-BASE-01", VariationId = "TOM-1", InternalSku = "PH-BR-TOM-1", CreateNewProduct = true },
+                    new() { ItemId = "MLB-BASE-01", VariationId = "TOM-2", InternalSku = "PH-BR-TOM-2", CreateNewProduct = true, CatalogPriceCents = 900 }
+                ]
             });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -2094,11 +2099,128 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(2, variants.Count);
         Assert.All(variants, variant =>
         {
-            Assert.Equal(800, variant.CatalogPriceCents);
             Assert.Equal(1000, variant.PhysicalStock);
             Assert.Equal(998, variant.AvailableStock);
         });
+        Assert.Equal(800, variants[0].CatalogPriceCents);
+        Assert.Equal(900, variants[1].CatalogPriceCents);
         Assert.Equal(2, await db.TenantMarketplaceListingMaps.CountAsync());
+        Assert.All(await db.TenantMarketplaceListingMaps.ToListAsync(), mapping => Assert.StartsWith("PH-BR-", mapping.SabrVariantSku));
+        Assert.False(await db.Products.AnyAsync(product => product.Sku.StartsWith("MLB")));
+    }
+
+    [Fact]
+    public async Task AdminCatalogImport_WithoutInternalSku_DoesNotCreateMlIdAsMasterSku()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-no-sku";
+        const string tenantSlug = "mlnosku";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, "1001100");
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = "MLB-UNIDENTIFIED",
+            Title = "Base Boca Rosa",
+            Price = 49.90m
+        });
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest { Brands = [], ItemIds = ["MLB-UNIDENTIFIED"], CatalogPriceCents = 800 });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.False(await db.Products.AnyAsync(product => product.Sku == "MLB-UNIDENTIFIED"));
+        Assert.False(await db.TenantMarketplaceListingMaps.AnyAsync(mapping => mapping.MlItemId == "MLB-UNIDENTIFIED"));
+
+        var typoResponse = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest
+            {
+                Brands = [], ItemIds = ["MLB-UNIDENTIFIED"], CatalogPriceCents = 800,
+                SkuAssignments = [new() { ItemId = "MLB-UNIDENTIFIED", InternalSku = "PH-TYPO" }]
+            });
+        Assert.Equal(HttpStatusCode.OK, typoResponse.StatusCode);
+        Assert.False(await db.Products.AnyAsync(product => product.Sku == "PH-TYPO"));
+    }
+
+    [Fact]
+    public async Task AdminCatalogImport_LinkingExistingVariant_PreservesCentralStockAndCost()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-link-stock";
+        const string tenantSlug = "mllinkstock";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, "1001101");
+        await SeedVariantAsync("PH-BASE", "PH-BASE-TOM-1", physicalStock: 35, reservedStock: 4);
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = "MLB-EXTERNAL-01",
+            Title = "Base Boca Rosa",
+            SellerSku = "ML-OTHER-SKU",
+            Price = 49.90m
+        });
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest
+            {
+                Brands = [], ItemIds = ["MLB-EXTERNAL-01"], PhysicalStock = 1000, CatalogPriceCents = 800,
+                SkuAssignments = [new() { ItemId = "MLB-EXTERNAL-01", InternalSku = "PH-BASE-TOM-1" }]
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var variant = await db.ProductVariants.SingleAsync(item => item.VariantSku == "PH-BASE-TOM-1");
+        Assert.Equal(35, variant.PhysicalStock);
+        Assert.Equal(4, variant.ReservedStock);
+        Assert.Equal(1500, variant.CatalogPriceCents);
+        var mapping = await db.TenantMarketplaceListingMaps.SingleAsync(item => item.MlItemId == "MLB-EXTERNAL-01");
+        Assert.Equal("ML-OTHER-SKU", mapping.ChannelSku);
+        Assert.Equal("PH-BASE-TOM-1", mapping.SabrVariantSku);
+    }
+
+    [Fact]
+    public async Task AdminCatalogImport_RemapsLegacyMlPlaceholder_WithoutRenamingHistoricalProduct()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-legacy-bridge";
+        const string tenantSlug = "mllegacybridge";
+        const string sellerId = "1001102";
+        const string itemId = "MLB5185377387";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, itemId, null, itemId);
+        await SeedVariantAsync(itemId, itemId, physicalStock: 1000, reservedStock: 0);
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = itemId, Title = "Base Boca Rosa", Price = 49.90m
+        });
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest
+            {
+                Brands = [], ItemIds = [itemId], CatalogPriceCents = 800,
+                SkuAssignments = [new() { ItemId = itemId, InternalSku = "PH-BOCA-ROSA-01", CreateNewProduct = true }]
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var mapping = await db.TenantMarketplaceListingMaps.SingleAsync(x => x.MlItemId == itemId);
+        Assert.Equal("PH-BOCA-ROSA-01", mapping.SabrVariantSku);
+        Assert.Equal(2, mapping.MappingVersion);
+        Assert.True(await db.Products.AnyAsync(x => x.Sku == itemId));
+        Assert.True(await db.ProductVariants.AnyAsync(x => x.VariantSku == itemId));
+        Assert.True(await db.Products.AnyAsync(x => x.Sku == "PH-BOCA-ROSA-01" && x.CatalogPriceCents == 800));
     }
 
     private async Task SeedTenantClientAsync(string tenantId, string tenantSlug, Guid clientId)

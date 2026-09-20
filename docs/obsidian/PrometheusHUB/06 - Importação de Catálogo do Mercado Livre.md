@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, mercado-livre, catalogo, sku]
-updated: 2026-09-08
+updated: 2026-09-19
 ---
 
 # Importação de catálogo do Mercado Livre
@@ -9,10 +9,12 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 
 ## Regras
 
-- O SKU vem de `seller_custom_field` ou do atributo `SELLER_SKU`. Quando o anúncio não possui SKU, o Item ID `MLB...` vira um SKU interno temporário; o mapping pelo Item ID mantém o reconhecimento do pedido preciso.
+- `seller_custom_field`/`SELLER_SKU`, `itemId`, `variationId` e `userProductId` são identificadores externos. O Item ID `MLB...` nunca é criado automaticamente como SKU mestre.
+- Cada anúncio/variação selecionado exige um SKU interno explícito, salvo quando o SKU do canal já corresponde a uma variante interna ativa e inequívoca. Sem ponte válida, o anúncio é ignorado com aviso; pedidos sem vínculo continuam bloqueados para pagamento.
 - O produto e a variante usam o mesmo SKU quando o anúncio não possui variações.
-- Produtos já existentes não são duplicados nem têm seus dados comerciais sobrescritos; somente o estoque da variante é atualizado.
-- Novos produtos usam o preço vigente do anúncio como preço inicial de catálogo e custo interno zero, sinalizando que o custo precisa ser revisado no admin.
+- Cada atribuição declara `createNewProduct`: vincular SKU existente é o padrão seguro; criar SKU novo exige intenção explícita e Preço Catálogo positivo, global ou por linha, que representa o custo cobrado ao seller. Um erro de digitação não cria produto automaticamente. O preço de venda do ML é apenas informativo.
+- Cada variação do anúncio pode apontar a uma variação interna distinta. Um SKU base que já possui variações não pode receber vínculo direto sem a escolha da variante.
+- Produtos legados cujo SKU mestre já é `MLB...` não são renomeados automaticamente. O admin atribui um novo SKU interno na importação; o vínculo passa a usá-lo apenas para pedidos futuros, enquanto o cadastro legado permanece para preservar referências históricas. A desativação do legado exige revisão de reservas/publicações.
 - Todo produto ativo é vinculado ao **Catálogo Público** por padrão. Catálogos `PlanRestricted` continuam dependentes de uma assinatura ativa; clientes aprovados enxergam o catálogo público mesmo sem plano.
 - Cada item/variação do Mercado Livre recebe um `TenantMarketplaceListingMap`, inclusive anúncios espelhados/sincronizados, para garantir o reconhecimento dos pedidos.
 - A operação é idempotente e gera o evento auditável `AdminProducts.ImportFromMercadoLivre`.
@@ -21,7 +23,7 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 
 - Admin > cliente > integração Mercado Livre > **Buscar produtos do ML** abre uma prévia. O admin filtra, seleciona produtos agrupados por SKU e importa somente os escolhidos.
 - `POST /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import`.
-- O request aceita busca, marcas, estoque e modo de prévia; a interface atual envia busca e marcas vazias, estoque 1.000 e a lista explícita de anúncios selecionados.
+- O request aceita busca, marcas, estoque, modo de prévia e `skuAssignments` (`itemId`, `variationId`, `internalSku`, `createNewProduct`, `catalogPriceCents` opcional). A interface envia as atribuições de SKU por anúncio/variação e permite custo individual com fallback para o custo padrão.
 - `ItemIds` limita a gravação aos anúncios selecionados. A prévia pode consultar tudo, mas nenhuma gravação acontece antes da seleção explícita.
 
 ## Inteligência de seller

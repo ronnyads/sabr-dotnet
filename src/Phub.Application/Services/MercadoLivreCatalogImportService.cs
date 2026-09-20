@@ -61,6 +61,22 @@ public sealed class MercadoLivreCatalogImportService
             .ToList();
         var result = new MercadoLivreCatalogImportResult { ListingsFound = listings.Count };
 
+        var assignments = new Dictionary<string, (string InternalSku, bool CreateNewProduct, long? CatalogPriceCents)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var assignment in request.SkuAssignments ?? [])
+        {
+            if (!Sku.TryParse(assignment.InternalSku, out var parsedSku))
+                return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("skuAssignments", "SKU interno inválido.")]);
+            if (string.Equals(parsedSku.Value, assignment.ItemId?.Trim(), StringComparison.OrdinalIgnoreCase))
+                return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("skuAssignments", "O ID do anúncio não pode ser usado como SKU interno.")]);
+            if (IsMercadoLivreItemId(parsedSku.Value))
+                return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("skuAssignments", "Use um SKU interno próprio; códigos MLB numéricos são IDs externos de anúncio.")]);
+            if (assignment.CatalogPriceCents is < 0 or > 100_000_000_000)
+                return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("skuAssignments", "Preço Catálogo inválido.")]);
+            var key = AssignmentKey(assignment.ItemId, assignment.VariationId);
+            if (string.IsNullOrWhiteSpace(assignment.ItemId) || !assignments.TryAdd(key, (parsedSku.Value, assignment.CreateNewProduct, assignment.CatalogPriceCents)))
+                return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("skuAssignments", "Anúncio/variação duplicado ou inválido.")]);
+        }
+
         var catalogIds = await _dbContext.Catalogs
             .AsNoTracking()
             .Where(catalog => catalog.IsActive && catalog.AccessMode == CatalogAccessMode.Public)
@@ -82,31 +98,86 @@ public sealed class MercadoLivreCatalogImportService
         var processedSkus = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var listing in selected)
         {
-            var skuEntries = ResolveSkus(listing).ToList();
-            if (skuEntries.Count == 0)
+            foreach (var (channelSku, variationId) in ResolveChannelIdentities(listing))
             {
-                result.Warnings.Add($"{listing.ItemId}: anúncio sem SKU válido ({listing.Title}).");
-                result.Items.Add(ToResult(listing, null, "skipped_missing_sku"));
-                continue;
-            }
-
-            foreach (var (sku, variationId) in skuEntries)
-            {
-                result.ProductsMatched++;
-                var itemResult = ToResult(listing, sku, request.PreviewOnly ? "preview" : "mapped");
-                if (request.CatalogPriceCents.HasValue)
-                    itemResult.CatalogPriceCents = request.CatalogPriceCents.Value;
+                assignments.TryGetValue(AssignmentKey(listing.ItemId, variationId), out var assignment);
+                var assignedSku = assignment.InternalSku;
+                var sku = assignedSku ?? channelSku;
+                var itemResult = ToResult(listing, channelSku, variationId, assignedSku, request.PreviewOnly ? "preview" : "mapped");
+                var chosenCatalogPriceCents = assignment.CatalogPriceCents ?? request.CatalogPriceCents;
+                if (chosenCatalogPriceCents.HasValue)
+                    itemResult.CatalogPriceCents = chosenCatalogPriceCents.Value;
                 result.Items.Add(itemResult);
                 if (request.PreviewOnly) continue;
 
+                // A channel SKU is only an automatic bridge when it already identifies a
+                // unique internal variant. Never create a master SKU from a marketplace ID.
+                if (sku == null)
+                {
+                    itemResult.Action = "skipped_missing_internal_sku";
+                    result.Warnings.Add($"{listing.ItemId}: informe o SKU interno para vincular este anúncio.");
+                    continue;
+                }
+                if (IsMercadoLivreItemId(sku))
+                {
+                    itemResult.Action = "skipped_external_id_as_internal_sku";
+                    result.Warnings.Add($"{listing.ItemId}: o código {sku} parece um Item ID do ML. Informe um SKU interno próprio.");
+                    continue;
+                }
+
+                var existingVariant = await _dbContext.ProductVariants.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.VariantSku == sku, cancellationToken);
+                var productSku = existingVariant?.BaseSku ?? sku;
+                var existingProduct = await _dbContext.Products.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Sku == productSku, cancellationToken);
+                if ((existingVariant != null && !existingVariant.IsActive) || (existingProduct != null && !existingProduct.IsActive))
+                {
+                    itemResult.Action = "skipped_inactive_internal_sku";
+                    result.Warnings.Add($"{listing.ItemId}: SKU interno {sku} está inativo no catálogo.");
+                    continue;
+                }
+                if (existingProduct != null && existingVariant == null && await _dbContext.ProductVariants
+                    .AnyAsync(x => x.BaseSku == sku, cancellationToken))
+                {
+                    itemResult.Action = "skipped_select_variant";
+                    result.Warnings.Add($"{listing.ItemId}: produto {sku} tem variações; selecione o SKU interno da variação correta.");
+                    continue;
+                }
+                if (assignedSku == null && existingVariant == null)
+                {
+                    itemResult.Action = "skipped_unknown_channel_sku";
+                    result.Warnings.Add($"{listing.ItemId}: SKU do canal {sku} não existe no catálogo. Informe o SKU interno.");
+                    continue;
+                }
+                if (assignedSku != null && existingProduct == null && !assignment.CreateNewProduct)
+                {
+                    itemResult.Action = "skipped_internal_sku_not_found";
+                    result.Warnings.Add($"{listing.ItemId}: SKU interno {sku} não existe. Se deseja criá-lo, selecione Criar SKU novo.");
+                    continue;
+                }
+                if (assignedSku != null && existingProduct != null && assignment.CreateNewProduct)
+                {
+                    itemResult.Action = "skipped_internal_sku_already_exists";
+                    result.Warnings.Add($"{listing.ItemId}: SKU interno {sku} já existe. Se deseja vinculá-lo, selecione Vincular existente.");
+                    continue;
+                }
+                if (existingProduct == null && chosenCatalogPriceCents is null or <= 0)
+                {
+                    itemResult.Action = "skipped_missing_catalog_cost";
+                    result.Warnings.Add($"{listing.ItemId}: informe o Preço Catálogo (custo do seller) para criar o SKU interno {sku}.");
+                    continue;
+                }
+                result.ProductsMatched++;
+                itemResult.InternalSku = sku;
+
                 if (processedSkus.Add(sku))
                 {
-                    var product = await _dbContext.Products.FirstOrDefaultAsync(x => x.Sku == sku, cancellationToken);
+                    var product = await _dbContext.Products.FirstOrDefaultAsync(x => x.Sku == productSku, cancellationToken);
                     if (product == null)
                     {
                         product = new Product
                         {
-                            Sku = sku,
+                            Sku = productSku,
                             Name = listing.Title.Trim(),
                             Brand = ResolveBrand(listing),
                             Ean = NormalizeEan(listing.Ean),
@@ -123,11 +194,10 @@ public sealed class MercadoLivreCatalogImportService
                     }
                     else
                     {
-                        product.CatalogPriceCents = itemResult.CatalogPriceCents;
-                        product.IsActive = true;
-                        product.UpdatedAt = DateTimeOffset.UtcNow;
-                        result.ProductsUpdated++;
-                        itemResult.Action = "updated_stock_and_catalog_price";
+                        // Linking an existing product must not overwrite authoritative
+                        // catalogue price or central inventory.
+                        result.ProductsLinkedExisting++;
+                        itemResult.Action = "linked_existing";
                     }
 
                     var variant = await _dbContext.ProductVariants.FirstOrDefaultAsync(x => x.VariantSku == sku, cancellationToken);
@@ -151,27 +221,22 @@ public sealed class MercadoLivreCatalogImportService
                     }
                     else
                     {
-                        variant.CatalogPriceCents = itemResult.CatalogPriceCents;
-                        variant.PhysicalStock = request.PhysicalStock;
-                        variant.InventoryVersion++;
-                        variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
-                        variant.IsActive = true;
-                        variant.UpdatedAt = DateTimeOffset.UtcNow;
+                        // Existing stock is owned by inventory operations, not imports.
                     }
 
                     foreach (var catalogId in catalogIds)
                     {
-                        if (!await _dbContext.ProductCatalogs.AnyAsync(x => x.CatalogId == catalogId && x.ProductSku == sku, cancellationToken))
-                            _dbContext.ProductCatalogs.Add(new ProductCatalog { CatalogId = catalogId, ProductSku = sku });
+                        if (!await _dbContext.ProductCatalogs.AnyAsync(x => x.CatalogId == catalogId && x.ProductSku == productSku, cancellationToken))
+                            _dbContext.ProductCatalogs.Add(new ProductCatalog { CatalogId = catalogId, ProductSku = productSku });
                     }
                 }
 
                 var mapping = await _dbContext.TenantMarketplaceListingMaps.FirstOrDefaultAsync(x =>
                     x.TenantId == tenant.Id && x.ClientId == clientId && x.Provider == MarketplaceProvider.MercadoLivre &&
-                    x.IntegrationId == connection.Id && x.MlItemId == listing.ItemId && x.MlVariationId == variationId, cancellationToken);
+                    x.SellerId == connection.SellerId && x.MlItemId == listing.ItemId && x.MlVariationId == variationId, cancellationToken);
                 if (mapping == null)
                 {
-                    _dbContext.TenantMarketplaceListingMaps.Add(new TenantMarketplaceListingMap
+                    mapping = new TenantMarketplaceListingMap
                     {
                         TenantId = tenant.Id,
                         ClientId = clientId,
@@ -180,20 +245,36 @@ public sealed class MercadoLivreCatalogImportService
                         SellerId = connection.SellerId,
                         MlItemId = listing.ItemId,
                         MlVariationId = variationId,
-                        ChannelSku = sku,
+                        ChannelSku = channelSku,
                         SabrVariantSku = sku,
                         MappingVersion = 1
-                    });
+                    };
+                    _dbContext.TenantMarketplaceListingMaps.Add(mapping);
                     result.MappingsCreated++;
                 }
                 else
                 {
+                    mapping.IntegrationId = connection.Id;
                     if (!string.Equals(mapping.SabrVariantSku, sku, StringComparison.Ordinal))
                     {
+                        var previousSku = mapping.SabrVariantSku;
                         mapping.SabrVariantSku = sku;
                         mapping.MappingVersion++;
                         mapping.UpdatedAt = DateTimeOffset.UtcNow;
+                        result.MappingsUpdated++;
+                        _dbContext.AuditEvents.Add(new AuditEvent
+                        {
+                            TenantId = tenant.Id,
+                            ActorType = "AdminUser",
+                            ActorId = actorId,
+                            Action = "AdminProducts.RemapMarketplaceListingFutureOrders",
+                            Entity = nameof(TenantMarketplaceListingMap),
+                            EntityId = mapping.Id,
+                            RequestId = Guid.NewGuid(),
+                            MetadataJson = JsonSerializer.Serialize(new { listing.ItemId, variationId, connection.SellerId, previousSku, newSku = sku, mapping.MappingVersion })
+                        });
                     }
+                    mapping.ChannelSku = channelSku;
                 }
             }
         }
@@ -208,7 +289,7 @@ public sealed class MercadoLivreCatalogImportService
                 Action = "AdminProducts.ImportFromMercadoLivre",
                 Entity = nameof(Product),
                 RequestId = Guid.NewGuid(),
-                MetadataJson = JsonSerializer.Serialize(new { connection.SellerId, request.Query, request.Brands, request.PhysicalStock, request.CatalogPriceCents, result.ProductsCreated, result.MappingsCreated })
+                MetadataJson = JsonSerializer.Serialize(new { connection.SellerId, request.Query, request.Brands, request.PhysicalStock, request.CatalogPriceCents, request.SkuAssignments, result.ProductsCreated, result.MappingsCreated })
             });
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
@@ -216,35 +297,29 @@ public sealed class MercadoLivreCatalogImportService
         return ServiceResult<MercadoLivreCatalogImportResult>.Success(result);
     }
 
-    private static IEnumerable<(string Sku, string? VariationId)> ResolveSkus(MercadoLivreSellerItemDetails item)
+    private static IEnumerable<(string? ChannelSku, string? VariationId)> ResolveChannelIdentities(MercadoLivreSellerItemDetails item)
     {
         if (item.Variations.Count > 0)
         {
-            var emitted = false;
             foreach (var variation in item.Variations)
-                if (Sku.TryParse(variation.SellerSku, out var parsed))
-                {
-                    emitted = true;
-                    yield return (parsed.Value, variation.VariationId);
-                }
-            if (emitted) yield break;
-        }
-        if (Sku.TryParse(item.SellerSku, out var itemSku))
-        {
-            yield return (itemSku.Value, null);
+                yield return (Sku.TryParse(variation.SellerSku, out var parsed) ? parsed.Value : null, variation.VariationId);
             yield break;
         }
-
-        // Listings without seller SKU still need a stable internal identity. The ML item id
-        // is valid in our SKU format and the explicit listing map keeps order matching precise.
-        if (Sku.TryParse(item.ItemId, out var generatedSku)) yield return (generatedSku.Value, null);
+        yield return (Sku.TryParse(item.SellerSku, out var itemSku) ? itemSku.Value : null, null);
     }
 
-    private static MercadoLivreCatalogImportItemResult ToResult(MercadoLivreSellerItemDetails item, string? sku, string action) => new()
+    private static string AssignmentKey(string? itemId, string? variationId) => $"{itemId?.Trim() ?? string.Empty}|{variationId?.Trim() ?? string.Empty}";
+
+    private static bool IsMercadoLivreItemId(string sku) =>
+        sku.Length > 3 && sku.StartsWith("MLB", StringComparison.Ordinal) && sku[3..].All(char.IsDigit);
+
+    private static MercadoLivreCatalogImportItemResult ToResult(MercadoLivreSellerItemDetails item, string? channelSku, string? variationId, string? internalSku, string action) => new()
     {
         ItemId = item.ItemId,
         Title = item.Title,
-        Sku = sku,
+        Sku = channelSku,
+        VariationId = variationId,
+        InternalSku = internalSku,
         Brand = ResolveBrand(item),
         ThumbnailUrl = item.ThumbnailUrl,
         CatalogPriceCents = checked((long)Math.Round(item.Price * 100m, MidpointRounding.AwayFromZero)),
