@@ -17,6 +17,13 @@ public sealed class MercadoLivreWebhookService
 {
     private const int MaxWebhookAttempts = 10;
     private const int MaxRetryDelayMs = 60_000;
+    // An event stuck in PROCESSING with no PENDING/FAILED status transition means the
+    // worker that claimed it crashed or was recycled mid-work (deploy, OOM, restart).
+    // Without a staleness window that event would never be reclaimed by any worker,
+    // silently dropping that order/shipment/payment update forever. This mirrors the
+    // lease pattern used elsewhere (FinancialSyncJob, SentinelReconciliationService),
+    // sized generously because a single event can trigger a full-seller sync.
+    private static readonly TimeSpan ProcessingStaleAfter = TimeSpan.FromMinutes(20);
     private readonly IAppDbContext _dbContext;
     private readonly MercadoLivreSyncService _syncService;
     private readonly MercadoLivreOAuthService _oauthService;
@@ -166,15 +173,18 @@ public sealed class MercadoLivreWebhookService
 
         var batchSize = Math.Min(500, Math.Max(1, maxBatch));
         var now = DateTimeOffset.UtcNow;
+        var processingStaleBefore = now - ProcessingStaleAfter;
         var candidates = await _dbContext.MarketplaceEventLogs
             .AsNoTracking()
-            .Where(item => (item.Status == MarketplaceEventStatuses.Pending || item.Status == MarketplaceEventStatuses.Failed)
+            .Where(item => (item.Status == MarketplaceEventStatuses.Pending
+                             || item.Status == MarketplaceEventStatuses.Failed
+                             || (item.Status == MarketplaceEventStatuses.Processing && item.UpdatedAt < processingStaleBefore))
                            && (item.Topic == MarketplaceEventTopics.WebhookOrders
                                || item.Topic == MarketplaceEventTopics.WebhookShipments
                                || item.Topic == MarketplaceEventTopics.WebhookPayments))
             .OrderBy(item => item.CreatedAt)
             .Take(batchSize * 2)
-            .Select(item => new WebhookCandidate(item.Id, item.Status, item.Attempts, item.LastErrorAt, item.NotificationId))
+            .Select(item => new WebhookCandidate(item.Id, item.Status, item.Attempts, item.LastErrorAt, item.NotificationId, item.UpdatedAt))
             .ToListAsync(cancellationToken);
 
         if (candidates.Count == 0)
@@ -282,12 +292,15 @@ public sealed class MercadoLivreWebhookService
     private async Task<bool> ClaimForProcessingAsync(Guid eventId, CancellationToken cancellationToken)
     {
         var claimedAt = DateTimeOffset.UtcNow;
+        var processingStaleBefore = claimedAt - ProcessingStaleAfter;
         if ((_dbContext as DbContext)?.Database.IsRelational() != true)
         {
             var inMemoryItem = await _dbContext.MarketplaceEventLogs
                 .FirstOrDefaultAsync(
                     item => item.Id == eventId
-                            && (item.Status == MarketplaceEventStatuses.Pending || item.Status == MarketplaceEventStatuses.Failed),
+                            && (item.Status == MarketplaceEventStatuses.Pending
+                                || item.Status == MarketplaceEventStatuses.Failed
+                                || (item.Status == MarketplaceEventStatuses.Processing && item.UpdatedAt < processingStaleBefore)),
                     cancellationToken);
             if (inMemoryItem == null)
             {
@@ -302,7 +315,9 @@ public sealed class MercadoLivreWebhookService
 
         var updatedRows = await _dbContext.MarketplaceEventLogs
             .Where(item => item.Id == eventId
-                           && (item.Status == MarketplaceEventStatuses.Pending || item.Status == MarketplaceEventStatuses.Failed))
+                           && (item.Status == MarketplaceEventStatuses.Pending
+                               || item.Status == MarketplaceEventStatuses.Failed
+                               || (item.Status == MarketplaceEventStatuses.Processing && item.UpdatedAt < processingStaleBefore)))
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(item => item.Status, MarketplaceEventStatuses.Processing)
@@ -318,6 +333,14 @@ public sealed class MercadoLivreWebhookService
         if (candidate.Status == MarketplaceEventStatuses.Pending)
         {
             return true;
+        }
+
+        if (candidate.Status == MarketplaceEventStatuses.Processing)
+        {
+            // Only reached for events the query already confirmed are stale
+            // (UpdatedAt older than ProcessingStaleAfter); no extra backoff needed,
+            // the staleness window itself is the backoff.
+            return now - candidate.UpdatedAt >= ProcessingStaleAfter;
         }
 
         if (candidate.Status != MarketplaceEventStatuses.Failed || !candidate.LastErrorAt.HasValue)
@@ -696,5 +719,5 @@ public sealed class MercadoLivreWebhookService
             StringComparison.Ordinal);
     }
 
-    private sealed record WebhookCandidate(Guid Id, string Status, int Attempts, DateTimeOffset? LastErrorAt, string? NotificationId);
+    private sealed record WebhookCandidate(Guid Id, string Status, int Attempts, DateTimeOffset? LastErrorAt, string? NotificationId, DateTimeOffset UpdatedAt);
 }

@@ -58,9 +58,15 @@ Reconfirma `InventoryVersion` antes de cada tentativa (correto), mas nunca confe
 
 **Limitação de verificação:** não adicionei teste de integração automatizado para este achado. `ProcessStockJobAsync` só avança além da guarda de feature flag (`_features.GlobalInventoryWrite`/`InventoryPilotSellerIds`) quando essas flags permitem escrita de estoque, e ambas vêm de `IOptions<MercadoLivreOptions>` registrado como singleton — mutá-las dentro de um teste vazaria para os outros testes que compartilham a mesma `MercadoLivreTestWebApplicationFactory` (via `IClassFixture`), arriscando quebrar testes não relacionados de forma dependente de ordem de execução. Não fiz essa mudança sem poder rodar a suíte inteira para confirmar que nada mais depende do valor padrão (`false`/lista vazia). A correção em si é uma comparação de string simples e de baixo risco, revisada manualmente linha a linha.
 
-### 2.5 Médio — `MercadoLivreWebhookService`: sincronização por janela inteira, sem heartbeat de crash
+### 2.5 [PARCIALMENTE CORRIGIDO em 20/09/2026] Médio — `MercadoLivreWebhookService`: sincronização por janela inteira, sem heartbeat de crash
 
 O serviço já processa por tópico/recurso específico (melhor do que o apêndice sugeria), mas: (a) após validar o recurso, ele dispara `MercadoLivreSyncService.SyncNowAsync` para o seller inteiro, não uma sincronização pontual do recurso notificado; (b) o claim usa `ExecuteUpdateAsync` condicionado a `Status IN (Pending, Failed)` — um evento que trava em `Processing` porque o worker caiu no meio nunca mais é reclamado, porque `Processing` não está entre os status elegíveis para reclaim e não há lease/heartbeat.
+
+**Evidência da correção parcial (20/09/2026), item (b):** adicionada uma janela de staleness de 20 minutos (`ProcessingStaleAfter`) — um evento em `PROCESSING` cujo `UpdatedAt` já passou dessa janela agora entra na lista de candidatos e pode ser reclamado pelo mesmo `ExecuteUpdateAsync` guardado (`WHERE ... OR (Status = PROCESSING AND UpdatedAt < now - 20min)`), igual ao padrão de lease já usado em `FinancialSyncJob`/`SentinelReconciliationService`. Validei a query do claim contra PostgreSQL 16 real com três casos: `PROCESSING` velho (25 min) é reclamado, `PROCESSING` recente (2 min) não é, `PENDING` continua sendo reclamado normalmente — todos corretos.
+
+**Item (a) não corrigido:** trocar o `SyncNowAsync` (seller inteiro) por uma sincronização pontual do recurso notificado é uma mudança maior na superfície de `MercadoLivreSyncService` (aceitar um order/resource ID específico em vez de uma janela de lookback) e carrega mais risco de regressão do que consigo validar sem compilar o projeto. Como o apêndice do plano já descreve o comportamento atual como funcionalmente correto (só ineficiente — sincroniza mais do que precisa, não menos), deixei esse item para uma rodada futura de otimização, não de correção de bug.
+
+**Limitação:** não adicionei teste de integração em C# para o reclaim de eventos travados (não havia nenhum teste de webhook existente no arquivo, e montar o cenário completo — ingest, validação de recurso via cliente fake, sync — exigiria bastante andaime novo que não consigo compilar para checar). A validação ficou no nível do SQL do guard, que é exatamente o mesmo executado em produção no provider relacional.
 
 ### 2.6 Médio — `FinancialProfitabilityService`: soma entre moedas e divergência global não pareada
 
@@ -103,7 +109,7 @@ Por risco decrescente:
 2. ~~`LoadVariantsAsync` do checkout com `ANY({0})`/`string[]` (2.2)~~ — **corrigido em 20/09/2026**, ver evidência acima (validado contra PostgreSQL real, mas não pelo dotnet test).
 3. ~~Compare-and-set de lease no `FinancialSyncJobService` (2.3)~~ — **corrigido em 20/09/2026**, ver evidência acima.
 4. ~~Revalidação de mapping no `StockAvailabilityService.ProcessStockJobAsync` (2.4)~~ — **corrigido em 20/09/2026**, sem teste automatizado (ver evidência acima).
-5. Lease/heartbeat e sincronização pontual no webhook (2.5).
+5. ~~Lease/heartbeat no webhook (2.5, item b)~~ — **corrigido em 20/09/2026**. Sincronização pontual (item a) segue pendente, ver evidência acima.
 6. Segregação de moeda e divergência pareada no `FinancialProfitabilityService` (2.6).
 7. Validação de `ItemIds` na importação de catálogo (2.7).
 
