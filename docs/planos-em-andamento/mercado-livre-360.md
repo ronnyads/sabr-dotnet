@@ -5,9 +5,10 @@ Data: 20/09/2026. Plano aprovado, em implementação incremental.
 ## Progresso verificado em 20/09/2026
 
 - O admin separa produtos internos de registros `MLB...` legados e oferece vínculo direto a uma variante/SKU existente, com revisão explícita. O fluxo não cria outro produto nem altera estoque.
+- Um novo produto simples agora cria a variante padrão com o mesmo SKU, saldo físico zero e buffer de segurança 2 na mesma transação. Ao ativar um produto sem catálogo específico, o backend o associa ao Catálogo Público; catálogos explicitamente escolhidos não são substituídos.
 - A API valida tenant, cliente, integração, seller da credencial e proprietário do anúncio remoto, catálogo autorizado, variação e versão otimista. O remapeamento é auditado e só afeta pedidos futuros ou itens ainda não resolvidos; snapshots já resolvidos permanecem intactos.
 - Correções de webhook preso, lease de worker, job antigo de estoque após remapeamento, escolha explícita na importação e divergência/moeda financeira foram implementadas em commits anteriores da mesma onda.
-- Validação local: 148 testes não-integrados aprovados; teste novo de vínculo direto aprovado isoladamente; builds de produção de admin e cliente aprovadas. A suíte completa de integração ainda apresenta falhas em cenários legados e não é critério verde desta onda. Não há homologação real do fluxo novo com o seller piloto.
+- Validação local: 148 testes não-integrados, 44 testes de integração Mercado Livre e 18 testes direcionados de produtos/vínculo aprovados; builds de produção de admin e cliente aprovadas. A suíte completa de integração ainda apresenta falhas em outros módulos e não é critério verde desta onda. Não há homologação real do fluxo novo com o seller piloto.
 - Billing conciliatório, claims/devoluções, unidades pré-compradas do seller e analytics diário continuam pendentes. Nenhum deles deve ser exibido como concluído ou lucro confirmado.
 
 ## Orientação para quem implementar

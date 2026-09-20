@@ -94,6 +94,7 @@ Endpoints do portal:
 - O admin informa estoque físico inicial e Preço Catálogo (custo cobrado ao seller) para SKUs novos; pode ajustar o custo por linha. Vincular SKU existente não altera preço nem estoque central, preservando reservas e `inventoryVersion`.
 - Remapear um anúncio legado para SKU interno novo incrementa `mappingVersion` e gera auditoria. O produto legado `MLB...` não é renomeado; pedidos históricos mantêm o snapshot original.
 - Em 20/09, o admin passou a mostrar produtos globais e anúncios legados em filtros separados. O vínculo direto em `PUT /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/mappings` seleciona uma variação existente, valida seller remoto e versão, não cria produto/estoque e registra auditoria. O registro MLB legado continua consultável e exibe o SKU interno vinculado; não foi apagado.
+- Produto simples novo ganha automaticamente variante com o mesmo SKU e estoque inicial zero, sem importar saldo do anúncio. Quando ativado sem catálogo específico, é vinculado ao Catálogo Público; se houver vínculos explícitos, a seleção do admin prevalece.
 - A ação **Sincronizar pedidos agora** enfileira sete janelas diárias idempotentes e retorna `202` com `jobId`; nenhuma chamada externa longa permanece presa à requisição do navegador. O catch-up de 365 dias também permanece assíncrono, particionado e retomável pelo módulo financeiro.
 - Reconciliação é proteção automatizada da integração e não é apresentada como ação manual ao cliente quando o recurso está desabilitado.
 
