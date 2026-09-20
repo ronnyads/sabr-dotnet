@@ -102,7 +102,7 @@ public sealed class AdminCatalogService
         };
     }
 
-    // Keep for backward compatibility — tenant-scoped now returns global list
+    // The catalog data is global, but a legacy tenant route still needs a valid context.
     public async Task<ServiceResult<PagedResult<AdminCatalogResult>>> ListAsync(
         string tenantSlug,
         int skip,
@@ -115,6 +115,12 @@ public sealed class AdminCatalogService
         if (errors.Count > 0)
         {
             return ServiceResult<PagedResult<AdminCatalogResult>>.Failure(errors);
+        }
+
+        var tenantResult = await ResolveTenantAsync(tenantSlug, cancellationToken);
+        if (!tenantResult.Succeeded)
+        {
+            return ServiceResult<PagedResult<AdminCatalogResult>>.Failure(tenantResult.Errors);
         }
 
         var result = await ListAsync(skip, limit, search, isActive, cancellationToken);

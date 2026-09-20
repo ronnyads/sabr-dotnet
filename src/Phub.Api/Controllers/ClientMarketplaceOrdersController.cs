@@ -319,6 +319,9 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
         if (errors.Any(e => e.Message.Contains("NOT_CANCELLABLE") || e.Message.Contains("NOT_REFUNDABLE")))
             return UnprocessableEntity(CreateApiError("INVALID_TRANSITION", errors.First().Message));
 
+        if (errors.Any(e => string.Equals(e.Message, "CHANNEL_PAYMENT_NOT_CONFIRMED", StringComparison.OrdinalIgnoreCase)))
+            return UnprocessableEntity(CreateApiError("CHANNEL_PAYMENT_NOT_CONFIRMED", "O marketplace ainda não confirmou o pagamento do comprador.", errors));
+
         if (errors.Any(e => string.Equals(e.Message, "ML_UNMAPPED_ITEM", StringComparison.OrdinalIgnoreCase)))
             return UnprocessableEntity(CreateApiError("ML_UNMAPPED_ITEM", "Order has unmapped items", errors));
         if (errors.Any(e => string.Equals(e.Message, "LABEL_REQUIRED_BEFORE_PAYMENT", StringComparison.OrdinalIgnoreCase)))

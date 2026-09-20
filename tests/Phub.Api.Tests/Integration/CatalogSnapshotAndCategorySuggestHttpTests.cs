@@ -121,7 +121,7 @@ public sealed class CatalogSnapshotHttpTests : IClassFixture<MercadoLivreTestWeb
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var payload = await response.Content.ReadFromJsonAsync<CatalogVariantSnapshotResult>();
         Assert.NotNull(payload);
-        Assert.Equal(9, payload!.StockAvailable);
+        Assert.Equal(7, payload!.StockAvailable); // safety buffer 2
         Assert.Equal(33m, payload.CatalogPrice);
         Assert.Equal(variantB, payload.ResolvedVariantSku);
         Assert.Equal("AutoBestVariant", payload.StockSource);

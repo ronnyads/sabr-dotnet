@@ -229,7 +229,7 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
         var payload = await response.Content.ReadFromJsonAsync<ListingDraftGetResult>();
         Assert.NotNull(payload);
         Assert.Equal(variantB, payload!.ResolvedVariantSku);
-        Assert.Equal(10, payload.AvailableStock);
+        Assert.Equal(8, payload.AvailableStock); // safety buffer 2
         Assert.Equal("AutoBestVariant", payload.StockSource);
     }
 

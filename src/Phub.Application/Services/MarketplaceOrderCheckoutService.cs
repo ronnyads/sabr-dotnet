@@ -248,7 +248,6 @@ public sealed class MarketplaceOrderCheckoutService
             order.PaymentQuoteHash = quote.QuoteHash;
             order.WalletLedgerEntryId = ledger.Id;
             order.SabrPaymentConfirmedAt = nowUtc;
-            order.PaidAt ??= nowUtc;
             if (risk.Reasons.Count > 0)
                 order.RiskFlagsJson = JsonSerializer.Serialize(new { reasons = risk.Reasons });
 
@@ -540,6 +539,7 @@ public sealed class MarketplaceOrderCheckoutService
 
     private static (string Field, string Code)? ResolveBlockerError(IReadOnlyCollection<string> blockers)
     {
+        if (blockers.Contains(MarketplaceOrderPaymentBlockers.ChannelPaymentPending, StringComparer.Ordinal)) return ("channelPayment", "CHANNEL_PAYMENT_NOT_CONFIRMED");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.UnmappedItem, StringComparer.Ordinal)) return ("mapping", "ML_UNMAPPED_ITEM");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.OutOfStock, StringComparer.Ordinal)) return ("stock", "OUT_OF_STOCK_FOR_PAYMENT");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.CancellationPending, StringComparer.Ordinal)) return ("cancellation", "CANCELLATION_PENDING");

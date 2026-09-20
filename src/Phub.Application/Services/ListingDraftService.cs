@@ -3938,7 +3938,9 @@ public sealed class ListingDraftService :
             clientId,
             safeSiteId,
             query,
-            cancellationToken);
+            // The degraded response may be triggered by this token already being
+            // cancelled. A short local cache lookup must not fail for that reason.
+            cancellationToken.IsCancellationRequested ? CancellationToken.None : cancellationToken);
 
         return CreateDegradedSuggestResult(reason, items);
     }

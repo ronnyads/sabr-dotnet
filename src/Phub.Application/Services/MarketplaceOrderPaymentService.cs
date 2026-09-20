@@ -112,6 +112,14 @@ public sealed class MarketplaceOrderPaymentService
             shipments,
             await _inventoryService.BuildItemSummariesAsync(orderItems, cancellationToken));
 
+        if (inventorySummary.PaymentBlockers.Contains(MarketplaceOrderPaymentBlockers.ChannelPaymentPending, StringComparer.Ordinal))
+        {
+            return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
+            {
+                new ValidationError("channelPayment", "CHANNEL_PAYMENT_NOT_CONFIRMED")
+            });
+        }
+
         if (inventorySummary.PaymentBlockers.Contains(MarketplaceOrderPaymentBlockers.UnmappedItem, StringComparer.Ordinal))
         {
             return ServiceResult<MarketplaceMarkPaidExecutionResult>.Failure(new[]
@@ -214,7 +222,6 @@ public sealed class MarketplaceOrderPaymentService
         }
 
         order.SabrPaymentConfirmedAt = nowUtc;
-        order.PaidAt ??= nowUtc;
         if (riskReasons.Count > 0)
         {
             order.RiskFlagsJson = JsonSerializer.Serialize(new

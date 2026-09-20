@@ -23,6 +23,8 @@ Sequência comum ao admin e cliente:
 
 O hash da cotação impede confirmar valores que mudaram entre revisão e clique. Repetições são idempotentes e não recriam reservas nem geram um segundo débito. Pedidos sem vínculo, sem preço, sem estoque ou sem saldo continuam pendentes com bloqueador explícito.
 
+Em 20/09/2026, a cotação e o checkout passaram a bloquear pedido Mercado Livre cujo status externo ainda não é `paid`, com `channel_payment_pending` / `CHANNEL_PAYMENT_NOT_CONFIRMED`. A confirmação interna não escreve `MarketplaceOrder.PaidAt`: esse timestamp é um fato externo que vem da sincronização do canal, enquanto `SabrPaymentConfirmedAt` registra o checkout no HUB. O endpoint administrativo de pagamento usa a mesma regra. Testes locais cobrem o bloqueio sem débito e a separação dos timestamps; a suíte completa ainda tem falhas antigas em outros módulos, portanto não há homologação de seller real desta regra.
+
 Ver também [[01 - Dashboard de Vendas]] para a visão comercial agregada.
 
 Ver também [[08 - SENTINEL Torre de Expedicao]] para estados separados, deadline oficial e risco de SLA.

@@ -776,6 +776,7 @@ public static class MarketplaceOrderItemStockStatuses
 
 public static class MarketplaceOrderPaymentBlockers
 {
+    public const string ChannelPaymentPending = "channel_payment_pending";
     public const string NoImportedItems = "no_imported_items";
     public const string UnmappedItem = "unmapped_item";
     public const string OutOfStock = "out_of_stock";

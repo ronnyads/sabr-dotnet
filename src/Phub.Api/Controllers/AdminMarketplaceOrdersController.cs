@@ -327,6 +327,8 @@ public sealed class AdminMarketplaceOrdersController : ControllerBase
 
     private IActionResult MapValidationError(IReadOnlyCollection<ValidationError> errors)
     {
+        if (errors.Any(e => string.Equals(e.Message, "CHANNEL_PAYMENT_NOT_CONFIRMED", StringComparison.OrdinalIgnoreCase)))
+            return UnprocessableEntity(CreateApiError("CHANNEL_PAYMENT_NOT_CONFIRMED", "O marketplace ainda não confirmou o pagamento do comprador.", errors));
         if (errors.Any(e => e.Message.Contains("NOT_FOUND")))
             return NotFound(CreateApiError("NOT_FOUND", errors.First().Message));
         if (errors.Any(e => e.Message.Contains("NOT_CANCELLABLE")

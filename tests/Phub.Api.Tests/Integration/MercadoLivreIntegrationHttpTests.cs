@@ -353,7 +353,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 Provider = MarketplaceProvider.MercadoLivre,
                 SellerId = ParseSellerId(sellerId),
                 MlOrderId = "ORDER-ML-08",
-                Status = "ready",
+                Status = "paid",
                 ImportedAt = DateTimeOffset.UtcNow,
                 RawJson = "{}"
             });
@@ -385,6 +385,48 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var payload = await response.Content.ReadFromJsonAsync<ApiError>();
         Assert.NotNull(payload);
         Assert.Equal("ML_UNMAPPED_ITEM", payload!.Code);
+    }
+
+    [Fact]
+    public async Task MarkPaid_WithoutConfirmedMarketplacePayment_Returns422WithoutChargingWallet()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-unpaid";
+        const string tenantSlug = "mlunpaid";
+        var clientId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.MarketplaceOrders.Add(new MarketplaceOrder
+            {
+                Id = orderId,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = 1001999,
+                MlOrderId = "ORDER-ML-UNPAID",
+                Status = MarketplaceOrderStatuses.PendingPayment,
+                ImportedAt = DateTimeOffset.UtcNow,
+                RawJson = "{}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<ApiError>();
+        Assert.Equal("CHANNEL_PAYMENT_NOT_CONFIRMED", payload?.Code);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Empty(await verifyDb.WalletLedgerEntries.Where(item => item.OrderId == orderId).ToListAsync());
+        Assert.Null((await verifyDb.MarketplaceOrders.SingleAsync(item => item.Id == orderId)).SabrPaymentConfirmedAt);
     }
 
     [Fact]
@@ -533,6 +575,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(0, variant.ReservedStock);
         Assert.Equal(6, variant.AvailableStock);
         Assert.Equal(3_000, paidOrder.TotalChargeCentsAtPayment);
+        Assert.Null(paidOrder.PaidAt); // internal checkout cannot invent an external payment timestamp
         Assert.Equal(1_500, paidItem.CatalogUnitPriceCentsAtPayment);
         Assert.Equal(3_000, paidItem.ChargeLineTotalCentsAtPayment);
         Assert.Equal(997_000, wallet.BalanceCents);

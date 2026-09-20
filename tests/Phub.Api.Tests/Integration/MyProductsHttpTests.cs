@@ -386,7 +386,7 @@ public sealed class MyProductsHttpTests : IClassFixture<TestWebApplicationFactor
         Assert.NotNull(payload);
         var row = payload!.Items.Single(item => item.ProductSku == baseSku);
         Assert.Equal(variantB, row.ResolvedVariantSku);
-        Assert.Equal(8, row.AvailableStock);
+        Assert.Equal(6, row.AvailableStock); // physical 10 - reserved 2 - safety buffer 2
         Assert.Equal("AutoBestVariant", row.StockSource);
     }
 

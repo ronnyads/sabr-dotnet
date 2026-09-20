@@ -54,6 +54,13 @@ public sealed class MarketplaceOrderInventoryService
         IReadOnlyCollection<MarketplaceOrderItemInventorySummary> itemSummaries)
     {
         var blockers = new HashSet<string>(StringComparer.Ordinal);
+        if (order.Provider == MarketplaceProvider.MercadoLivre
+            && !string.Equals(order.Status, MarketplaceOrderStatuses.Paid, StringComparison.OrdinalIgnoreCase)
+            && !order.SabrPaymentConfirmedAt.HasValue)
+        {
+            blockers.Add(MarketplaceOrderPaymentBlockers.ChannelPaymentPending);
+        }
+
         if (itemSummaries.Count == 0)
         {
             blockers.Add(MarketplaceOrderPaymentBlockers.NoImportedItems);
