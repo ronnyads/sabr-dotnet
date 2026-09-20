@@ -150,6 +150,31 @@ public sealed class MercadoLivreSyncService
             await SyncConnectionAsync(connection, rangeFrom.ToUniversalTime(), rangeTo.ToUniversalTime(), cancellationToken));
     }
 
+    public async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncOrderNowAsync(
+        string tenantId, Guid clientId, long sellerId, string orderId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty || sellerId <= 0 ||
+            string.IsNullOrWhiteSpace(orderId))
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(new[]
+            {
+                new ValidationError("orderId", "Invalid tenant, seller or order id")
+            });
+
+        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(x =>
+            x.TenantId == tenantId && x.ClientId == clientId &&
+            x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId, cancellationToken);
+        if (connection == null)
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(new[]
+            {
+                new ValidationError("sellerId", "No active Mercado Livre connection found")
+            });
+
+        // Use the same upsert/mapping/reservation/financial pipeline as range sync,
+        // but do not search an entire seller window for one validated webhook.
+        return ServiceResult<MercadoLivreSyncNowResult>.Success(await SyncConnectionAsync(
+            connection, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, cancellationToken, [orderId.Trim()]));
+    }
+
     private async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncScopedAsync(
         string tenantId,
         Guid clientId,
@@ -343,10 +368,11 @@ public sealed class MercadoLivreSyncService
         TenantMarketplaceConnection connection,
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? specificOrderIds = null)
     {
         var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
-        var orderIds = await _mercadoLivreApiClient.SearchOrdersAsync(
+        var orderIds = specificOrderIds ?? await _mercadoLivreApiClient.SearchOrdersAsync(
             MercadoLivreSellerIdParser.ToApiString(connection.SellerId),
             fromUtc,
             toUtc,
@@ -429,8 +455,14 @@ public sealed class MercadoLivreSyncService
             var details = remoteOrder.details;
             if (details == null)
             {
+                if (specificOrderIds != null)
+                    throw new InvalidOperationException("ML_WEBHOOK_ORDER_NOT_FOUND_DURING_SYNC");
                 continue;
             }
+            if (specificOrderIds != null &&
+                (!MercadoLivreSellerIdParser.TryParseRequired(details.SellerId, out var remoteSellerId) ||
+                 remoteSellerId != connection.SellerId))
+                throw new InvalidOperationException("ML_ORDER_SELLER_MISMATCH");
 
             if (!string.IsNullOrWhiteSpace(details.ShipmentId))
             {
@@ -465,9 +497,13 @@ public sealed class MercadoLivreSyncService
                 remoteOrder.discounts, cancellationToken);
         }
 
-        connection.LastSyncAt = DateTimeOffset.UtcNow;
-        connection.UpdatedAt = DateTimeOffset.UtcNow;
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        if (specificOrderIds == null)
+        {
+            // A webhook updated one resource, not the seller's entire order window.
+            connection.LastSyncAt = DateTimeOffset.UtcNow;
+            connection.UpdatedAt = DateTimeOffset.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
 
         if (changedSkus.Count > 0)
         {

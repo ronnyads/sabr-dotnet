@@ -1069,7 +1069,9 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         await SeedVariantAsync(baseSku, variantSku, 8, 0);
         await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, "ITEM-WH-02", null, variantSku);
 
-        _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = new List<string> { "ORDER-WH-02" };
+        // A single orders_v2 webhook must synchronize its resource directly;
+        // the seller search intentionally has no matching order.
+        _factory.FakeMercadoLivreApiClient.SearchOrdersException = new InvalidOperationException("seller-wide search must not run");
         _factory.FakeMercadoLivreApiClient.OrdersById["ORDER-WH-02"] = new MercadoLivreOrderDetails
         {
             MlOrderId = "ORDER-WH-02",

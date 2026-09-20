@@ -243,11 +243,14 @@ public sealed class MercadoLivreWebhookService
                     await UpsertShipmentProjectionAsync(item, resourceValidation.shipmentDetails, accessToken, cancellationToken);
                 }
 
-                var syncResult = await _syncService.SyncNowAsync(
-                    item.TenantId,
-                    item.ClientId,
-                    MercadoLivreSellerIdParser.ToApiString(item.SellerId),
-                    cancellationToken);
+                // orders_v2 identifies one order. Payments and shipments can carry
+                // different resource identities, so retain the seller reconciliation
+                // fallback for those until their order association is explicit.
+                var syncResult = item.Topic.Contains("orders", StringComparison.OrdinalIgnoreCase)
+                    ? await _syncService.SyncOrderNowAsync(item.TenantId, item.ClientId, item.SellerId,
+                        ExtractResourceId(item.ResourceId, "orders")!, cancellationToken)
+                    : await _syncService.SyncNowAsync(item.TenantId, item.ClientId,
+                        MercadoLivreSellerIdParser.ToApiString(item.SellerId), cancellationToken);
 
                 if (syncResult.Succeeded)
                 {
