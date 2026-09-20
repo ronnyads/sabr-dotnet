@@ -5,8 +5,11 @@
 **/node_modules/
 **/dist/
 **/.git/
-**/.tmp-build/
-**/.tempbuild/
+.tmp-build/
+.tempbuild/
+**/.tmp-build/**
+**/.tempbuild/**
+tests/**/TestResults/
 **/.tmp-reviews/
 logs/
 *.log
