@@ -57,6 +57,11 @@ public sealed class MarketplaceOrderNumberService
             return await NextNumberWithoutTransactionAsync(cancellationToken);
         }
 
+        if (providerName.Contains("Npgsql", StringComparison.OrdinalIgnoreCase))
+        {
+            return await NextPostgresNumberAsync(cancellationToken);
+        }
+
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
@@ -85,6 +90,49 @@ public sealed class MarketplaceOrderNumberService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return value;
+    }
+
+    private async Task<long> NextPostgresNumberAsync(CancellationToken cancellationToken)
+    {
+        // Allocation and repair are one atomic statement. The previous read/update
+        // implementation could leave the counter behind orders imported by another
+        // path, and concurrent workers could then generate the same PHUB number.
+        // The conflict branch always advances the locked counter by at least one and
+        // also fast-forwards it past the greatest number already persisted.
+        const string sql = """
+            INSERT INTO marketplace_order_number_sequences (id, next_number, updated_at)
+            VALUES (
+                1,
+                (SELECT COALESCE(MAX(CAST(SUBSTRING(internal_order_number FROM 6) AS bigint)), 0) + 2
+                 FROM marketplace_orders
+                 WHERE internal_order_number ~ '^PHUB-[0-9]+$'),
+                NOW())
+            ON CONFLICT (id) DO UPDATE
+            SET next_number = GREATEST(
+                    marketplace_order_number_sequences.next_number + 1,
+                    (SELECT COALESCE(MAX(CAST(SUBSTRING(internal_order_number FROM 6) AS bigint)), 0) + 2
+                     FROM marketplace_orders
+                     WHERE internal_order_number ~ '^PHUB-[0-9]+$')),
+                updated_at = NOW()
+            RETURNING next_number - 1 AS "Value"
+            """;
+
+        var connection = _dbContext.Database.GetDbConnection();
+        var shouldClose = connection.State != ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            var result = await command.ExecuteScalarAsync(cancellationToken);
+            return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            if (shouldClose)
+                await connection.CloseAsync();
+        }
     }
 
     private async Task<long> NextNumberWithoutTransactionAsync(CancellationToken cancellationToken)
