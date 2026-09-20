@@ -26,7 +26,7 @@ Este é, na minha avaliação, o achado de maior risco financeiro/operacional de
 
 **Limitação de verificação:** não foi possível rodar `dotnet build`/`dotnet test` neste ambiente (VM do dispositivo sem SDK .NET; container de nuvem com SDK instalado mas `dotnet restore` bloqueado por política de rede em `api.nuget.org`, erro `NU1301`). A revisão foi manual (diff linha a linha, balanceamento de chaves, conferência de assinaturas). Além disso, o pipeline `.github/workflows/backend-deploy.yml` filtra testes de integração (`--filter "FullyQualifiedName!~Integration"`), então o novo teste de regressão **não roda no CI** — só localmente. Recomendado rodar `dotnet test --filter "FullyQualifiedName~ExpireReservations"` localmente para confirmar antes de considerar 100% validado.
 
-### 2.2 Crítico — `MarketplaceOrderCheckoutService.LoadVariantsAsync` ainda usa `ANY({0})` com `string[]` cru
+### 2.2 [CORRIGIDO em 20/09/2026] Crítico — `MarketplaceOrderCheckoutService.LoadVariantsAsync` usava `ANY({0})` com `string[]` cru
 
 Mesmo padrão que gerou o erro PostgreSQL 42809 documentado na nota do Ledger e corrigido em `4cf6856` — mas o fix só foi aplicado em `MarketplaceOrderInventoryService`. Em `MarketplaceOrderCheckoutService.cs:354`, o lock de variantes durante a confirmação de pagamento ainda faz:
 
@@ -35,6 +35,10 @@ Mesmo padrão que gerou o erro PostgreSQL 42809 documentado na nota do Ledger e 
 ```
 
 Esse é exatamente o caminho citado no apêndice do plano ("`LoadVariantsAsync` com `ANY({0})`/`string[]`"). Como esse método roda dentro de `ConfirmAsync` — ou seja, toda confirmação de pagamento interno com PostgreSQL real — o risco é de falha no fluxo de pagamento, não apenas na reconciliação em background.
+
+**Evidência da correção (20/09/2026):** substituí `ANY({0})` por `WHERE variant_sku IN (SELECT jsonb_array_elements_text({0}::jsonb))`, serializando os SKUs com `JsonSerializer.Serialize`, exatamente a mesma técnica já usada em `MarketplaceOrderInventoryService.ReconcileReservationsCoreAsync`. Diferente do achado 2.1, aqui consegui validar a própria consulta contra um PostgreSQL 16 real (instância local isolada, fora do banco de produção): testei a query nova com `PREPARE`/`EXECUTE` usando um parâmetro de texto contendo JSON (`$1::jsonb`), cobrindo lista populada, lista vazia (0 linhas, sem erro) e a combinação com `FOR UPDATE` — todos os casos executaram corretamente. Isso não substitui rodar a suíte de testes .NET (que continua bloqueada por falta de acesso ao NuGet neste ambiente), mas reduz bastante o risco de erro de sintaxe/semântica SQL nesta mudança específica.
+
+**Limitação:** a suíte de testes de integração usa `UseInMemoryDatabase`, então nenhum teste automatizado exercita este caminho `FromSqlRaw`/Npgsql-específico (nem antes nem depois da correção) — só é exercitado com PostgreSQL real em produção/homologação. Recomendo rodar manualmente `dotnet test` local e, se possível, um teste manual do fluxo de confirmação de pagamento contra um PostgreSQL de homologação antes de considerar 100% validado.
 
 ### 2.3 Alto — `FinancialSyncJobService.ProcessNextAsync` libera o lease sem compare-and-set do dono
 
@@ -82,7 +86,7 @@ O serviço já processa por tópico/recurso específico (melhor do que o apêndi
 Por risco decrescente:
 
 1. ~~`ExpireReservationsAsync` liberando reserva de pedido ativo por timer (2.1)~~ — **corrigido em 20/09/2026**, ver evidência acima. Pendente apenas confirmação de build/teste local (rede bloqueada neste ambiente).
-2. `LoadVariantsAsync` do checkout com `ANY({0})`/`string[]` (2.2) — risco de erro no caminho de pagamento.
+2. ~~`LoadVariantsAsync` do checkout com `ANY({0})`/`string[]` (2.2)~~ — **corrigido em 20/09/2026**, ver evidência acima (validado contra PostgreSQL real, mas não pelo dotnet test).
 3. Compare-and-set de lease no `FinancialSyncJobService` (2.3).
 4. Revalidação de mapping no `StockAvailabilityService.ProcessStockJobAsync` (2.4).
 5. Lease/heartbeat e sincronização pontual no webhook (2.5).

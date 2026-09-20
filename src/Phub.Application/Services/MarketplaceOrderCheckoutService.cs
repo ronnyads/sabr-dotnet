@@ -350,8 +350,15 @@ public sealed class MarketplaceOrderCheckoutService
 
         if (lockForUpdate && IsNpgsql())
         {
+            // Não passar string[] diretamente ao ANY via FromSqlRaw: esse caminho gerou
+            // 42809 em produção (ver docs/obsidian/PrometheusHUB/09 - Ledger Financeiro
+            // e Rentabilidade.md). Mesma técnica já usada em
+            // MarketplaceOrderInventoryService.ReconcileReservationsCoreAsync: serializa
+            // os SKUs como JSON e expande com jsonb_array_elements_text no PostgreSQL.
             await _db.ProductVariants
-                .FromSqlRaw("SELECT * FROM product_variants WHERE variant_sku = ANY ({0}) ORDER BY variant_sku FOR UPDATE", skus)
+                .FromSqlRaw(
+                    "SELECT * FROM product_variants WHERE variant_sku IN (SELECT jsonb_array_elements_text({0}::jsonb)) ORDER BY variant_sku FOR UPDATE",
+                    JsonSerializer.Serialize(skus))
                 .LoadAsync(cancellationToken);
         }
 
