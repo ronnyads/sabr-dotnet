@@ -55,6 +55,12 @@ public sealed class MercadoLivreCatalogImportService
         var listings = await _apiClient.SearchSellerItemsAsync(connection.SellerId.ToString(CultureInfo.InvariantCulture), request.Query, accessToken, cancellationToken);
         var brands = request.Brands.Where(x => !string.IsNullOrWhiteSpace(x)).Select(Normalize).ToHashSet();
         var requestedItemIds = request.ItemIds.Where(x => !string.IsNullOrWhiteSpace(x)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // ItemIds vazio é o sinal de "nenhuma seleção explícita ainda" e só é seguro em
+        // PreviewOnly (onde nada é gravado). Fora do preview, deixar passar tudo por
+        // brands sozinho gravaria produtos/mapeamentos para anúncios que o usuário nunca
+        // selecionou na tela de importação (achado 2.7 da auditoria).
+        if (!request.PreviewOnly && requestedItemIds.Count == 0)
+            return ServiceResult<MercadoLivreCatalogImportResult>.Failure([new ValidationError("itemIds", "Selecione ao menos um anúncio antes de importar.")]);
         var selected = listings
             .Where(x => brands.Count == 0 || brands.Contains(Normalize(ResolveBrand(x))))
             .Where(x => requestedItemIds.Count == 0 || requestedItemIds.Contains(x.ItemId))

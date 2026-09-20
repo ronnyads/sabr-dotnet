@@ -2315,6 +2315,49 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task AdminCatalogImport_WithEmptyItemIds_RejectsOutsidePreview_AndWritesNothing()
+    {
+        // Regressão do achado 2.7 da auditoria: requestedItemIds.Count == 0 deixava
+        // passar TODOS os anúncios do filtro de brands, mesmo fora do PreviewOnly, sem
+        // nenhuma seleção explícita do usuário. A importação real agora exige ItemIds
+        // não vazio; PreviewOnly continua podendo listar tudo, porque não grava nada.
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-empty-itemids";
+        const string tenantSlug = "mlemptyitemids";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, "1001103");
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = "MLB-NEVER-SELECTED",
+            Title = "Base Boca Rosa",
+            Brand = "Boca Rosa",
+            Price = 49.90m
+        });
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest { Brands = [], ItemIds = [], CatalogPriceCents = 800 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.False(await db.Products.AnyAsync());
+        Assert.False(await db.TenantMarketplaceListingMaps.AnyAsync());
+
+        var previewResponse = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest { Brands = [], ItemIds = [], CatalogPriceCents = 800, PreviewOnly = true });
+
+        Assert.Equal(HttpStatusCode.OK, previewResponse.StatusCode);
+        var previewResult = await previewResponse.Content.ReadFromJsonAsync<MercadoLivreCatalogImportResult>();
+        Assert.NotNull(previewResult);
+        Assert.Contains(previewResult!.Items, item => item.ItemId == "MLB-NEVER-SELECTED");
+        Assert.False(await db.Products.AnyAsync());
+    }
+
+    [Fact]
     public async Task FinancialSyncJobService_ProcessNextAsync_ReleasesLease_ForOwningWorker()
     {
         // Regressão do achado 2.3 da auditoria: a liberação final do lease em

@@ -75,9 +75,11 @@ O serviço já processa por tópico/recurso específico (melhor do que o apêndi
 
 **Evidência da correção (20/09/2026):** `estimatedTotal`/`confirmedTotal` agora são acumulados dentro do mesmo laço que já monta `componentDeltas`, somando `AmountCents` apenas quando a chave econômica tem estimativa **e** confirmação ao mesmo tempo — a mesma regra de pareamento que o detalhamento por componente já aplicava. Além disso, `gross`, `externalNet`, `productCost`, `ReconciledConfirmedValueCents` e o `CurrencyId` retornado agora derivam de `sameCurrencyEntries` (as `activeEntries` filtradas pela `dominantCurrencyId` — a moeda da primeira entrada, mesma regra que já definia o `CurrencyId` da resposta), em vez de somar `AmountCents` de todas as moedas juntas. Dois testes novos em `tests/Phub.Api.Tests/FinancialLedgerServiceTests.cs`: `Profitability_DivergenceOnlyCountsKeysWithBothEstimateAndConfirmation` (confirma que uma confirmação sem estimativa pareada não entra em `AbsoluteCents`, e que o componente correspondente nem aparece em `ComponentsCents`) e `Profitability_KeepsTotalsInOneCurrency_WhenEntriesAreMixed` (duas vendas confirmadas em moedas diferentes; `GrossRevenueCents` reflete só a moeda dominante, nunca a soma das duas). Ambos usam `AppDbContext` InMemory isolado por teste (`CreateDb()`), sem risco de vazamento entre testes.
 
-### 2.7 Baixo/Médio — `MercadoLivreCatalogImportService.ImportAsync`: `ItemIds` vazio ainda pode selecionar tudo
+### 2.7 [CORRIGIDO em 20/09/2026] Baixo/Médio — `MercadoLivreCatalogImportService.ImportAsync`: `ItemIds` vazio ainda pode selecionar tudo
 
 `requestedItemIds.Count == 0 || requestedItemIds.Contains(...)` deixa passar todos os anúncios quando `ItemIds` vem vazio, inclusive fora do modo `PreviewOnly`. Não há validação que exija seleção explícita antes de uma gravação real, como a nota do Obsidian descreve ("nenhuma gravação acontece antes da seleção explícita"). Vale adicionar essa validação explicitamente, mesmo que hoje o frontend sempre mande a lista.
+
+**Evidência da correção (20/09/2026):** adicionada uma validação logo após calcular `requestedItemIds` — fora do `PreviewOnly`, `ItemIds` vazio agora retorna `ValidationError("itemIds", ...)` antes de tocar em `selected`/`catalogIds`/qualquer escrita, em vez de deixar o filtro de `brands` sozinho decidir o que grava. `PreviewOnly` continua podendo listar tudo com `ItemIds` vazio, já que não grava nada. Teste novo: `AdminCatalogImport_WithEmptyItemIds_RejectsOutsidePreview_AndWritesNothing` (`tests/Phub.Api.Tests/Integration/MercadoLivreIntegrationHttpTests.cs`) — cobre tanto a rejeição (400, nenhum Product/mapping criado) quanto o preview (200, lista o anúncio, nada gravado).
 
 ### 2.8 Baixo — `SentinelReconciliationService.EnqueueDueAsync` também libera lease sem checar o dono
 
@@ -113,6 +115,6 @@ Por risco decrescente:
 4. ~~Revalidação de mapping no `StockAvailabilityService.ProcessStockJobAsync` (2.4)~~ — **corrigido em 20/09/2026**, sem teste automatizado (ver evidência acima).
 5. ~~Lease/heartbeat no webhook (2.5, item b)~~ — **corrigido em 20/09/2026**. Sincronização pontual (item a) segue pendente, ver evidência acima.
 6. ~~Segregação de moeda e divergência pareada no `FinancialProfitabilityService` (2.6)~~ — **corrigido em 20/09/2026**, ver evidência acima.
-7. Validação de `ItemIds` na importação de catálogo (2.7).
+7. ~~Validação de `ItemIds` na importação de catálogo (2.7)~~ — **corrigido em 20/09/2026**, ver evidência acima.
 
 Cada item seria implementado como incremento verificável isolado, com teste e evidência, atualizando esta auditoria e as notas do Obsidian afetadas, conforme o próprio plano exige.

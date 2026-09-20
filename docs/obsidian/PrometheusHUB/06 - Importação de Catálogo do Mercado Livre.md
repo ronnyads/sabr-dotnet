@@ -25,6 +25,7 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 - `POST /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import`.
 - O request aceita busca, marcas, estoque, modo de prévia e `skuAssignments` (`itemId`, `variationId`, `internalSku`, `createNewProduct`, `catalogPriceCents` opcional). A interface envia as atribuições de SKU por anúncio/variação e permite custo individual com fallback para o custo padrão.
 - `ItemIds` limita a gravação aos anúncios selecionados. A prévia pode consultar tudo, mas nenhuma gravação acontece antes da seleção explícita.
+- Corrigido em 20/09/2026 (achado 2.7 da auditoria `mercado-livre-360-auditoria.md`): o backend não impunha essa regra sozinho — `ItemIds` vazio fora do `PreviewOnly` deixava o filtro de `Brands` selecionar e gravar todos os anúncios correspondentes, mesmo sem seleção explícita na tela. `MercadoLivreCatalogImportService.ImportAsync` agora rejeita (`ValidationError "itemIds"`) qualquer importação real com `ItemIds` vazio; o modo de prévia continua livre para listar tudo, já que não grava nada.
 
 ## Inteligência de seller
 
