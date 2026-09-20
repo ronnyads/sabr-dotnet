@@ -650,7 +650,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
-    public async Task ExpireReservations_ReleasesReservedStock_AndSyncsAvailability()
+    public async Task ExpireReservations_ReleasesReservedStock_ForTerminalOrder_AndSyncsAvailability()
     {
         await _factory.ResetDatabaseAsync();
 
@@ -679,7 +679,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 Provider = MarketplaceProvider.MercadoLivre,
                 SellerId = ParseSellerId(sellerId),
                 MlOrderId = "ORDER-ML-06",
-                Status = "created",
+                Status = "cancelled", // terminal: eligible for the TTL cleanup sweep
                 ImportedAt = nowUtc.AddHours(-1),
                 RawJson = "{}"
             });
@@ -734,6 +734,97 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Contains(
             _factory.FakeMercadoLivreApiClient.StockUpdates,
             item => item.ItemId == "ITEM-ML-06" && item.AvailableQuantity == 5);
+    }
+
+    [Fact]
+    public async Task ExpireReservations_KeepsReservedStock_ForActiveOrder()
+    {
+        // The TTL sweep is only a cleanup safety net for orders that already reached a
+        // terminal state. An order still awaiting payment keeps its stock lock past the
+        // TTL: only a confirmed cancellation or an audited administrative resolution may
+        // release it (docs/planos-em-andamento/mercado-livre-360.md, section 2).
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-06b";
+        const string tenantSlug = "mlexpireactive";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001007";
+        const string baseSku = "SKU-BASE-ML-06B";
+        const string variantSku = "SKU-VAR-ML-06B";
+        var nowUtc = DateTimeOffset.UtcNow;
+
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, variantSku, physicalStock: 5, reservedStock: 2);
+        await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, "ITEM-ML-06B", null, variantSku);
+
+        var orderId = Guid.NewGuid();
+        var orderItemId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.MarketplaceOrders.Add(new MarketplaceOrder
+            {
+                Id = orderId,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlOrderId = "ORDER-ML-06B",
+                Status = "paid", // active/pending payment: not a terminal status
+                ImportedAt = nowUtc.AddHours(-1),
+                RawJson = "{}"
+            });
+            db.MarketplaceOrderItems.Add(new MarketplaceOrderItem
+            {
+                Id = orderItemId,
+                MarketplaceOrderId = orderId,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlItemId = "ITEM-ML-06B",
+                SabrVariantSku = variantSku,
+                Quantity = 2,
+                ReservedQuantity = 2,
+                MappingState = MarketplaceMappingStates.Mapped,
+                RawJson = "{}"
+            });
+            db.StockReservations.Add(new StockReservation
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                ClientId = clientId,
+                SabrVariantSku = variantSku,
+                MarketplaceOrderId = orderId,
+                MarketplaceOrderItemId = orderItemId,
+                Quantity = 2,
+                Status = StockReservationStatus.Reserved,
+                ReservedAt = nowUtc.AddHours(-2),
+                ExpiresAt = nowUtc.AddMinutes(-5)
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var syncService = scope.ServiceProvider.GetRequiredService<MercadoLivreSyncService>();
+            var releasedCount = await syncService.ExpireReservationsAsync();
+            Assert.Equal(0, releasedCount);
+        }
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var reservation = await verifyDb.StockReservations.SingleAsync();
+        var orderItem = await verifyDb.MarketplaceOrderItems.SingleAsync();
+        var variant = await verifyDb.ProductVariants.SingleAsync(item => item.VariantSku == variantSku);
+
+        Assert.Equal(StockReservationStatus.Reserved, reservation.Status);
+        Assert.Equal(2, orderItem.ReservedQuantity);
+        Assert.Equal(2, variant.ReservedStock);
+        Assert.Equal(3, variant.AvailableStock);
+        Assert.DoesNotContain(
+            _factory.FakeMercadoLivreApiClient.StockUpdates,
+            item => item.ItemId == "ITEM-ML-06B");
     }
 
     [Fact]

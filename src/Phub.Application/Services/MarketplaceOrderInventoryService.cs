@@ -120,6 +120,38 @@ public sealed class MarketplaceOrderInventoryService
         }
     }
 
+    /// <summary>
+    /// True when the order's operational lifecycle already reached a terminal state,
+    /// either via its own status or via its shipment's confirmed external state. A
+    /// reservation tied to a non-terminal order must never be released by a timer;
+    /// only a confirmed cancellation or an audited administrative resolution can end
+    /// that lock (see docs/obsidian/PrometheusHUB/09 - Ledger Financeiro e Rentabilidade.md).
+    /// </summary>
+    public async Task<bool> IsReservationTerminalAsync(
+        MarketplaceOrder order,
+        long sellerId,
+        CancellationToken cancellationToken = default)
+    {
+        if (MarketplaceOrderWorkflow.IsTerminalOrderStatus(order.Status))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(order.ShipmentId))
+        {
+            return false;
+        }
+
+        return await _dbContext.MarketplaceShipments.AsNoTracking().AnyAsync(shipment =>
+            shipment.TenantId == order.TenantId && shipment.ClientId == order.ClientId
+            && shipment.Provider == order.Provider && shipment.SellerId == sellerId
+            && shipment.ShipmentId == order.ShipmentId
+            && (shipment.ShippedAt.HasValue || shipment.Status == "shipped"
+                || shipment.Status == "delivered" || shipment.Status == "returned"
+                || shipment.Status == "cancelled" || shipment.Status == "not_delivered"),
+            cancellationToken);
+    }
+
     private async Task ReconcileReservationsCoreAsync(
         MarketplaceOrder order,
         long sellerId,
@@ -127,17 +159,7 @@ public sealed class MarketplaceOrderInventoryService
         CancellationToken cancellationToken)
     {
         var nowUtc = DateTimeOffset.UtcNow;
-        var terminalOrder = order.Status?.Trim().ToLowerInvariant() is "shipped" or "delivered" or "cancelled" or "refunded";
-        var terminalShipment = !string.IsNullOrWhiteSpace(order.ShipmentId)
-            && await _dbContext.MarketplaceShipments.AsNoTracking().AnyAsync(shipment =>
-                shipment.TenantId == order.TenantId && shipment.ClientId == order.ClientId
-                && shipment.Provider == order.Provider && shipment.SellerId == sellerId
-                && shipment.ShipmentId == order.ShipmentId
-                && (shipment.ShippedAt.HasValue || shipment.Status == "shipped"
-                    || shipment.Status == "delivered" || shipment.Status == "returned"
-                    || shipment.Status == "cancelled" || shipment.Status == "not_delivered"),
-                cancellationToken);
-        var holdInventory = !terminalOrder && !terminalShipment;
+        var holdInventory = !await IsReservationTerminalAsync(order, sellerId, cancellationToken);
         var items = order.Items.ToList();
         var itemIds = items.Select(item => item.Id).ToList();
         var reservations = itemIds.Count == 0

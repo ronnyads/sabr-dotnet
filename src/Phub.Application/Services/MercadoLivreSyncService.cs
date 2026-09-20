@@ -244,8 +244,51 @@ public sealed class MercadoLivreSyncService
             return 0;
         }
 
-        var changedKeys = new HashSet<string>(StringComparer.Ordinal);
+        // An operational lock on an active sale is never released by a timer: only a
+        // confirmed cancellation (OrderCancellationService) or an audited administrative
+        // resolution may end it. This sweep only cleans up reservations whose order
+        // already reached a terminal state (or no longer exists) but was, for whatever
+        // reason, left as Reserved instead of Released/Consumed.
+        var orderIds = expired.Select(item => item.MarketplaceOrderId).Distinct().ToList();
+        var orders = await _dbContext.MarketplaceOrders.AsNoTracking()
+            .Where(order => orderIds.Contains(order.Id))
+            .ToDictionaryAsync(order => order.Id, cancellationToken);
+
+        var releasable = new List<StockReservation>();
+        var keptForActiveOrder = 0;
         foreach (var reservation in expired)
+        {
+            if (!orders.TryGetValue(reservation.MarketplaceOrderId, out var order))
+            {
+                // Orphaned reservation: the order no longer exists. Nothing left to protect.
+                releasable.Add(reservation);
+                continue;
+            }
+
+            if (await _inventoryService.IsReservationTerminalAsync(order, order.SellerId, cancellationToken))
+            {
+                releasable.Add(reservation);
+            }
+            else
+            {
+                keptForActiveOrder++;
+            }
+        }
+
+        if (keptForActiveOrder > 0)
+        {
+            _logger.LogInformation(
+                "Kept {Count} expired reservation(s) tied to still-active orders; only cancellation or admin resolution releases them.",
+                keptForActiveOrder);
+        }
+
+        if (releasable.Count == 0)
+        {
+            return 0;
+        }
+
+        var changedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reservation in releasable)
         {
             reservation.Status = StockReservationStatus.Released;
             reservation.UpdatedAt = nowUtc;
@@ -283,7 +326,7 @@ public sealed class MercadoLivreSyncService
             await _stockAvailabilityService.SyncStockForSkuAsync(parts[0], clientId, parts[2], cancellationToken);
         }
 
-        return expired.Count;
+        return releasable.Count;
     }
 
     private async Task<MercadoLivreSyncNowResult> SyncConnectionAsync(

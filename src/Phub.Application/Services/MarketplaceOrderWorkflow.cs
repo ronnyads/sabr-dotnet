@@ -98,6 +98,16 @@ internal static class MarketplaceOrderWorkflow
         return rawStatus is "cancelled" or "canceled";
     }
 
+    /// <summary>
+    /// True when the internal SABR order status is one of the terminal states that end
+    /// an order's operational lifecycle (shipped, delivered, cancelled or refunded).
+    /// Used to decide whether a stock reservation may ever be released automatically:
+    /// a reservation tied to an active/pending order never expires by timer, only a
+    /// confirmed cancellation or an audited administrative resolution ends that lock.
+    /// </summary>
+    public static bool IsTerminalOrderStatus(string? status)
+        => status?.Trim().ToLowerInvariant() is "shipped" or "delivered" or "cancelled" or "refunded";
+
     public static string ToChannelLabel(string? stage, string? rawStatus)
         => stage switch
         {
