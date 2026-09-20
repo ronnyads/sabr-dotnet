@@ -26,3 +26,10 @@ obj
 .tmp-build
 .tempbuild
 .tmp-reviews
+tests
+docs
+.agent
+.github
+scripts
+README.md
+AGENTS.md
