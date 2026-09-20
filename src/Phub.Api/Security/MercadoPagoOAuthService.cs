@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Phub.Application.Abstractions;
 using Phub.Application.Options;
+using Phub.Application.Services;
 using Phub.Domain.Entities;
 using Phub.Domain.Enums;
 
@@ -20,17 +21,20 @@ public sealed class MercadoPagoOAuthService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDataProtector _protector;
     private readonly MercadoPagoOptions _options;
+    private readonly MercadoLivreOAuthService _mercadoLivreOAuth;
 
     public MercadoPagoOAuthService(
         IAppDbContext db,
         IHttpClientFactory httpClientFactory,
         IDataProtectionProvider dataProtectionProvider,
-        IOptions<MercadoPagoOptions> options)
+        IOptions<MercadoPagoOptions> options,
+        MercadoLivreOAuthService mercadoLivreOAuth)
     {
         _db = db;
         _httpClientFactory = httpClientFactory;
         _protector = dataProtectionProvider.CreateProtector("PrometheusHUB.MercadoPagoOAuthGrant.v1");
         _options = options.Value;
+        _mercadoLivreOAuth = mercadoLivreOAuth;
     }
 
     public bool IsConfigured(out string message)
@@ -130,16 +134,27 @@ public sealed class MercadoPagoOAuthService
         if (grant == null)
             return new MercadoPagoBillingProbeResult(sellerId, false, "MP_GRANT_NOT_FOUND", null);
 
+        var marketplaceConnection = await _db.TenantMarketplaceConnections.FirstOrDefaultAsync(x =>
+            x.TenantId == tenantId && x.ClientId == clientId &&
+            x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId,
+            cancellationToken);
+        if (marketplaceConnection == null)
+            return new MercadoPagoBillingProbeResult(sellerId, false, "ML_GRANT_NOT_FOUND", null);
+
         string accessToken;
         try
         {
-            accessToken = await GetValidAccessTokenAsync(grant, cancellationToken);
+            // Billing reports for both group=ML and group=MP live on the Mercado
+            // Livre API and are guarded by the ML application's functional
+            // "Faturamento" permission. The distinct MP grant remains required as
+            // proof of the seller's financial authorization, but its generic OAuth
+            // token is not accepted by this resource policy.
+            accessToken = await _mercadoLivreOAuth.GetValidAccessTokenAsync(
+                marketplaceConnection, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            grant.CapabilityError = ex is MercadoPagoReauthorizationRequiredException
-                ? "MP_REAUTHORIZATION_REQUIRED" : "MP_TOKEN_REFRESH_FAILED";
-            grant.RequiresReauthorization = ex is MercadoPagoReauthorizationRequiredException;
+            grant.CapabilityError = "ML_REAUTHORIZATION_REQUIRED";
             grant.UpdatedAt = DateTimeOffset.UtcNow;
             await _db.SaveChangesAsync(cancellationToken);
             return new MercadoPagoBillingProbeResult(sellerId, false, grant.CapabilityError, null);

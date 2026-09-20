@@ -3,7 +3,9 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Phub.Api.Security;
+using Phub.Api.Tests.TestHost;
 using Phub.Application.Options;
+using Phub.Application.Services;
 using Phub.Domain.Entities;
 using Phub.Domain.Enums;
 using Phub.Infrastructure.Persistence;
@@ -31,6 +33,16 @@ public sealed class MercadoPagoBillingProbeTests
             TokenExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
         };
         db.MarketplaceOAuthGrants.Add(grant);
+        db.TenantMarketplaceConnections.Add(new TenantMarketplaceConnection
+        {
+            TenantId = grant.TenantId,
+            ClientId = grant.ClientId,
+            Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = grant.SellerId,
+            AccessToken = "ml-functional-token",
+            RefreshToken = "ml-refresh-token",
+            TokenExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+        });
         await db.SaveChangesAsync();
         Uri? requestedUri = null;
         var handler = new StubHandler(request =>
@@ -38,8 +50,10 @@ public sealed class MercadoPagoBillingProbeTests
             requestedUri = request.RequestUri;
             return new HttpResponseMessage(status) { Content = new StringContent(body) };
         });
+        var mlOAuth = new MercadoLivreOAuthService(db, new FakeMercadoLivreApiClient(),
+            Microsoft.Extensions.Options.Options.Create(new MercadoLivreOptions()));
         var service = new MercadoPagoOAuthService(db, new StubClientFactory(handler), protector,
-            Microsoft.Extensions.Options.Options.Create(new MercadoPagoOptions()));
+            Microsoft.Extensions.Options.Options.Create(new MercadoPagoOptions()), mlOAuth);
 
         var result = await service.ProbeBillingAsync(grant.TenantId, grant.ClientId, grant.SellerId, CancellationToken.None);
 
@@ -48,6 +62,8 @@ public sealed class MercadoPagoBillingProbeTests
         Assert.Equal("api.mercadolibre.com", requestedUri?.Host);
         Assert.Contains("group=MP", requestedUri?.Query);
         Assert.Contains("document_type=BILL", requestedUri?.Query);
+        Assert.Equal("Bearer", handler.LastAuthorizationScheme);
+        Assert.Equal("ml-functional-token", handler.LastAuthorizationParameter);
         Assert.Equal(expectedVerified, grant.CapabilitiesJson.Contains("\"billingMercadoPago\":true"));
     }
 
@@ -58,7 +74,14 @@ public sealed class MercadoPagoBillingProbeTests
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
+        public string? LastAuthorizationScheme { get; private set; }
+        public string? LastAuthorizationParameter { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(respond(request));
+        {
+            LastAuthorizationScheme = request.Headers.Authorization?.Scheme;
+            LastAuthorizationParameter = request.Headers.Authorization?.Parameter;
+            return Task.FromResult(respond(request));
+        }
     }
 }
