@@ -18,17 +18,20 @@ public sealed class FinancialCapabilityService
     {
         var connections = await _db.TenantMarketplaceConnections.Where(x => x.TenantId == tenantId && x.ClientId == clientId
             && x.Provider == MarketplaceProvider.MercadoLivre).ToListAsync(ct);
-        var grants = await _db.MarketplaceOAuthGrants.AsNoTracking().Where(x => x.TenantId == tenantId && x.ClientId == clientId).ToListAsync(ct);
+        var grants = await _db.MarketplaceOAuthGrants.Where(x => x.TenantId == tenantId && x.ClientId == clientId).ToListAsync(ct);
         var results = new List<FinancialCapabilityResult>();
         foreach (var connection in connections)
         {
             var result = new FinancialCapabilityResult { SellerId = connection.SellerId, Orders = true, Shipments = true, Discounts = true };
             var sellerGrants = grants.Where(x => x.SellerId == connection.SellerId).ToList();
-            result.BillingMercadoLivre = sellerGrants.Any(x => x.AppFamily == "MERCADO_LIVRE" && !x.RequiresReauthorization);
+            var mlGrant = sellerGrants.FirstOrDefault(x => x.AppFamily == "MERCADO_LIVRE");
+            result.BillingMercadoLivre = mlGrant != null && !mlGrant.RequiresReauthorization &&
+                mlGrant.LastCapabilityVerifiedAt > DateTimeOffset.UtcNow.AddDays(-1) &&
+                IsBillingVerified(mlGrant.CapabilitiesJson, "billingMercadoLivre");
             result.BillingMercadoPago = sellerGrants.Any(x => x.AppFamily == "MERCADO_PAGO" &&
                 !x.RequiresReauthorization && x.TokenExpiresAt > DateTimeOffset.UtcNow &&
                 x.LastCapabilityVerifiedAt.HasValue &&
-                IsBillingVerified(x.CapabilitiesJson));
+                IsBillingVerified(x.CapabilitiesJson, "billingMercadoPago"));
             result.VerifiedAt = sellerGrants.MaxBy(x => x.LastCapabilityVerifiedAt)?.LastCapabilityVerifiedAt;
             if (probe)
             {
@@ -40,6 +43,38 @@ public sealed class FinancialCapabilityService
                     result.Orders = result.Shipments = result.Discounts = identityMatches;
                     result.VerifiedAt = DateTimeOffset.UtcNow;
                     if (!identityMatches) result.Pending.Add("ML_SELLER_IDENTITY_MISMATCH");
+                    if (identityMatches)
+                    {
+                        FinancialBillingProbeResponse billing;
+                        try
+                        {
+                            billing = await _api.ProbeBillingPeriodsAsync(token, ct);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            billing = new FinancialBillingProbeResponse(false, true, "ML_BILLING_PROBE_FAILED");
+                        }
+                        mlGrant ??= new Phub.Domain.Entities.MarketplaceOAuthGrant
+                        {
+                            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+                            SellerId = connection.SellerId, AppFamily = "MERCADO_LIVRE"
+                        };
+                        if (!sellerGrants.Contains(mlGrant))
+                        {
+                            _db.MarketplaceOAuthGrants.Add(mlGrant);
+                            sellerGrants.Add(mlGrant);
+                        }
+                        if (!billing.TransientFailure)
+                        {
+                            mlGrant.CapabilitiesJson = JsonSerializer.Serialize(new { billingMercadoLivre = billing.Verified });
+                            mlGrant.LastCapabilityVerifiedAt = DateTimeOffset.UtcNow;
+                            result.BillingMercadoLivre = billing.Verified;
+                        }
+                        mlGrant.CapabilityError = billing.ErrorCode;
+                        mlGrant.UpdatedAt = DateTimeOffset.UtcNow;
+                        await _db.SaveChangesAsync(ct);
+                        if (billing.TransientFailure) result.Pending.Add(billing.ErrorCode!);
+                    }
                 }
                 catch { result.Orders = result.Shipments = result.Discounts = false; result.Pending.Add("ML_REAUTHORIZATION_REQUIRED"); }
             }
@@ -51,13 +86,14 @@ public sealed class FinancialCapabilityService
         return results;
     }
 
-    private static bool IsBillingVerified(string? json)
+    private static bool IsBillingVerified(string? json, string capability)
     {
         if (string.IsNullOrWhiteSpace(json)) return false;
         try
         {
             using var document = JsonDocument.Parse(json);
-            return document.RootElement.TryGetProperty("billingMercadoPago", out var value) &&
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty(capability, out var value) &&
                 value.ValueKind == JsonValueKind.True;
         }
         catch (JsonException) { return false; }

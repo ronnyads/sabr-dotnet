@@ -113,6 +113,34 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }, cancellationToken);
     }
 
+    public async Task<FinancialBillingProbeResponse> ProbeBillingPeriodsAsync(
+        string accessToken, CancellationToken cancellationToken = default)
+    {
+        // A grant or a successful /users/me is not proof of Billing access.
+        // This is a read-only, one-record capability check, never a ledger source.
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            "/billing/integration/monthly/periods?group=ML&document_type=BILL&limit=1");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
+            return new FinancialBillingProbeResponse(false, true,
+                response.StatusCode == HttpStatusCode.TooManyRequests ? "ML_BILLING_RATE_LIMITED" : "ML_BILLING_UNAVAILABLE");
+
+        if (response.StatusCode is HttpStatusCode.OK or HttpStatusCode.PartialContent)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+                if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                    document.RootElement.TryGetProperty("results", out var results) &&
+                    results.ValueKind == JsonValueKind.Array)
+                    return new FinancialBillingProbeResponse(true, false, null);
+            }
+            catch (JsonException) { }
+        }
+        return new FinancialBillingProbeResponse(false, false, $"ML_BILLING_HTTP_{(int)response.StatusCode}");
+    }
+
     public async Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchSellerItemsAsync(
         string sellerId,
         string query,
