@@ -210,9 +210,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 password = "123456"
             });
 
-        Assert.Equal(HttpStatusCode.BadRequest, bootstrapResponse.StatusCode);
-        var bootstrapBody = await bootstrapResponse.Content.ReadAsStringAsync();
-        Assert.Contains("Tenant not found", bootstrapBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.Unauthorized, bootstrapResponse.StatusCode);
     }
 
     [Fact]
@@ -927,9 +925,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             await stockService.SyncStockForSkuAsync(tenantId, clientId, variantSku);
         }
 
-        Assert.Equal(2, _factory.FakeMercadoLivreApiClient.StockUpdates.Count(item => item.AvailableQuantity == 0));
-        Assert.Contains(_factory.FakeMercadoLivreApiClient.StockUpdates, item => item.ItemId == "ITEM-ML-07-A");
-        Assert.Contains(_factory.FakeMercadoLivreApiClient.StockUpdates, item => item.ItemId == "ITEM-ML-07-B");
+        Assert.Empty(_factory.FakeMercadoLivreApiClient.StockUpdates); // GlobalInventoryWrite permanece em observação.
 
         using var adminClient = _factory.CreateAdminClient();
         var statusResponse = await adminClient.GetAsync(
@@ -1861,7 +1857,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         }
 
         Assert.Single(_factory.FakeMercadoLivreApiClient.PublishCalls);
-        Assert.Contains(_factory.FakeMercadoLivreApiClient.StockUpdates, item => item.AvailableQuantity == 8);
+        Assert.Empty(_factory.FakeMercadoLivreApiClient.StockUpdates); // Publicar não habilita escrita global de estoque.
     }
 
     [Fact]
@@ -1890,7 +1886,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Single(payload.Items);
         Assert.Equal(sellerId, payload.Items[0].SellerId);
         Assert.Equal(variantSku, payload.Items[0].SabrVariantSku);
-        Assert.Equal(3, payload.Items[0].AvailableStock);
+        Assert.Equal(1, payload.Items[0].AvailableStock); // 4 físico - 1 reservado - buffer 2.
     }
 
     [Fact]
@@ -1936,7 +1932,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.Equal(1, await db.MarketplaceOrders.CountAsync(item => item.MlOrderId == "ORDER-RECON-01"));
         Assert.Equal(1, await db.MarketplaceOrderItems.CountAsync(item => item.MlItemId == "ITEM-RECON-01"));
-        Assert.Equal(1, await db.StockReservations.CountAsync(item => item.SabrVariantSku == variantSku));
+        Assert.Equal(0, await db.StockReservations.CountAsync(item => item.SabrVariantSku == variantSku)); // Pedido ainda não pago.
     }
 
     [Fact]
