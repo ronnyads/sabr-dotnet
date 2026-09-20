@@ -124,6 +124,12 @@ public sealed class StockAvailabilityService
             .FirstOrDefaultAsync(item => item.Id == payload.MappingId, cancellationToken);
         if (mapping == null) return "SUPERSEDED";
         if (!_features.GlobalInventoryWrite && !_features.InventoryPilotSellerIds.Contains(mapping.SellerId)) return "SUPERSEDED";
+        // The job payload carries the SKU captured at enqueue time. If the mapping was
+        // re-linked to a different internal SKU in the meantime (admin remap between
+        // enqueue and processing), that captured SKU is now stale: applying it would
+        // push a different product's stock to this listing. Re-validate against the
+        // mapping's current SKU, not only its inventory version.
+        if (!string.Equals(mapping.SabrVariantSku, payload.VariantSku, StringComparison.Ordinal)) return "SUPERSEDED";
 
         var current = await _dbContext.ProductVariants.AsNoTracking()
             .Where(item => item.VariantSku == payload.VariantSku)

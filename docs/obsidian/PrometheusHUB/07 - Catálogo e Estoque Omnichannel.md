@@ -21,8 +21,10 @@ updated: 2026-09-19
 4. Estoque anunciado é `max(0, physicalStock - reservedStock - safetyBuffer)`.
 5. Reserva é atômica: bloqueia as variantes afetadas, valida disponibilidade e salva saldo/versão na mesma transação.
 6. Toda mudança de saldo incrementa `inventoryVersion`.
-7. Antes de cada escrita remota o processo relê a versão; trabalho antigo é superseded.
+7. Antes de cada escrita remota o processo relê a versão **e a mapping atual (SKU mestre ainda igual ao do payload)**; trabalho antigo ou remapeado é superseded.
 8. Tenant, cliente, seller e integração são sempre validados em conjunto.
+
+**Correção 20/09/2026 (achado 2.4 da auditoria):** `StockAvailabilityService.ProcessStockJobAsync` reconfirmava só a `InventoryVersion`, nunca se a mapping ainda apontava para o `SabrVariantSku` capturado no payload no momento do enfileiramento. Um remapeamento (SKU mestre trocado) entre o enfileiramento e o processamento do job podia publicar o estoque do produto errado no anúncio. Agora o job compara `mapping.SabrVariantSku` (lido fresco) com `payload.VariantSku` logo após buscar a mapping, e retorna `SUPERSEDED` se divergirem, antes de qualquer leitura de estoque ou chamada ao canal.
 
 ## Acesso ao catálogo
 

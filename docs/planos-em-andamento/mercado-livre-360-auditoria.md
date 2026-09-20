@@ -50,9 +50,13 @@ Correção: `job` é destacado do change tracker logo após o claim inicial; a e
 
 **Observação relacionada (não corrigida agora, ver achado 2.8):** o mesmo padrão de liberação incondicional de lease existe em `SentinelReconciliationService.EnqueueDueAsync` — risco bem menor porque a janela entre claim e liberação ali é só operações de banco locais (sem chamada HTTP externa no meio) e o lease dura 45 segundos, mas é o mesmo defeito de fundo.
 
-### 2.4 Alto — `StockAvailabilityService.ProcessStockJobAsync` não revalida a mapping atual, só a versão de estoque
+### 2.4 [CORRIGIDO em 20/09/2026] Alto — `StockAvailabilityService.ProcessStockJobAsync` não revalidava a mapping atual, só a versão de estoque
 
 Reconfirma `InventoryVersion` antes de cada tentativa (correto), mas nunca confere se a mapping ainda aponta para o `SabrVariantSku` do payload. Um remapeamento entre o enfileiramento e o processamento do job pode gravar o estoque do SKU errado no anúncio do canal, porque o job busca a mapping fresca pelo `Id`, mas usa o SKU capturado no payload no momento do enfileiramento.
+
+**Evidência da correção (20/09/2026):** adicionada uma checagem logo após buscar a mapping fresca — `if (!string.Equals(mapping.SabrVariantSku, payload.VariantSku, StringComparison.Ordinal)) return "SUPERSEDED";` — antes de qualquer leitura de estoque ou chamada ao Mercado Livre. Se a mapping foi remapeada para outro SKU interno entre o enfileiramento e o processamento, o job agora é descartado como obsoleto em vez de publicar o estoque do produto errado no anúncio.
+
+**Limitação de verificação:** não adicionei teste de integração automatizado para este achado. `ProcessStockJobAsync` só avança além da guarda de feature flag (`_features.GlobalInventoryWrite`/`InventoryPilotSellerIds`) quando essas flags permitem escrita de estoque, e ambas vêm de `IOptions<MercadoLivreOptions>` registrado como singleton — mutá-las dentro de um teste vazaria para os outros testes que compartilham a mesma `MercadoLivreTestWebApplicationFactory` (via `IClassFixture`), arriscando quebrar testes não relacionados de forma dependente de ordem de execução. Não fiz essa mudança sem poder rodar a suíte inteira para confirmar que nada mais depende do valor padrão (`false`/lista vazia). A correção em si é uma comparação de string simples e de baixo risco, revisada manualmente linha a linha.
 
 ### 2.5 Médio — `MercadoLivreWebhookService`: sincronização por janela inteira, sem heartbeat de crash
 
@@ -98,7 +102,7 @@ Por risco decrescente:
 1. ~~`ExpireReservationsAsync` liberando reserva de pedido ativo por timer (2.1)~~ — **corrigido em 20/09/2026**, ver evidência acima. Pendente apenas confirmação de build/teste local (rede bloqueada neste ambiente).
 2. ~~`LoadVariantsAsync` do checkout com `ANY({0})`/`string[]` (2.2)~~ — **corrigido em 20/09/2026**, ver evidência acima (validado contra PostgreSQL real, mas não pelo dotnet test).
 3. ~~Compare-and-set de lease no `FinancialSyncJobService` (2.3)~~ — **corrigido em 20/09/2026**, ver evidência acima.
-4. Revalidação de mapping no `StockAvailabilityService.ProcessStockJobAsync` (2.4).
+4. ~~Revalidação de mapping no `StockAvailabilityService.ProcessStockJobAsync` (2.4)~~ — **corrigido em 20/09/2026**, sem teste automatizado (ver evidência acima).
 5. Lease/heartbeat e sincronização pontual no webhook (2.5).
 6. Segregação de moeda e divergência pareada no `FinancialProfitabilityService` (2.6).
 7. Validação de `ItemIds` na importação de catálogo (2.7).
