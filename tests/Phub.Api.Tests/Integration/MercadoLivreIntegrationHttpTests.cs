@@ -650,7 +650,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
-    public async Task ExpireReservations_ReleasesReservedStock_ForTerminalOrder_AndSyncsAvailability()
+    public async Task ExpireReservations_ReleasesReservedStock_ForTerminalOrder_AndProjectsAvailabilityInObservationMode()
     {
         await _factory.ResetDatabaseAsync();
 
@@ -730,10 +730,10 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(StockReservationStatus.Released, reservation.Status);
         Assert.Equal(0, orderItem.ReservedQuantity);
         Assert.Equal(0, variant.ReservedStock);
-        Assert.Equal(5, variant.AvailableStock);
-        Assert.Contains(
+        Assert.Equal(3, variant.AvailableStock);
+        Assert.DoesNotContain(
             _factory.FakeMercadoLivreApiClient.StockUpdates,
-            item => item.ItemId == "ITEM-ML-06" && item.AvailableQuantity == 5);
+            item => item.ItemId == "ITEM-ML-06" && item.AvailableQuantity == 3);
     }
 
     [Fact]
@@ -821,7 +821,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(StockReservationStatus.Reserved, reservation.Status);
         Assert.Equal(2, orderItem.ReservedQuantity);
         Assert.Equal(2, variant.ReservedStock);
-        Assert.Equal(3, variant.AvailableStock);
+        Assert.Equal(1, variant.AvailableStock);
         Assert.DoesNotContain(
             _factory.FakeMercadoLivreApiClient.StockUpdates,
             item => item.ItemId == "ITEM-ML-06B");
@@ -2515,7 +2515,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 CatalogPriceCents = 1500,
                 PhysicalStock = physicalStock,
                 ReservedStock = reservedStock,
-                AvailableStock = Math.Max(0, physicalStock - reservedStock),
+                AvailableStock = Math.Max(0, physicalStock - reservedStock - 2),
                 IsActive = true
             });
         }
@@ -2524,7 +2524,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             var variant = await db.ProductVariants.SingleAsync(item => item.VariantSku == variantSku);
             variant.PhysicalStock = physicalStock;
             variant.ReservedStock = reservedStock;
-            variant.AvailableStock = Math.Max(0, physicalStock - reservedStock);
+            variant.AvailableStock = Math.Max(0, physicalStock - reservedStock - variant.SafetyBuffer);
         }
 
         await db.SaveChangesAsync();
@@ -2707,4 +2707,3 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         return null;
     }
 }
-
