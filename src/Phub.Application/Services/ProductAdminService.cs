@@ -69,9 +69,31 @@ public sealed class ProductAdminService
             .Take(limit)
             .ToListAsync(cancellationToken);
 
+        var pageSkus = items.Select(product => product.Sku).ToArray();
+        var listingLinks = pageSkus.Length == 0
+            ? new List<AdminProductListingLinkResult>()
+            : await _dbContext.TenantMarketplaceListingMaps.AsNoTracking()
+                .Where(link => pageSkus.Contains(link.MlItemId) || pageSkus.Contains(link.SabrVariantSku))
+                .Select(link => new AdminProductListingLinkResult
+                {
+                    ClientId = link.ClientId,
+                    SellerId = link.SellerId,
+                    ItemId = link.MlItemId,
+                    VariationId = link.MlVariationId,
+                    InternalSku = link.SabrVariantSku,
+                    MappingVersion = link.MappingVersion
+                })
+                .ToListAsync(cancellationToken);
+
+        var results = items.Select(MapToAdminResultWithoutImages).ToList();
+        foreach (var product in results)
+            product.ListingLinks = listingLinks
+                .Where(link => link.ItemId == product.Sku || link.InternalSku == product.Sku)
+                .ToArray();
+
         return ServiceResult<PagedResult<AdminProductResult>>.Success(new PagedResult<AdminProductResult>
         {
-            Items = items.Select(MapToAdminResultWithoutImages).ToList(),
+            Items = results,
             Total = total,
             Skip = skip,
             Limit = limit

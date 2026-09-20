@@ -25,6 +25,17 @@ public sealed class AdminProductResult
     public long CatalogPriceCents { get; set; }
     public bool IsActive { get; set; }
     public IReadOnlyCollection<ProductImageResult> Images { get; set; } = Array.Empty<ProductImageResult>();
+    public IReadOnlyCollection<AdminProductListingLinkResult> ListingLinks { get; set; } = Array.Empty<AdminProductListingLinkResult>();
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class AdminProductListingLinkResult
+{
+    public Guid ClientId { get; set; }
+    public long SellerId { get; set; }
+    public string ItemId { get; set; } = string.Empty;
+    public string? VariationId { get; set; }
+    public string InternalSku { get; set; } = string.Empty;
+    public long MappingVersion { get; set; }
 }

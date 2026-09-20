@@ -95,6 +95,42 @@ public sealed class AdminProductsHttpTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
+    public async Task AdminProducts_List_ShowsPersistedLegacyListingBridge()
+    {
+        await _factory.ResetDatabaseAsync();
+        var clientId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Products.AddRange(
+                new Product { Sku = "MLB1234567890", Name = "Cadastro legado", Brand = "Payot", CatalogPriceCents = 800, IsActive = true },
+                new Product { Sku = "PH-PAYOT-02", Name = "SKU interno", Brand = "Payot", CatalogPriceCents = 800, IsActive = true });
+            db.TenantMarketplaceListingMaps.Add(new TenantMarketplaceListingMap
+            {
+                TenantId = "tenant-link-test",
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = 12345,
+                MlItemId = "MLB1234567890",
+                SabrVariantSku = "PH-PAYOT-02",
+                MappingVersion = 2
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.GetFromJsonAsync<PagedResult<AdminProductResult>>("/api/v1/admin/products?skip=0&limit=20");
+        Assert.NotNull(response);
+        var legacy = Assert.Single(response!.Items, item => item.Sku == "MLB1234567890");
+        var bridge = Assert.Single(legacy.ListingLinks);
+        Assert.Equal("PH-PAYOT-02", bridge.InternalSku);
+        Assert.Equal(clientId, bridge.ClientId);
+        Assert.Equal(2, bridge.MappingVersion);
+        var internalProduct = Assert.Single(response.Items, item => item.Sku == "PH-PAYOT-02");
+        Assert.Single(internalProduct.ListingLinks);
+    }
+
+    [Fact]
     public async Task AdminProducts_GetByLowercaseSku_ResolvesUppercasePersistedValue()
     {
         await _factory.ResetDatabaseAsync();
