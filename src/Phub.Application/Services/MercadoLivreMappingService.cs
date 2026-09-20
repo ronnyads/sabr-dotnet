@@ -13,17 +13,20 @@ public sealed class MercadoLivreMappingService
 {
     private readonly IAppDbContext _dbContext;
     private readonly CatalogAuthorizationService _catalogAuthorizationService;
+    private readonly MarketplaceOrderMappingService _orderMappingService;
     private readonly MercadoLivreOAuthService _oauthService;
     private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
 
     public MercadoLivreMappingService(
         IAppDbContext dbContext,
         CatalogAuthorizationService catalogAuthorizationService,
+        MarketplaceOrderMappingService orderMappingService,
         MercadoLivreOAuthService oauthService,
         IMercadoLivreApiClient mercadoLivreApiClient)
     {
         _dbContext = dbContext;
         _catalogAuthorizationService = catalogAuthorizationService;
+        _orderMappingService = orderMappingService;
         _oauthService = oauthService;
         _mercadoLivreApiClient = mercadoLivreApiClient;
     }
@@ -221,6 +224,8 @@ public sealed class MercadoLivreMappingService
                 return ServiceResult<AdminMercadoLivreMappingResult>.Conflict("listing", "O anuncio foi vinculado por outra operacao. Recarregue antes de confirmar.");
             }
         }
+
+        await _orderMappingService.ApplyMappingToPendingItemsAsync(existing, cancellationToken);
 
         return ServiceResult<AdminMercadoLivreMappingResult>.Success(new AdminMercadoLivreMappingResult
         {

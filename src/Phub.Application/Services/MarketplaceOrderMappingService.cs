@@ -15,17 +15,20 @@ public sealed class MarketplaceOrderMappingService
     private readonly IAppDbContext _dbContext;
     private readonly CatalogAuthorizationService _catalogAuthorizationService;
     private readonly MarketplaceOrderInventoryService _inventoryService;
+    private readonly OperationalFinancialProjectionService _financialProjection;
     private readonly ILogger<MarketplaceOrderMappingService> _logger;
 
     public MarketplaceOrderMappingService(
         IAppDbContext dbContext,
         CatalogAuthorizationService catalogAuthorizationService,
         MarketplaceOrderInventoryService inventoryService,
+        OperationalFinancialProjectionService financialProjection,
         ILogger<MarketplaceOrderMappingService> logger)
     {
         _dbContext = dbContext;
         _catalogAuthorizationService = catalogAuthorizationService;
         _inventoryService = inventoryService;
+        _financialProjection = financialProjection;
         _logger = logger;
     }
 
@@ -370,88 +373,7 @@ public sealed class MarketplaceOrderMappingService
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        // A new mapping is also an explicit resolution for orders that are still
-        // pending mapping. Already resolved items keep their immutable snapshot,
-        // so remaps only affect future imports plus currently unresolved items.
-        var pendingItems = await _dbContext.MarketplaceOrderItems
-            .Where(item => item.TenantId == tenantId
-                           && item.ClientId == clientId
-                           && item.Provider == request.Provider
-                           && item.SellerId == connection.Data.SellerId
-                           && item.MlItemId == normalizedItemId
-                           && item.MlVariationId == normalizedVariationId
-                           && (item.SabrVariantSku == null
-                               || item.MappingState == MarketplaceMappingStates.Unmapped
-                               || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
-                               || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
-                               || item.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
-                               || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
-                               || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized))
-            .ToListAsync(cancellationToken);
-
-        var ordersAffected = 0;
-        if (pendingItems.Count > 0)
-        {
-            var resolvedAt = DateTimeOffset.UtcNow;
-            foreach (var item in pendingItems)
-            {
-                ApplyResolutionSnapshot(
-                    item,
-                    new MarketplaceItemResolutionResult(
-                        existing.SabrVariantSku,
-                        MarketplaceMappingStates.MappedByListingMap,
-                        MarketplaceMappingReasonCodes.MappedByListingMap,
-                        item.ChannelSku,
-                        "manual_listing_mapping",
-                        existing.Id,
-                        existing.MappingVersion),
-                    resolvedAt);
-                item.UpdatedAt = resolvedAt;
-            }
-
-            var orderIds = pendingItems.Select(item => item.MarketplaceOrderId).Distinct().ToList();
-            ordersAffected = orderIds.Count;
-            await _dbContext.SaveChangesAsync(cancellationToken);
-
-            // The mapping and the immutable resolution snapshots are already durable at
-            // this point. Reservation refresh is a derived operation and must never turn
-            // a valid mapping into a failed HTTP request. Checkout reconciles again
-            // transactionally, so a deferred refresh cannot bypass stock validation.
-            try
-            {
-                var pendingOrders = await _dbContext.MarketplaceOrders
-                    .Where(item => orderIds.Contains(item.Id))
-                    .ToListAsync(cancellationToken);
-                var allOrderItems = await _dbContext.MarketplaceOrderItems
-                    .Where(item => orderIds.Contains(item.MarketplaceOrderId))
-                    .ToListAsync(cancellationToken);
-                foreach (var pendingOrder in pendingOrders.Where(item => !item.SabrPaymentConfirmedAt.HasValue))
-                {
-                    pendingOrder.Items = allOrderItems
-                        .Where(item => item.MarketplaceOrderId == pendingOrder.Id)
-                        .ToList();
-                    await _inventoryService.ReconcileReservationsAsync(
-                        pendingOrder,
-                        pendingOrder.SellerId,
-                        reservationTtlHours: 24,
-                        cancellationToken: cancellationToken);
-                }
-
-                await _dbContext.SaveChangesAsync(cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                _logger.LogWarning(
-                    exception,
-                    "Mapping {MappingId} was saved but reservation refresh was deferred for {OrderCount} order(s).",
-                    existing.Id,
-                    ordersAffected);
-            }
-        }
+        var ordersAffected = await ApplyMappingToPendingItemsAsync(existing, cancellationToken);
 
         var channelMetadata = new ChannelMetadata(existing.ChannelSku);
 
@@ -473,6 +395,93 @@ public sealed class MarketplaceOrderMappingService
             CreatedAt = existing.CreatedAt,
             UpdatedAt = existing.UpdatedAt
         });
+    }
+
+    public async Task<int> ApplyMappingToPendingItemsAsync(
+        TenantMarketplaceListingMap mapping,
+        CancellationToken cancellationToken = default)
+    {
+        // A new mapping resolves only items that are still pending. A resolved order item
+        // is an immutable historical snapshot and is never rewritten by a later remap.
+        var pendingItems = await _dbContext.MarketplaceOrderItems
+            .Where(item => item.TenantId == mapping.TenantId
+                           && item.ClientId == mapping.ClientId
+                           && item.Provider == mapping.Provider
+                           && item.SellerId == mapping.SellerId
+                           && item.MlItemId == mapping.MlItemId
+                           && item.MlVariationId == mapping.MlVariationId
+                           && (item.SabrVariantSku == null
+                               || item.MappingState == MarketplaceMappingStates.Unmapped
+                               || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
+                               || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
+                               || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized))
+            .ToListAsync(cancellationToken);
+        if (pendingItems.Count == 0) return 0;
+
+        var resolvedAt = DateTimeOffset.UtcNow;
+        foreach (var item in pendingItems)
+        {
+            ApplyResolutionSnapshot(
+                item,
+                new MarketplaceItemResolutionResult(
+                    mapping.SabrVariantSku,
+                    MarketplaceMappingStates.MappedByListingMap,
+                    MarketplaceMappingReasonCodes.MappedByListingMap,
+                    item.ChannelSku,
+                    "manual_listing_mapping",
+                    mapping.Id,
+                    mapping.MappingVersion),
+                resolvedAt);
+            item.UpdatedAt = resolvedAt;
+        }
+
+        var orderIds = pendingItems.Select(item => item.MarketplaceOrderId).Distinct().ToList();
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        // Mapping snapshots are durable before derived stock and financial projections.
+        // Any later checkout repeats inventory validation transactionally.
+        try
+        {
+            var pendingOrders = await _dbContext.MarketplaceOrders
+                .Where(item => orderIds.Contains(item.Id))
+                .ToListAsync(cancellationToken);
+            var allOrderItems = await _dbContext.MarketplaceOrderItems
+                .Where(item => orderIds.Contains(item.MarketplaceOrderId))
+                .ToListAsync(cancellationToken);
+            foreach (var pendingOrder in pendingOrders.Where(item => !item.SabrPaymentConfirmedAt.HasValue))
+            {
+                pendingOrder.Items = allOrderItems
+                    .Where(item => item.MarketplaceOrderId == pendingOrder.Id)
+                    .ToList();
+                await _inventoryService.ReconcileReservationsAsync(
+                    pendingOrder,
+                    pendingOrder.SellerId,
+                    reservationTtlHours: 24,
+                    cancellationToken: cancellationToken);
+            }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            foreach (var orderId in orderIds)
+            {
+                await _financialProjection.ProjectOrderAsync(orderId, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Mapping {MappingId} was saved but derived refresh was deferred for {OrderCount} order(s).",
+                mapping.Id,
+                orderIds.Count);
+        }
+
+        return orderIds.Count;
     }
 
     public async Task<ServiceResult<MarketplaceMappingReanalysisResult>> ReanalyzePendingItemsAsync(
@@ -574,6 +583,11 @@ public sealed class MarketplaceOrderMappingService
                     cancellationToken: cancellationToken);
             }
             await _dbContext.SaveChangesAsync(cancellationToken);
+
+            foreach (var orderId in affectedOrderIds)
+            {
+                await _financialProjection.ProjectOrderAsync(orderId, cancellationToken);
+            }
         }
 
         _dbContext.AuditEvents.Add(new AuditEvent

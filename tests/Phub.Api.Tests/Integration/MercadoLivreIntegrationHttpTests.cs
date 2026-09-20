@@ -2284,6 +2284,121 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task CreateMapping_ReprojectsPendingPaidOrderWithCatalogCost_AndPreservesResolvedHistory()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-map-finance";
+        const string tenantSlug = "mlmapfinance";
+        const string sellerId = "2496573592";
+        const string baseSku = "PH-MAP-FINANCE";
+        const string variantSku = "PH-MAP-FINANCE-01";
+        const string historicalSku = "PH-HISTORICAL-01";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, variantSku, physicalStock: 1000, reservedStock: 0);
+        await SeedVariantAsync("PH-HISTORICAL", historicalSku, physicalStock: 1000, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        Guid orderId;
+        Guid pendingItemId;
+        Guid historicalItemId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var order = new MarketplaceOrder
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlOrderId = "ORDER-MAP-FINANCE-01",
+                Status = "paid",
+                PaidAt = DateTimeOffset.UtcNow,
+                CurrencyId = "BRL"
+            };
+            var pendingItem = new MarketplaceOrderItem
+            {
+                MarketplaceOrderId = order.Id,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlItemId = "MLB-MAP-FINANCE-01",
+                ProductName = "Produto pendente",
+                Quantity = 2,
+                GrossPrice = 100m,
+                SaleFee = 10m,
+                MappingState = MarketplaceMappingStates.UnmappedMissingChannelSku,
+                RawJson = "{}"
+            };
+            var historicalItem = new MarketplaceOrderItem
+            {
+                MarketplaceOrderId = order.Id,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlItemId = "MLB-MAP-FINANCE-01",
+                ProductName = "Produto historico",
+                Quantity = 1,
+                GrossPrice = 50m,
+                SabrVariantSku = historicalSku,
+                MappingState = MarketplaceMappingStates.MappedByListingMap,
+                MappingSnapshotId = Guid.NewGuid(),
+                MappingSnapshotVersion = 1,
+                MappingResolutionReason = MarketplaceMappingReasonCodes.MappedByListingMap,
+                MappingResolvedAt = DateTimeOffset.UtcNow.AddDays(-1),
+                RawJson = "{}"
+            };
+            orderId = order.Id;
+            pendingItemId = pendingItem.Id;
+            historicalItemId = historicalItem.Id;
+            db.MarketplaceOrders.Add(order);
+            db.MarketplaceOrderItems.AddRange(pendingItem, historicalItem);
+            await db.SaveChangesAsync();
+            var projection = scope.ServiceProvider.GetRequiredService<OperationalFinancialProjectionService>();
+            await projection.ProjectOrderAsync(order.Id);
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsJsonAsync(
+            "/api/v1/client/marketplace-mappings",
+            new
+            {
+                provider = "MercadoLivre",
+                sellerId,
+                externalItemId = "MLB-MAP-FINANCE-01",
+                selectedCatalogSku = variantSku
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var verificationScope = _factory.Services.CreateScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var pendingItemAfter = await verificationDb.MarketplaceOrderItems.SingleAsync(item => item.Id == pendingItemId);
+        var historicalItemAfter = await verificationDb.MarketplaceOrderItems.SingleAsync(item => item.Id == historicalItemId);
+        Assert.Equal(variantSku, pendingItemAfter.SabrVariantSku);
+        Assert.Equal(historicalSku, historicalItemAfter.SabrVariantSku);
+
+        var productCost = await (
+            from head in verificationDb.FinancialEconomicHeads
+            join entry in verificationDb.MarketplaceFinancialEntries on head.ActiveEntryId equals entry.Id
+            where entry.MarketplaceOrderId == orderId
+                  && entry.MarketplaceOrderItemId == pendingItemId
+                  && entry.EntryType == FinancialEntryTypes.ProductCost
+            select entry).SingleAsync();
+        Assert.Equal(-3_000, productCost.AmountCents);
+
+        var financialState = await verificationDb.MarketplaceOrderFinancialStates.SingleAsync(item => item.MarketplaceOrderId == orderId);
+        Assert.True(financialState.SkuResolved);
+        Assert.True(financialState.CostResolved);
+        Assert.Equal(9_500, financialState.OperationalProfitCents);
+        Assert.DoesNotContain("CATALOG_COST_PENDING", financialState.IncompleteReasonsJson);
+    }
+
+    [Fact]
     public async Task AdminCatalogImport_AppliesConfiguredCatalogPriceStockAndVariations()
     {
         await _factory.ResetDatabaseAsync();
