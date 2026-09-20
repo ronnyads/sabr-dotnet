@@ -121,6 +121,7 @@ public sealed class FinancialProfitabilityService
             Maturity = AggregateMaturity(states),
             GrossRevenueCents = gross,
             EstimatedEconomicNetCents = externalNet,
+            ProductCostCents = productCost,
             ReconciledConfirmedValueCents = sameCurrencyEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents),
             OperationalProfitCents = profit,
             SellerReportedEstimatedTaxCents = tax,
