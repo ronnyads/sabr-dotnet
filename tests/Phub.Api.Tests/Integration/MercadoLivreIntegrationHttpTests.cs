@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Phub.Api.Tests.TestHost;
+using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Application.Services;
 using Phub.Application.Validation;
@@ -106,6 +107,38 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.NotNull(payload);
         Assert.False(payload!.Connected);
         Assert.Empty(payload.Connections);
+    }
+
+    [Fact]
+    public async Task AdminFinancialCapabilityProbe_UsesTenantSlugContext()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-financial-probe";
+        const string tenantSlug = "mlfinancial";
+        const string sellerId = "1000001";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, "MLB-PROBE", null, "SKU-PROBE");
+
+        _factory.FakeMercadoLivreApiClient.UserMeResponse = new MercadoLivreUserMeResponse
+        {
+            SellerId = sellerId,
+            Nickname = "billing-probe"
+        };
+        _factory.FakeMercadoLivreApiClient.BillingProbeResponse = new FinancialBillingProbeResponse(true, false, null);
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/financial-capabilities/probe",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<List<FinancialCapabilityResult>>();
+        var capability = Assert.Single(payload!);
+        Assert.Equal(long.Parse(sellerId, CultureInfo.InvariantCulture), capability.SellerId);
+        Assert.True(capability.BillingMercadoLivre);
+        Assert.NotNull(capability.VerifiedAt);
     }
 
     [Fact]
