@@ -3,6 +3,7 @@ namespace Phub.Application.Models;
 public sealed class MercadoLivreSellerItemDetails
 {
     public string ItemId { get; set; } = string.Empty;
+    public string SellerId { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string? SellerSku { get; set; }
     public string? Brand { get; set; }

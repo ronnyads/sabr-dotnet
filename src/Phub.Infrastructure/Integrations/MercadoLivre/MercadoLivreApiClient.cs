@@ -241,6 +241,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             return new MercadoLivreSellerItemDetails
             {
                 ItemId = GetOptionalString(root, "id") ?? itemId,
+                SellerId = GetOptionalString(root, "seller_id") ?? string.Empty,
                 Title = GetOptionalString(root, "title") ?? string.Empty,
                 SellerSku = GetOptionalString(root, "seller_custom_field") ?? Attribute(root, "SELLER_SKU"),
                 Brand = Attribute(root, "BRAND"),

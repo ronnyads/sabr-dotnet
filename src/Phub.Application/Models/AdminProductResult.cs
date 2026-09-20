@@ -33,6 +33,7 @@ public sealed class AdminProductResult
 public sealed class AdminProductListingLinkResult
 {
     public Guid ClientId { get; set; }
+    public Guid? IntegrationId { get; set; }
     public long SellerId { get; set; }
     public string ItemId { get; set; } = string.Empty;
     public string? VariationId { get; set; }

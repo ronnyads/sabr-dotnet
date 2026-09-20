@@ -1409,6 +1409,73 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task AdminMapping_LinksExistingListingWithoutCreatingProduct_AndRejectsOtherSeller()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-admin-direct-link";
+        const string tenantSlug = "admindirectlink";
+        const string sellerId = "1001998";
+        const string itemId = "MLB199800001";
+        const string baseSku = "PH-DIRECT";
+        const string variantSku = "PH-DIRECT-01";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(baseSku, variantSku, physicalStock: 5, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(baseSku);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+        var originalUserMeSellerId = _factory.FakeMercadoLivreApiClient.UserMeResponse.SellerId;
+        _factory.FakeMercadoLivreApiClient.UserMeResponse.SellerId = sellerId;
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = itemId, SellerId = sellerId, Title = "Produto existente", Status = "active"
+        });
+
+        Guid integrationId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            integrationId = await db.TenantMarketplaceConnections
+                .Where(item => item.TenantId == tenantId && item.ClientId == clientId)
+                .Select(item => item.Id).SingleAsync();
+        }
+
+        using var client = _factory.CreateAdminClient();
+        var url = $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/mappings";
+        var command = new AdminMercadoLivreMappingRequest
+        {
+            IntegrationId = integrationId, SellerId = sellerId, ItemId = itemId,
+            SabrVariantSku = variantSku, ExpectedMappingVersion = 0
+        };
+        var response = await client.PutAsJsonAsync(url, command);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<AdminMercadoLivreMappingResult>();
+        Assert.Equal("created", result?.Action);
+        Assert.Equal(1, result?.MappingVersion);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.Products.CountAsync());
+            Assert.Equal(1, await db.ProductVariants.CountAsync());
+            var mapping = await db.TenantMarketplaceListingMaps.SingleAsync();
+            Assert.Equal(variantSku, mapping.SabrVariantSku);
+            Assert.Equal(5, (await db.ProductVariants.SingleAsync()).PhysicalStock);
+        }
+
+        try
+        {
+            _factory.FakeMercadoLivreApiClient.SellerItems.Single(item => item.ItemId == itemId).SellerId = "9999999";
+            command.ExpectedMappingVersion = 1;
+            response = await client.PutAsJsonAsync(url, command);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        finally
+        {
+            _factory.FakeMercadoLivreApiClient.UserMeResponse.SellerId = originalUserMeSellerId;
+        }
+    }
+
+    [Fact]
     public async Task FulfillmentTimeline_RequiresStrictSequence_AndDoesNotProcessOnPayment()
     {
         await _factory.ResetDatabaseAsync();

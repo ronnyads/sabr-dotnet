@@ -1197,7 +1197,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.UserProductId).HasColumnName("user_product_id").HasMaxLength(80);
             entity.Property(e => e.ChannelSku).HasColumnName("channel_sku").HasMaxLength(120);
             entity.Property(e => e.SabrVariantSku).HasColumnName("sabr_variant_sku").HasMaxLength(Sku.MaxLength).IsRequired();
-            entity.Property(e => e.MappingVersion).HasColumnName("mapping_version").HasDefaultValue(1L).IsRequired();
+            entity.Property(e => e.MappingVersion).HasColumnName("mapping_version").HasDefaultValue(1L).IsRequired().IsConcurrencyToken();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
             entity.HasCheckConstraint("ck_tenant_marketplace_listing_maps_sku_format", "\"sabr_variant_sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");

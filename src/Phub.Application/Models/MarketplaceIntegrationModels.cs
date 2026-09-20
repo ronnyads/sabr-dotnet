@@ -338,6 +338,31 @@ public sealed class MarketplaceMarkPaidRequest
     public string? QuoteHash { get; set; }
 }
 
+public sealed class AdminMercadoLivreMappingRequest
+{
+    public Guid IntegrationId { get; set; }
+    public string SellerId { get; set; } = string.Empty;
+    public string ItemId { get; set; } = string.Empty;
+    public string? VariationId { get; set; }
+    public string SabrVariantSku { get; set; } = string.Empty;
+    public long ExpectedMappingVersion { get; set; }
+}
+
+public sealed class AdminMercadoLivreMappingResult
+{
+    public Guid MappingId { get; set; }
+    public Guid IntegrationId { get; set; }
+    public string SellerId { get; set; } = string.Empty;
+    public string ItemId { get; set; } = string.Empty;
+    public string? VariationId { get; set; }
+    public string? PreviousSabrVariantSku { get; set; }
+    public string SabrVariantSku { get; set; } = string.Empty;
+    public long MappingVersion { get; set; }
+    public string Action { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 public sealed class MercadoLivreConnectUrlResult
 {
     public string Url { get; set; } = string.Empty;

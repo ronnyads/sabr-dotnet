@@ -77,6 +77,7 @@ public sealed class ProductAdminService
                 .Select(link => new AdminProductListingLinkResult
                 {
                     ClientId = link.ClientId,
+                    IntegrationId = link.IntegrationId,
                     SellerId = link.SellerId,
                     ItemId = link.MlItemId,
                     VariationId = link.MlVariationId,

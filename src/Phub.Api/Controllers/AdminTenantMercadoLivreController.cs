@@ -20,6 +20,7 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
     private readonly MercadoLivreCatalogImportService _catalogImportService;
     private readonly IMercadoLivreApiClient _mercadoLivreApiClient;
     private readonly MercadoLivreOAuthService _oauthService;
+    private readonly MercadoLivreMappingService _mappingService;
 
     public AdminTenantMercadoLivreController(
         MercadoLivreIntegrationService integrationService,
@@ -27,7 +28,8 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
         MarketplaceShipmentLabelService shipmentLabelService,
         MercadoLivreCatalogImportService catalogImportService,
         IMercadoLivreApiClient mercadoLivreApiClient,
-        MercadoLivreOAuthService oauthService)
+        MercadoLivreOAuthService oauthService,
+        MercadoLivreMappingService mappingService)
     {
         _integrationService = integrationService;
         _dbContext = dbContext;
@@ -35,6 +37,34 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
         _catalogImportService = catalogImportService;
         _mercadoLivreApiClient = mercadoLivreApiClient;
         _oauthService = oauthService;
+        _mappingService = mappingService;
+    }
+
+    [HttpPut("mappings")]
+    public async Task<IActionResult> UpsertMapping(
+        [FromRoute] string tenantSlug,
+        [FromRoute] Guid clientId,
+        [FromBody] AdminMercadoLivreMappingRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var claim = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(claim, out var actorId))
+            return Unauthorized(CreateApiError("INVALID_ACTOR", "Invalid actor"));
+
+        var requestId = Guid.TryParse(HttpContext.TraceIdentifier, out var parsedRequestId)
+            ? parsedRequestId
+            : Guid.NewGuid();
+        var result = await _mappingService.UpsertAdminAsync(
+            tenantSlug,
+            clientId,
+            request,
+            actorId,
+            requestId,
+            cancellationToken);
+        if (!result.Succeeded || result.Data == null)
+            return MapMappingError(result.ErrorCode, result.Errors);
+
+        return Ok(result.Data);
     }
 
     [HttpGet("catalog/seller-preview")]
@@ -199,6 +229,22 @@ public sealed class AdminTenantMercadoLivreController : ControllerBase
         }
 
         return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid request", errors));
+    }
+
+    private IActionResult MapMappingError(string? errorCode, IReadOnlyCollection<ValidationError> errors)
+    {
+        if (string.Equals(errorCode, ServiceErrorCodes.ConcurrencyConflict, StringComparison.Ordinal))
+            return Conflict(CreateApiError("ML_MAPPING_VERSION_CONFLICT", "O vinculo mudou. Recarregue antes de confirmar.", errors));
+        if (string.Equals(errorCode, ServiceErrorCodes.Forbidden, StringComparison.Ordinal))
+            return StatusCode(StatusCodes.Status403Forbidden, CreateApiError("ML_SELLER_SCOPE_MISMATCH", "A conexao nao pertence ao seller informado.", errors));
+        if (string.Equals(errorCode, ServiceErrorCodes.SkuNotAuthorized, StringComparison.Ordinal))
+            return UnprocessableEntity(CreateApiError("SKU_NOT_AUTHORIZED", "A SKU nao esta autorizada para este cliente.", errors));
+        if (string.Equals(errorCode, ServiceErrorCodes.MlAuthInvalid, StringComparison.Ordinal))
+            return UnprocessableEntity(CreateApiError("ML_RECONNECT_REQUIRED", "A conexao Mercado Livre precisa ser reconectada.", errors));
+        if (string.Equals(errorCode, ServiceErrorCodes.NotFound, StringComparison.Ordinal))
+            return NotFound(CreateApiError("ML_MAPPING_RESOURCE_NOT_FOUND", "Nao foi possivel validar o recurso do vinculo.", errors));
+
+        return BadRequest(CreateApiError("VALIDATION_ERROR", "Comando de vinculo invalido.", errors));
     }
 
     private ApiError CreateApiError(string code, string message, object? errors = null)
