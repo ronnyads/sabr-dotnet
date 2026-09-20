@@ -117,7 +117,8 @@ public sealed class ProductAdminService
         AdminProductUpsertRequest request,
         Guid actorUserId,
         string tenantId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool createOnly = false)
     {
         var errors = ValidateUpsertRequest(request);
         if (actorUserId == Guid.Empty)
@@ -142,6 +143,8 @@ public sealed class ProductAdminService
         await using var transaction = await BeginTransactionIfSupportedAsync(efDbContext, cancellationToken);
 
         var product = await _dbContext.Products.FirstOrDefaultAsync(p => p.Sku == normalizedSku, cancellationToken);
+        if (createOnly && product != null)
+            return ServiceResult<ProductPricingUpdateResult>.Failure([new ValidationError("sku", "SKU already exists")]);
         if (product == null)
         {
             product = new Product

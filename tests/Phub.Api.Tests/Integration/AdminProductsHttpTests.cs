@@ -68,6 +68,33 @@ public sealed class AdminProductsHttpTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
+    public async Task AdminProducts_CreateWithExistingSku_DoesNotOverwriteProduct()
+    {
+        await _factory.ResetDatabaseAsync();
+        using var client = _factory.CreateAdminClient();
+        var original = new AdminProductUpsertRequest
+        {
+            Sku = "PH-INTERNAL-01",
+            Name = "Produto original",
+            Brand = "Marca",
+            CostPriceCents = 500,
+            CatalogPriceCents = 800,
+            IsActive = false
+        };
+
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/v1/admin/products", original)).StatusCode);
+        original.Name = "Tentativa de sobrescrita";
+        original.CatalogPriceCents = 100;
+        var duplicate = await client.PostAsJsonAsync("/api/v1/admin/products", original);
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+
+        var persisted = await client.GetFromJsonAsync<AdminProductResult>("/api/v1/admin/products/PH-INTERNAL-01");
+        Assert.NotNull(persisted);
+        Assert.Equal("Produto original", persisted!.Name);
+        Assert.Equal(800, persisted.CatalogPriceCents);
+    }
+
+    [Fact]
     public async Task AdminProducts_GetByLowercaseSku_ResolvesUppercasePersistedValue()
     {
         await _factory.ResetDatabaseAsync();

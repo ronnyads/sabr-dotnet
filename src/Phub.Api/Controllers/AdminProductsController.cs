@@ -59,7 +59,7 @@ public sealed class AdminProductsController : ControllerBase
             return Unauthorized(CreateApiError("INVALID_ACTOR", "Invalid actor"));
         }
 
-        var result = await _productAdminService.UpsertProductAsync(request, actorId, "platform", cancellationToken);
+        var result = await _productAdminService.UpsertProductAsync(request, actorId, "platform", cancellationToken, createOnly: true);
         if (!result.Succeeded || result.Data == null)
         {
             return MapError(result.Errors);
@@ -184,6 +184,12 @@ public sealed class AdminProductsController : ControllerBase
                                 error.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)))
         {
             return NotFound(CreateApiError("PRODUCT_NOT_FOUND", "Product not found", errors));
+        }
+
+        if (errors.Any(error => string.Equals(error.Field, "sku", StringComparison.OrdinalIgnoreCase) &&
+                                error.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)))
+        {
+            return Conflict(CreateApiError("SKU_ALREADY_EXISTS", "SKU already exists", errors));
         }
 
         if (errors.Any(error => string.Equals(error.Field, "catalogLinks", StringComparison.OrdinalIgnoreCase)))
