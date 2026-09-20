@@ -41,6 +41,16 @@ public sealed class AdminProductsHttpTests : IClassFixture<TestWebApplicationFac
 
         Assert.Equal(HttpStatusCode.OK, createResponse.StatusCode);
 
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var defaultVariant = await db.ProductVariants.SingleAsync(item => item.VariantSku == "ABC-01");
+            Assert.Equal("ABC-01", defaultVariant.BaseSku);
+            Assert.Equal(0, defaultVariant.PhysicalStock);
+            Assert.Equal(2, defaultVariant.SafetyBuffer);
+            Assert.Equal(1590, defaultVariant.CatalogPriceCents);
+        }
+
         var getResponse = await client.GetAsync("/api/v1/admin/products/abc-01");
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
 
@@ -175,7 +185,7 @@ public sealed class AdminProductsHttpTests : IClassFixture<TestWebApplicationFac
     }
 
     [Fact]
-    public async Task AdminProducts_UpdateToActiveWithoutCatalogs_Returns422ProductMissingCatalogLinks()
+    public async Task AdminProducts_UpdateToActiveWithoutCatalogs_AddsPublicCatalog()
     {
         await _factory.ResetDatabaseAsync();
         const string tenantId = "tenant-a";
@@ -204,11 +214,14 @@ public sealed class AdminProductsHttpTests : IClassFixture<TestWebApplicationFac
             TenantSlug = tenantSlug
         });
 
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
-        var apiError = await response.Content.ReadFromJsonAsync<ApiError>();
-        Assert.NotNull(apiError);
-        Assert.Equal("PRODUCT_MISSING_CATALOG_LINKS", apiError!.Code);
-        Assert.False(string.IsNullOrWhiteSpace(apiError.TraceId));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var product = await verifyDb.Products.SingleAsync(item => item.Sku == "SKU-NO-CAT");
+        Assert.True(product.IsActive);
+        var link = await verifyDb.ProductCatalogs.SingleAsync(item => item.ProductSku == product.Sku);
+        var catalog = await verifyDb.Catalogs.SingleAsync(item => item.Id == link.CatalogId);
+        Assert.Equal(CatalogAccessMode.Public, catalog.AccessMode);
     }
 
     [Fact]

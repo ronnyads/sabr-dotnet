@@ -54,7 +54,7 @@ public sealed class AdminProductVariantsHttpTests : IClassFixture<TestWebApplica
         var created = await createResponse.Content.ReadFromJsonAsync<AdminProductVariantResult>();
         Assert.NotNull(created);
         Assert.Equal("SKU-VAR-01", created!.VariantSku);
-        Assert.Equal(7, created.AvailableStock);
+        Assert.Equal(5, created.AvailableStock); // 10 físico - 3 reservado - buffer 2.
 
         var duplicateResponse = await client.PostAsJsonAsync("/api/v1/admin/products/SKU-BASE-01/variants", new AdminProductVariantCreateRequest
         {
@@ -76,7 +76,7 @@ public sealed class AdminProductVariantsHttpTests : IClassFixture<TestWebApplica
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
         var updated = await updateResponse.Content.ReadFromJsonAsync<AdminProductVariantResult>();
         Assert.NotNull(updated);
-        Assert.Equal(10, updated!.AvailableStock);
+        Assert.Equal(8, updated!.AvailableStock); // 14 físico - 4 reservado - buffer 2.
 
         var invalidStockResponse = await client.PutAsJsonAsync("/api/v1/admin/products/SKU-BASE-01/variants/SKU-VAR-01", new AdminProductVariantUpdateRequest
         {

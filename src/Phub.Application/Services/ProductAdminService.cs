@@ -170,6 +170,9 @@ public sealed class ProductAdminService
             return ServiceResult<ProductPricingUpdateResult>.Failure([new ValidationError("sku", "SKU already exists")]);
         if (product == null)
         {
+            if (await _dbContext.ProductVariants.AnyAsync(v => v.VariantSku == normalizedSku, cancellationToken))
+                return ServiceResult<ProductPricingUpdateResult>.Failure([new ValidationError("sku", "SKU already belongs to another variant")]);
+
             product = new Product
             {
                 Sku = normalizedSku,
@@ -195,10 +198,28 @@ public sealed class ProductAdminService
             };
 
             _dbContext.Products.Add(product);
+            _dbContext.ProductVariants.Add(new ProductVariant
+            {
+                VariantSku = normalizedSku,
+                BaseSku = normalizedSku,
+                Name = product.Name,
+                CostPriceCents = product.CostPriceCents,
+                CatalogPriceCents = product.CatalogPriceCents,
+                PhysicalStock = 0,
+                ReservedStock = 0,
+                AvailableStock = 0,
+                SafetyBuffer = 2,
+                InventoryVersion = 1,
+                IsActive = true
+            });
+            if (product.IsActive)
+                await EnsurePublicCatalogForUnlinkedActiveProductAsync(product.Sku, cancellationToken);
             AddAuditEvent("AdminProducts.Create", actorUserId, tenantId, product.Sku, new
             {
                 product.Sku,
-                product.IsActive
+                product.IsActive,
+                defaultVariantSku = product.Sku,
+                defaultVariantPhysicalStock = 0
             });
 
             await SyncListingDraftsFromAdminProductAsync(product, "AdminProducts.Create", cancellationToken);
@@ -216,6 +237,8 @@ public sealed class ProductAdminService
 
         ApplyUpsertValues(product, request, resolvedCategorySlug);
         product.UpdatedAt = DateTimeOffset.UtcNow;
+        if (product.IsActive)
+            await EnsurePublicCatalogForUnlinkedActiveProductAsync(product.Sku, cancellationToken);
 
         if (oldCost != product.CostPriceCents || oldCatalog != product.CatalogPriceCents)
         {
@@ -351,6 +374,8 @@ public sealed class ProductAdminService
 
         ApplyCandidate(product, candidate);
         product.UpdatedAt = DateTimeOffset.UtcNow;
+        if (product.IsActive)
+            await EnsurePublicCatalogForUnlinkedActiveProductAsync(product.Sku, cancellationToken);
 
         if (oldCost != product.CostPriceCents || oldCatalog != product.CatalogPriceCents)
         {
@@ -377,6 +402,33 @@ public sealed class ProductAdminService
         await SyncListingDraftsFromAdminProductAsync(product, "AdminProducts.Update", cancellationToken);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await GetBySkuAsync(product.Sku, cancellationToken);
+    }
+
+    private async Task EnsurePublicCatalogForUnlinkedActiveProductAsync(string sku, CancellationToken cancellationToken)
+    {
+        if (await _dbContext.ProductCatalogs.AnyAsync(link => link.ProductSku == sku, cancellationToken))
+            return;
+
+        var publicCatalog = await _dbContext.Catalogs.FirstOrDefaultAsync(
+            catalog => catalog.IsActive && catalog.AccessMode == CatalogAccessMode.Public,
+            cancellationToken);
+        if (publicCatalog == null)
+        {
+            publicCatalog = new Catalog
+            {
+                Name = "Catálogo Público",
+                Description = "Produtos disponíveis para todos os clientes aprovados.",
+                AccessMode = CatalogAccessMode.Public,
+                IsActive = true
+            };
+            _dbContext.Catalogs.Add(publicCatalog);
+        }
+
+        _dbContext.ProductCatalogs.Add(new ProductCatalog
+        {
+            CatalogId = publicCatalog.Id,
+            ProductSku = sku
+        });
     }
 
     public async Task<ServiceResult<ProductPricingUpdateResult>> UpdatePricingAsync(
