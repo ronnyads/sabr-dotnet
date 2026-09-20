@@ -52,12 +52,21 @@ public sealed class ClientIntegrationsHubController : ControllerBase
             var shopifyConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.Shopify);
             var tikTokConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.TikTokShop);
             var shopeeConn = connections.FirstOrDefault(c => c.Provider == MarketplaceProvider.Shopee);
+            var mercadoPagoGrant = await _db.MarketplaceOAuthGrants.AsNoTracking()
+                .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.AppFamily == "MERCADO_PAGO")
+                .OrderByDescending(x => x.UpdatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+            var mercadoPagoConnected = mercadoPagoGrant != null && !mercadoPagoGrant.RequiresReauthorization &&
+                (mercadoPagoGrant.TokenExpiresAt > DateTimeOffset.UtcNow || mercadoPagoGrant.RefreshTokenProtected != "");
+            var mercadoPagoBillingVerified = mercadoPagoConnected && mercadoPagoGrant!.LastCapabilityVerifiedAt.HasValue &&
+                mercadoPagoGrant.CapabilitiesJson.Contains("\"billingMercadoPago\":true", StringComparison.OrdinalIgnoreCase);
 
             var result = new List<ClientIntegrationCardResult>
             {
                 new()
                 {
                     Provider = (int)MarketplaceProvider.MercadoLivre,
+                    Slug = "mercadolivre",
                     Name = "Mercado Livre",
                     Description = "Sincronize pedidos e produtos com o Mercado Livre.",
                     IsConnected = mlConn != null,
@@ -67,7 +76,25 @@ public sealed class ClientIntegrationsHubController : ControllerBase
                 },
                 new()
                 {
+                    Provider = 100,
+                    Slug = "mercadopago",
+                    Category = "Financeiro",
+                    Name = "Mercado Pago",
+                    Description = "Confirme pagamentos, tarifas, estornos e ajustes com a fonte financeira oficial.",
+                    IsConnected = mercadoPagoConnected,
+                    ConnectedAt = mercadoPagoGrant?.CreatedAt.UtcDateTime,
+                    LastSyncAt = mercadoPagoGrant?.LastCapabilityVerifiedAt?.UtcDateTime,
+                    Details = mercadoPagoGrant == null
+                        ? "Autorização financeira independente"
+                        : mercadoPagoBillingVerified ? $"Seller {mercadoPagoGrant.SellerId} · Billing verificado" :
+                            mercadoPagoGrant.RequiresReauthorization ? "Reautorização necessária" : "Billing aguardando verificação",
+                    HealthStatus = mercadoPagoGrant == null ? "NOT_CONNECTED" : mercadoPagoBillingVerified ? "VERIFIED" :
+                        mercadoPagoGrant.RequiresReauthorization ? "REAUTH_REQUIRED" : "PENDING"
+                },
+                new()
+                {
                     Provider = (int)MarketplaceProvider.TinyErp,
+                    Slug = "tinyerp",
                     Name = "Tiny ERP",
                     Description = "Integre pedidos e emissao de notas fiscais com o Tiny ERP.",
                     IsConnected = tinyConn != null,
@@ -78,6 +105,7 @@ public sealed class ClientIntegrationsHubController : ControllerBase
                 new()
                 {
                     Provider = (int)MarketplaceProvider.Shopify,
+                    Slug = "shopify",
                     Name = "Shopify",
                     Description = "Sincronize pedidos e inventario com a sua loja Shopify.",
                     IsConnected = shopifyConn != null,
@@ -88,6 +116,7 @@ public sealed class ClientIntegrationsHubController : ControllerBase
                 new()
                 {
                     Provider = (int)MarketplaceProvider.TikTokShop,
+                    Slug = "tiktokshop",
                     Name = "TikTok Shop",
                     Description = "Conecte sua operacao ao TikTok Shop para preparar sincronizacao de pedidos e catalogo.",
                     IsConnected = tikTokConn != null,
@@ -98,6 +127,7 @@ public sealed class ClientIntegrationsHubController : ControllerBase
                 new()
                 {
                     Provider = (int)MarketplaceProvider.Shopee,
+                    Slug = "shopee",
                     Name = "Shopee",
                     Description = "Conecte sua conta Shopee para sincronizar autorizacao oficial e pedidos.",
                     IsConnected = shopeeConn != null,

@@ -86,7 +86,7 @@ public sealed class ClientMercadoPagoIntegrationController : ControllerBase
     {
         if (!TryGetClient(out var tenantId, out var clientId, out var error)) return error!;
         if (!_oauth.IsConfigured(out var message)) return BadRequest(new { code = "MP_APP_NOT_CONFIGURED", message });
-        var state = _state.CreateState(tenantId!, clientId, request?.ReturnUrl ?? "/client/integrations/mercadolivre");
+        var state = _state.CreateState(tenantId!, clientId, request?.ReturnUrl ?? "/client/integrations/mercadopago");
         return Ok(new { url = _oauth.BuildConnectUrl(state) });
     }
 
@@ -95,9 +95,9 @@ public sealed class ClientMercadoPagoIntegrationController : ControllerBase
     public async Task<IActionResult> Callback([FromQuery] string? code, [FromQuery] string? state, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
-            return Redirect(BuildClientRedirect("/client/integrations/mercadolivre?mp=missing_code_or_state"));
+            return Redirect(BuildClientRedirect("/client/integrations/mercadopago?mp=missing_code_or_state"));
         if (!_state.TryReadState(state, out var payload))
-            return Redirect(BuildClientRedirect("/client/integrations/mercadolivre?mp=invalid_state"));
+            return Redirect(BuildClientRedirect("/client/integrations/mercadopago?mp=invalid_state"));
 
         try
         {

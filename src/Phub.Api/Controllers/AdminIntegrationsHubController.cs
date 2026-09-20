@@ -34,6 +34,13 @@ public sealed class AdminIntegrationsHubController : ControllerBase
                 .ToListAsync(cancellationToken);
 
             var counts = connections.ToDictionary(item => item.Provider, item => item.Count);
+            var mercadoPagoConnectedCount = await _db.MarketplaceOAuthGrants
+                .Where(x => x.AppFamily == "MERCADO_PAGO" &&
+                            !x.RequiresReauthorization &&
+                            (x.TokenExpiresAt > DateTimeOffset.UtcNow || x.RefreshTokenProtected != ""))
+                .Select(x => x.ClientId)
+                .Distinct()
+                .CountAsync(cancellationToken);
 
             var result = new List<IntegrationCardResult>
             {
@@ -42,6 +49,15 @@ public sealed class AdminIntegrationsHubController : ControllerBase
                     "Mercado Livre",
                     "Sincronize pedidos e produtos com o Mercado Livre.",
                     counts),
+                new()
+                {
+                    Provider = 100,
+                    Slug = "mercadopago",
+                    Category = "Financeiro",
+                    Name = "Mercado Pago",
+                    Description = "Autorize a conciliação oficial de pagamentos, tarifas, estornos e ajustes.",
+                    ConnectedCount = mercadoPagoConnectedCount
+                },
                 BuildIntegrationCard(
                     MarketplaceProvider.TinyErp,
                     "Tiny ERP",
@@ -117,6 +133,72 @@ public sealed class AdminIntegrationsHubController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("mercadopago/clients")]
+    public async Task<IActionResult> GetMercadoPagoClients(
+        [FromQuery] int skip = 0,
+        [FromQuery] int limit = 20,
+        [FromQuery] string? search = null,
+        CancellationToken cancellationToken = default)
+    {
+        var clientsQuery = _db.Clients.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var normalizedSearch = search.Trim().ToLower();
+            clientsQuery = clientsQuery.Where(c =>
+                c.AccountName.ToLower().Contains(normalizedSearch) ||
+                (c.LegalName != null && c.LegalName.ToLower().Contains(normalizedSearch)) ||
+                (c.TradeName != null && c.TradeName.ToLower().Contains(normalizedSearch)));
+        }
+
+        var total = await clientsQuery.CountAsync(cancellationToken);
+        var clients = await clientsQuery
+            .OrderBy(c => c.AccountName)
+            .Skip(Math.Max(0, skip))
+            .Take(Math.Clamp(limit, 1, 100))
+            .Select(c => new { c.Id, c.TenantId, c.AccountName })
+            .ToListAsync(cancellationToken);
+        var clientIds = clients.Select(c => c.Id).ToList();
+        var tenantIds = clients.Select(c => c.TenantId).Distinct().ToList();
+        var grants = await _db.MarketplaceOAuthGrants.AsNoTracking()
+            .Where(x => clientIds.Contains(x.ClientId) && x.AppFamily == "MERCADO_PAGO")
+            .OrderByDescending(x => x.UpdatedAt)
+            .ToListAsync(cancellationToken);
+        var tenantSlugs = await _db.Tenants.AsNoTracking()
+            .Where(t => tenantIds.Contains(t.Id))
+            .Select(t => new { t.Id, t.Slug })
+            .ToDictionaryAsync(t => t.Id, t => t.Slug, cancellationToken);
+        var grantMap = grants.GroupBy(x => x.ClientId).ToDictionary(x => x.Key, x => x.First());
+        var now = DateTimeOffset.UtcNow;
+
+        return Ok(new PagedIntegrationClientsResult
+        {
+            Total = total,
+            Items = clients.Select(client =>
+            {
+                grantMap.TryGetValue(client.Id, out var grant);
+                tenantSlugs.TryGetValue(client.TenantId, out var tenantSlug);
+                var connected = grant != null && !grant.RequiresReauthorization &&
+                    (grant.TokenExpiresAt > now || grant.RefreshTokenProtected != "");
+                var billingVerified = connected && grant!.LastCapabilityVerifiedAt.HasValue &&
+                    grant.CapabilitiesJson.Contains("\"billingMercadoPago\":true", StringComparison.OrdinalIgnoreCase);
+                return new IntegrationClientResult
+                {
+                    ClientId = client.Id,
+                    TenantId = client.TenantId,
+                    TenantSlug = tenantSlug ?? string.Empty,
+                    ClientName = client.AccountName,
+                    IsConnected = connected,
+                    ConnectedAt = grant?.CreatedAt.UtcDateTime,
+                    LastSyncAt = grant?.LastCapabilityVerifiedAt?.UtcDateTime,
+                    SellerOrCompanyInfo = grant == null
+                        ? "Autorização pendente"
+                        : $"Seller {grant.SellerId} · {(billingVerified ? "Billing verificado" : grant.RequiresReauthorization ? "Reautorização necessária" : grant.CapabilityError ?? "Billing pendente")}",
+                    HealthStatus = grant == null ? "NOT_CONNECTED" : billingVerified ? "VERIFIED" : grant.RequiresReauthorization ? "REAUTH_REQUIRED" : "PENDING"
+                };
+            }).ToList()
+        });
+    }
+
     [HttpGet("shopee/clients")]
     public async Task<IActionResult> GetShopeeClients(
         [FromQuery] int skip = 0,
@@ -167,6 +249,8 @@ public sealed class AdminIntegrationsHubController : ControllerBase
         return new IntegrationCardResult
         {
             Provider = (int)provider,
+            Slug = provider.ToString().ToLowerInvariant(),
+            Category = "Operacional",
             Name = name,
             Description = description,
             ConnectedCount = counts.TryGetValue(provider, out var count) ? count : 0
