@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
@@ -11,8 +12,19 @@ public sealed class FinancialCapabilityService
     private readonly IAppDbContext _db;
     private readonly MercadoLivreOAuthService _oauth;
     private readonly IMercadoLivreApiClient _api;
-    public FinancialCapabilityService(IAppDbContext db, MercadoLivreOAuthService oauth, IMercadoLivreApiClient api)
-    { _db = db; _oauth = oauth; _api = api; }
+    private readonly ILogger<FinancialCapabilityService>? _logger;
+
+    public FinancialCapabilityService(
+        IAppDbContext db,
+        MercadoLivreOAuthService oauth,
+        IMercadoLivreApiClient api,
+        ILogger<FinancialCapabilityService>? logger = null)
+    {
+        _db = db;
+        _oauth = oauth;
+        _api = api;
+        _logger = logger;
+    }
 
     public async Task<IReadOnlyList<FinancialCapabilityResult>> GetAsync(string tenantId, Guid clientId, bool probe, CancellationToken ct)
     {
@@ -73,6 +85,14 @@ public sealed class FinancialCapabilityService
                         mlGrant.CapabilityError = billing.ErrorCode;
                         mlGrant.UpdatedAt = DateTimeOffset.UtcNow;
                         await _db.SaveChangesAsync(ct);
+                        if (!billing.Verified)
+                        {
+                            _logger?.LogWarning(
+                                "Mercado Livre Billing capability probe did not verify access. sellerId={SellerId} errorCode={ErrorCode} transient={TransientFailure}",
+                                connection.SellerId,
+                                billing.ErrorCode,
+                                billing.TransientFailure);
+                        }
                         if (billing.TransientFailure) result.Pending.Add(billing.ErrorCode!);
                     }
                 }
