@@ -19,3 +19,10 @@ tests/**/TestResults/
 *.out.log
 logs/
 *.log
+bin
+obj
+.git
+.vs
+.tmp-build
+.tempbuild
+.tmp-reviews
