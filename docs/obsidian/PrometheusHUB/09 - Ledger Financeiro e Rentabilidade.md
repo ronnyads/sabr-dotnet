@@ -62,7 +62,7 @@ Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da op
 - `GET /api/v1/client/dashboard/sync/{jobId}`
 - `GET /api/v1/client/dashboard/sync-status`
 - `GET|PUT /api/v1/client/financial-settings/tax`
-- `GET|POST /api/v1/admin/integrations/{clientId}/financial-capabilities[/probe]`
+- `GET|POST /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/financial-capabilities[/probe]`
 - `GET /api/v1/admin/financial-reconciliation/runs`
 
 ## Rollout e recuperação
@@ -81,8 +81,9 @@ As migrações são aditivas. Ativar primeiro em shadow mode, auditar grants sep
 
 ## Verificação de acesso Billing ML (20/09/2026)
 
-- O admin `POST /api/v1/admin/integrations/{clientId}/financial-capabilities/probe` consulta `GET /billing/integration/monthly/periods?group=ML&document_type=BILL&limit=1` com a credencial da conexão ML do seller. O endpoint é usado somente como teste de acesso, nunca como origem operacional nem como conciliação.
+- O admin `POST /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/financial-capabilities/probe` resolve e valida explicitamente o tenant do contexto administrativo, depois consulta `GET /billing/integration/monthly/periods?group=ML&document_type=BILL&limit=1` com a credencial da conexão ML do seller. O endpoint é usado somente como teste de acesso, nunca como origem operacional nem como conciliação.
 - Uma conexão OAuth ou `/users/me` bem-sucedido não implica permissão Billing. A capacidade `billingMercadoLivre` só fica verdadeira após resposta JSON válida de Billing (`results` array) verificada nas últimas 24 horas, registrada no grant de metadados ML por tenant, cliente e seller. Esse registro não duplica tokens; a credencial operacional permanece na conexão ML.
 - 403 e respostas inválidas deixam a capacidade não verificada. 429/5xx/erro transitório preservam o último resultado comprovado e expõem a pendência de integração. Nenhum desses casos registra lucro confirmado igual a zero.
+- Após um 429, probes manuais respeitam cooldown de cinco minutos gravado no metadado do grant; cliques repetidos não renovam a janela nem geram novas chamadas ao Billing. A homologação real de 20/09/2026 no seller 2496573592 encontrou `ML_BILLING_RATE_LIMITED`, com HTTP interno 200 e risco visível no Admin.
 - A consulta segue as [boas práticas oficiais de Billing](https://developers.mercadolivre.com.br/pt_br/boas-praticas-para-o-consumo-das-apis-de-relatorios-de-faturamento): Billing é pós-venda e não substitui Orders/Shipments; detalhes futuros deverão usar `from_id`, consumo sequencial e tratamento de `206`/`429`.
 - Esta entrega não consome detalhes, não avança cursores e não cria lançamentos conciliados. O gate de amostra manual e divergência de centavos permanece obrigatório antes de habilitar rentabilidade confirmada.
