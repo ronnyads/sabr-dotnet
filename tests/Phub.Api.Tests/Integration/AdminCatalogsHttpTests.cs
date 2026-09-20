@@ -122,20 +122,23 @@ public sealed class AdminCatalogsHttpTests : IClassFixture<TestWebApplicationFac
         Assert.Single(invalidSkuList);
         Assert.Equal("SKU INVALIDO", invalidSkuList[0]);
 
-        var invalidPlans = await client.PutAsJsonAsync(
+        var globalPlan = await client.PutAsJsonAsync(
             $"/api/v1/admin/tenants/{slugA}/catalogs/{created.Id}/plans",
             new CatalogReplacePlansRequest
             {
                 PlanIds = new List<Guid> { planBId }
             });
 
-        Assert.Equal((HttpStatusCode)422, invalidPlans.StatusCode);
-        var invalidPlanError = await invalidPlans.Content.ReadFromJsonAsync<ApiError>();
-        Assert.NotNull(invalidPlanError);
-        Assert.Equal("INVALID_PLAN_IDS", invalidPlanError!.Code);
-        var invalidPlanIds = ReadStringArray(invalidPlanError.Errors, "invalidPlanIds");
-        Assert.Single(invalidPlanIds);
-        Assert.Equal(planBId.ToString(), invalidPlanIds[0], ignoreCase: true);
+        Assert.Equal(HttpStatusCode.OK, globalPlan.StatusCode);
+        var globalPlanLink = await globalPlan.Content.ReadFromJsonAsync<AdminCatalogDetailResult>();
+        Assert.Equal(planBId, Assert.Single(globalPlanLink!.PlanIds));
+
+        var invalidPlan = await client.PutAsJsonAsync(
+            $"/api/v1/admin/tenants/{slugA}/catalogs/{created.Id}/plans",
+            new CatalogReplacePlansRequest { PlanIds = new List<Guid> { Guid.NewGuid() } });
+        Assert.Equal((HttpStatusCode)422, invalidPlan.StatusCode);
+        var invalidPlanError = await invalidPlan.Content.ReadFromJsonAsync<ApiError>();
+        Assert.Equal("INVALID_PLAN_IDS", invalidPlanError?.Code);
 
         var replacePlans = await client.PutAsJsonAsync(
             $"/api/v1/admin/tenants/{slugA}/catalogs/{created.Id}/plans",

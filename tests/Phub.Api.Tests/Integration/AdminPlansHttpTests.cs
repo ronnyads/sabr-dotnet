@@ -20,7 +20,7 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
     }
 
     [Fact]
-    public async Task AdminPlans_CrudAndReplaceCatalogs_AreTenantScopedAndIdempotent()
+    public async Task AdminPlans_CrudAndReplaceCatalogs_AreGlobalAndIdempotent()
     {
         const string tenantA = "tenant-a";
         const string tenantB = "tenant-b";
@@ -64,7 +64,7 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
 
         using var client = _factory.CreateAdminClient();
 
-        var createResponse = await client.PostAsJsonAsync($"/api/v1/admin/tenants/{slugA}/plans", new AdminPlanUpsertRequest
+        var createResponse = await client.PostAsJsonAsync("/api/v1/admin/plans", new AdminPlanUpsertRequest
         {
             Name = "Plano Premium",
             IsActive = true
@@ -75,7 +75,7 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
         Assert.NotNull(created);
 
         var replaceCatalogs = await client.PutAsJsonAsync(
-            $"/api/v1/admin/tenants/{slugA}/plans/{created!.Id}/catalogs",
+            $"/api/v1/admin/plans/{created!.Id}/catalogs",
             new PlanReplaceCatalogsRequest
             {
                 CatalogIds = new List<Guid> { catalogAId, catalogAId }
@@ -88,7 +88,7 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
         Assert.Equal(catalogAId, linked.CatalogIds[0]);
 
         var replaceAgain = await client.PutAsJsonAsync(
-            $"/api/v1/admin/tenants/{slugA}/plans/{created.Id}/catalogs",
+            $"/api/v1/admin/plans/{created.Id}/catalogs",
             new PlanReplaceCatalogsRequest
             {
                 CatalogIds = new List<Guid> { catalogAId }
@@ -99,36 +99,39 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
         Assert.NotNull(linkedAgain);
         Assert.Single(linkedAgain!.CatalogIds);
 
-        var crossTenant = await client.PutAsJsonAsync(
-            $"/api/v1/admin/tenants/{slugA}/plans/{created.Id}/catalogs",
+        var globalCatalog = await client.PutAsJsonAsync(
+            $"/api/v1/admin/plans/{created.Id}/catalogs",
             new PlanReplaceCatalogsRequest
             {
                 CatalogIds = new List<Guid> { catalogBId }
             });
 
-        Assert.Equal((HttpStatusCode)422, crossTenant.StatusCode);
-        var crossTenantError = await crossTenant.Content.ReadFromJsonAsync<ApiError>();
-        Assert.NotNull(crossTenantError);
-        Assert.Equal("INVALID_CATALOG_IDS", crossTenantError!.Code);
-        var invalidCatalogIds = ReadStringArray(crossTenantError.Errors, "invalidCatalogIds");
-        Assert.Single(invalidCatalogIds);
-        Assert.Equal(catalogBId.ToString(), invalidCatalogIds[0], ignoreCase: true);
+        Assert.Equal(HttpStatusCode.OK, globalCatalog.StatusCode);
+        var globalLink = await globalCatalog.Content.ReadFromJsonAsync<AdminPlanDetailResult>();
+        Assert.Equal(catalogBId, Assert.Single(globalLink!.CatalogIds));
 
-        var listResponse = await client.GetAsync($"/api/v1/admin/tenants/{slugA}/plans?skip=0&limit=20&search=premium");
+        var invalidCatalog = await client.PutAsJsonAsync(
+            $"/api/v1/admin/plans/{created.Id}/catalogs",
+            new PlanReplaceCatalogsRequest { CatalogIds = new List<Guid> { Guid.NewGuid() } });
+        Assert.Equal((HttpStatusCode)422, invalidCatalog.StatusCode);
+        var invalidCatalogError = await invalidCatalog.Content.ReadFromJsonAsync<ApiError>();
+        Assert.Equal("INVALID_CATALOG_IDS", invalidCatalogError?.Code);
+
+        var listResponse = await client.GetAsync("/api/v1/admin/plans?skip=0&limit=20&search=premium");
         Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
         var list = await listResponse.Content.ReadFromJsonAsync<PagedResult<AdminPlanResult>>();
         Assert.NotNull(list);
         Assert.Contains(list!.Items, item => item.Id == created.Id);
 
-        var deleteFirst = await client.DeleteAsync($"/api/v1/admin/tenants/{slugA}/plans/{created.Id}");
+        var deleteFirst = await client.DeleteAsync($"/api/v1/admin/plans/{created.Id}");
         Assert.Equal(HttpStatusCode.NoContent, deleteFirst.StatusCode);
 
-        var deleteSecond = await client.DeleteAsync($"/api/v1/admin/tenants/{slugA}/plans/{created.Id}");
+        var deleteSecond = await client.DeleteAsync($"/api/v1/admin/plans/{created.Id}");
         Assert.Equal(HttpStatusCode.NoContent, deleteSecond.StatusCode);
     }
 
     [Fact]
-    public async Task AdminPlans_WhenTenantIsInactive_ReturnsTenantInactive()
+    public async Task AdminPlans_GlobalList_DoesNotDependOnTenantStatus()
     {
         const string tenantId = "tenant-inactive";
         const string slug = "inactive-plan";
@@ -148,12 +151,8 @@ public sealed class AdminPlansHttpTests : IClassFixture<TestWebApplicationFactor
         }
 
         using var client = _factory.CreateAdminClient();
-        var response = await client.GetAsync($"/api/v1/admin/tenants/{slug}/plans?skip=0&limit=20");
-
-        Assert.Equal((HttpStatusCode)422, response.StatusCode);
-        var error = await response.Content.ReadFromJsonAsync<ApiError>();
-        Assert.NotNull(error);
-        Assert.Equal("TENANT_INACTIVE", error!.Code);
+        var response = await client.GetAsync("/api/v1/admin/plans?skip=0&limit=20");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     private static List<string> ReadStringArray(object? errors, string propertyName)

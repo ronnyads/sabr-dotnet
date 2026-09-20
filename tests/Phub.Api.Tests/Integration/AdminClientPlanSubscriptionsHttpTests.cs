@@ -104,7 +104,7 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
     }
 
     [Fact]
-    public async Task ReplaceSet_WhenPlanBelongsToOtherTenant_ReturnsInvalidPlanIds()
+    public async Task ReplaceSet_GlobalPlanCanBeAssignedAcrossTenants()
     {
         const string tenantA = "tenant-a";
         const string slugA = "sabr";
@@ -139,13 +139,7 @@ public sealed class AdminClientPlanSubscriptionsHttpTests : IClassFixture<TestWe
             $"/api/v1/admin/tenants/{slugA}/clients/{clientId}/plan-subscriptions",
             new ClientPlanSubscriptionsReplaceRequest { PlanIds = new List<Guid> { otherTenantPlanId } });
 
-        Assert.Equal((HttpStatusCode)422, response.StatusCode);
-        var error = await response.Content.ReadFromJsonAsync<ApiError>();
-        Assert.NotNull(error);
-        Assert.Equal("INVALID_PLAN_IDS", error!.Code);
-        var invalidIds = ReadStringArray(error.Errors, "invalidPlanIds");
-        Assert.Single(invalidIds);
-        Assert.Equal(otherTenantPlanId.ToString(), invalidIds[0], ignoreCase: true);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

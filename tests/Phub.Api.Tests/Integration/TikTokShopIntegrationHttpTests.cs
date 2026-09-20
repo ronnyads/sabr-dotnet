@@ -316,7 +316,7 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
         var orderItem = order.Items.Single();
         Assert.Equal("SELLER-001", orderItem.SabrVariantSku);
         Assert.Equal(MarketplaceMappingStates.MappedByExactSku, orderItem.MappingState);
-        Assert.Equal(0, mappingCount);
+        Assert.Equal(1, mappingCount); // exact SKU auto-mapping now persists the listing link
         Assert.Equal(1, _factory.FakeTikTokShopApiClient.GetAuthorizedShopsCalls);
         Assert.Equal(1, _factory.FakeTikTokShopApiClient.SearchOrdersCalls);
         Assert.Equal(1, _factory.FakeTikTokShopApiClient.GetOrderDetailCalls);
@@ -1151,7 +1151,7 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
         var listPayload = await listResponse.Content.ReadFromJsonAsync<PagedResult<MarketplaceOrderListItemResult>>();
         Assert.NotNull(listPayload);
         var listItem = Assert.Single(listPayload!.Items);
-        Assert.Equal(1, listItem.TotalItems);
+        Assert.Equal(2, listItem.TotalItems); // total items represents units, not order lines
         Assert.DoesNotContain(MarketplaceOrderPaymentBlockers.NoImportedItems, listItem.PaymentBlockers);
     }
 
