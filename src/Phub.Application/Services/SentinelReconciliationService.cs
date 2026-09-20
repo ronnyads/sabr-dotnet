@@ -48,11 +48,18 @@ public sealed class SentinelReconciliationService
                 DedupeKey = $"sentinel:reconcile:{candidate.Provider}:{candidate.SellerId}:{candidate.ShipmentId}:{now:yyyyMMddHHmm}",
                 PayloadJson = System.Text.Json.JsonSerializer.Serialize(new { source = "sentinel_reconciliation", shipmentId = candidate.ShipmentId, evaluatedAt = now })
             });
-            await _db.MarketplaceShipmentExternalStates.Where(x => x.Id == candidate.Id)
+            // Only release the lease while we still own it. Without the LockedBy guard,
+            // a worker whose lease already expired (e.g. a slow AnyAsync/insert above)
+            // could wipe out a different worker's freshly-claimed lease here, letting a
+            // third worker claim the same row concurrently (same class of bug as achado
+            // 2.3 in FinancialSyncJobService, found while fixing that one).
+            var released = await _db.MarketplaceShipmentExternalStates
+                .Where(x => x.Id == candidate.Id && x.LockedBy == _workerId)
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(x => x.NextReconciliationAt, now.AddMinutes(packed ? 1 : 5))
                     .SetProperty(x => x.LockedBy, (string?)null)
                     .SetProperty(x => x.LeaseUntil, (DateTimeOffset?)null), ct);
+            if (released != 1) continue;
             count++;
         }
         await _db.SaveChangesAsync(ct);

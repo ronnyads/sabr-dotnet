@@ -81,9 +81,11 @@ O serviço já processa por tópico/recurso específico (melhor do que o apêndi
 
 **Evidência da correção (20/09/2026):** adicionada uma validação logo após calcular `requestedItemIds` — fora do `PreviewOnly`, `ItemIds` vazio agora retorna `ValidationError("itemIds", ...)` antes de tocar em `selected`/`catalogIds`/qualquer escrita, em vez de deixar o filtro de `brands` sozinho decidir o que grava. `PreviewOnly` continua podendo listar tudo com `ItemIds` vazio, já que não grava nada. Teste novo: `AdminCatalogImport_WithEmptyItemIds_RejectsOutsidePreview_AndWritesNothing` (`tests/Phub.Api.Tests/Integration/MercadoLivreIntegrationHttpTests.cs`) — cobre tanto a rejeição (400, nenhum Product/mapping criado) quanto o preview (200, lista o anúncio, nada gravado).
 
-### 2.8 Baixo — `SentinelReconciliationService.EnqueueDueAsync` também libera lease sem checar o dono
+### 2.8 [CORRIGIDO em 20/09/2026] Baixo — `SentinelReconciliationService.EnqueueDueAsync` também libera lease sem checar o dono
 
-Mesmo padrão do achado 2.3 (`ExecuteUpdateAsync` de liberação sem `WHERE LockedBy = @workerId`), encontrado ao corrigir aquele achado. Risco bem menor aqui: a janela entre claim e liberação é só uma leitura `AsNoTracking`/`AnyAsync` e um insert de `MarketplaceEventLog`, sem chamada HTTP externa no meio, e o lease dura só 45 segundos — a corrida exigiria latência/GC pause extremos para se manifestar. Não corrigido nesta rodada para manter o commit do achado 2.3 focado; recomendo aplicar a mesma correção (`WHERE LockedBy = @_workerId` na liberação) na próxima passada de baixo risco.
+Mesmo padrão do achado 2.3 (`ExecuteUpdateAsync` de liberação sem `WHERE LockedBy = @workerId`), encontrado ao corrigir aquele achado. Risco bem menor aqui: a janela entre claim e liberação é só uma leitura `AsNoTracking`/`AnyAsync` e um insert de `MarketplaceEventLog`, sem chamada HTTP externa no meio, e o lease dura só 45 segundos — a corrida exigiria latência/GC pause extremos para se manifestar.
+
+**Evidência da correção (20/09/2026):** a liberação final agora usa `WHERE Id = candidate.Id AND LockedBy = _workerId` (mesmo padrão do achado 2.3); se `released != 1` (outro worker já reclamou a linha), o laço faz `continue` sem contar o item como processado. Validei a query guardada contra PostgreSQL 16 real com dois casos: liberação pelo dono (1 linha afetada) e tentativa tardia após outro worker (`worker-B`) já ter reclamado a linha (0 linhas afetadas, lock do `worker-B` preservado intacto) — ambos corretos. **Limitação:** não adicionei teste de integração em C# porque `EnqueueDueAsync` usa `ExecuteUpdateAsync` tanto no claim quanto na liberação, sem nenhum branch InMemory-safe (diferente de `FinancialSyncJobService`, que já tinha um fallback não-relacional); criar esse branch só para viabilizar teste seria uma mudança desproporcional ao tamanho da correção. A validação ficou no nível do SQL do guard, idêntico ao executado em produção.
 
 ## 3. Confirmado como já implementado corretamente (não mexer sem necessidade)
 
@@ -116,5 +118,7 @@ Por risco decrescente:
 5. ~~Lease/heartbeat no webhook (2.5, item b)~~ — **corrigido em 20/09/2026**. Sincronização pontual (item a) segue pendente, ver evidência acima.
 6. ~~Segregação de moeda e divergência pareada no `FinancialProfitabilityService` (2.6)~~ — **corrigido em 20/09/2026**, ver evidência acima.
 7. ~~Validação de `ItemIds` na importação de catálogo (2.7)~~ — **corrigido em 20/09/2026**, ver evidência acima.
+
+8. ~~Liberação de lease sem checar dono no `SentinelReconciliationService` (2.8)~~ — **corrigido em 20/09/2026**, ver evidência acima.
 
 Cada item seria implementado como incremento verificável isolado, com teste e evidência, atualizando esta auditoria e as notas do Obsidian afetadas, conforme o próprio plano exige.
