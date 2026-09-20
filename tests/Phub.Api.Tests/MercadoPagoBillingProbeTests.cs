@@ -67,6 +67,46 @@ public sealed class MercadoPagoBillingProbeTests
         Assert.Equal(expectedVerified, grant.CapabilitiesJson.Contains("\"billingMercadoPago\":true"));
     }
 
+    [Fact]
+    public async Task ProbeBillingAsync_RateLimitUsesDurableCooldownWithoutRepeatedRequests()
+    {
+        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase($"mp-cooldown-{Guid.NewGuid():N}").Options);
+        var protector = new EphemeralDataProtectionProvider();
+        var grant = new MarketplaceOAuthGrant
+        {
+            TenantId = "tenant-test", ClientId = Guid.NewGuid(), SellerId = 2496573592,
+            Provider = MarketplaceProvider.MercadoLivre, AppFamily = "MERCADO_PAGO",
+            AccessTokenProtected = protector.CreateProtector("PrometheusHUB.MercadoPagoOAuthGrant.v1").Protect("test-token"),
+            TokenExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        db.MarketplaceOAuthGrants.Add(grant);
+        db.TenantMarketplaceConnections.Add(new TenantMarketplaceConnection
+        {
+            TenantId = grant.TenantId, ClientId = grant.ClientId, Provider = grant.Provider,
+            SellerId = grant.SellerId, AccessToken = "ml-functional-token",
+            RefreshToken = "ml-refresh-token", TokenExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+        });
+        await db.SaveChangesAsync();
+        var calls = 0;
+        var handler = new StubHandler(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        });
+        var mlOAuth = new MercadoLivreOAuthService(db, new FakeMercadoLivreApiClient(),
+            Microsoft.Extensions.Options.Options.Create(new MercadoLivreOptions()));
+        var service = new MercadoPagoOAuthService(db, new StubClientFactory(handler), protector,
+            Microsoft.Extensions.Options.Options.Create(new MercadoPagoOptions()), mlOAuth);
+
+        var first = await service.ProbeBillingAsync(grant.TenantId, grant.ClientId, grant.SellerId, CancellationToken.None);
+        var second = await service.ProbeBillingAsync(grant.TenantId, grant.ClientId, grant.SellerId, CancellationToken.None);
+
+        Assert.Equal("MP_BILLING_RATE_LIMITED", first.ErrorCode);
+        Assert.Equal(first.ErrorCode, second.ErrorCode);
+        Assert.Equal(1, calls);
+    }
+
     private sealed class StubClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);

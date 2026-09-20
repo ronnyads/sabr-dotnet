@@ -46,8 +46,8 @@ O pagamento interno é um checkout transacional, separado do estado `paid` infor
 
 1. `GET /api/v1/client/orders/{orderId}/payment-quote` calcula os itens pelo preço vigente do catálogo, saldo atual e bloqueadores operacionais.
 2. O portal apresenta os itens, quantidades, subtotal, total e saldo projetado antes da confirmação.
-3. `POST /api/v1/client/orders/{orderId}/mark-paid` envia o `quoteHash`; uma cotação alterada é recusada com `PAYMENT_QUOTE_CHANGED`.
-4. Pedido, variantes e carteira são bloqueados no PostgreSQL. Débito, snapshots de preço, consumo da reserva e confirmação do pagamento são salvos na mesma transação.
+3. `POST /api/v1/client/orders/{orderId}/checkout/confirm` envia o `quoteHash`; uma cotação alterada é recusada com `PAYMENT_QUOTE_CHANGED`. O antigo `mark-paid` não altera mais pedidos de clientes.
+4. Pedido, variantes e carteira são bloqueados no PostgreSQL. O checkout exige reserva integral já existente e nunca a cria durante o pagamento. Débito, snapshots de preço, consumo da reserva, confirmação do custo no ledger financeiro e confirmação do pagamento são salvos na mesma transação. Cliente não dispõe de `force`; revisão de prazo/corte cabe ao admin, sem ignorar saldo ou reserva.
 5. Saldo insuficiente retorna `INSUFFICIENT_WALLET_BALANCE` sem confirmar o pedido, consumir estoque ou criar ledger.
 
 Cada pedido aceita no máximo um débito (`OrderId` + `Debit`). Repetir a confirmação devolve o resultado original sem movimentar carteira ou reserva novamente. O ledger referencia o pedido e o pedido referencia o ledger para auditoria bidirecional.

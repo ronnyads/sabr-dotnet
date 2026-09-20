@@ -134,6 +134,11 @@ public sealed class MercadoPagoOAuthService
         if (grant == null)
             return new MercadoPagoBillingProbeResult(sellerId, false, "MP_GRANT_NOT_FOUND", null);
 
+        if (grant.CapabilityError == "MP_BILLING_RATE_LIMITED"
+            && grant.UpdatedAt.AddMinutes(5) > DateTimeOffset.UtcNow)
+            return new MercadoPagoBillingProbeResult(sellerId, IsBillingVerified(grant.CapabilitiesJson),
+                grant.CapabilityError, grant.LastCapabilityVerifiedAt);
+
         var marketplaceConnection = await _db.TenantMarketplaceConnections.FirstOrDefaultAsync(x =>
             x.TenantId == tenantId && x.ClientId == clientId &&
             x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId,

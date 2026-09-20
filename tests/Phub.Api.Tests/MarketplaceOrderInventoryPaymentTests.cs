@@ -8,6 +8,31 @@ namespace Phub.Api.Tests;
 public sealed class MarketplaceOrderInventoryPaymentTests
 {
     [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, false)]
+    [InlineData(2, true)]
+    public void Checkout_RequiresFullExistingReservation(int reserved, bool expected)
+    {
+        var orderId = Guid.NewGuid();
+        var item = new MarketplaceOrderItem
+        {
+            MarketplaceOrderId = orderId, SabrVariantSku = "PH-TEST",
+            MappingState = MarketplaceMappingStates.Mapped, Quantity = 2
+        };
+        var reservations = reserved == 0 ? Array.Empty<StockReservation>() : new[]
+        {
+            new StockReservation
+            {
+                MarketplaceOrderId = orderId, MarketplaceOrderItemId = item.Id,
+                SabrVariantSku = "PH-TEST", Quantity = reserved,
+                Status = StockReservationStatus.Reserved
+            }
+        };
+
+        Assert.Equal(expected, MarketplaceOrderCheckoutService.HasCompleteReservation(new[] { item }, reservations));
+    }
+
+    [Theory]
     [InlineData("pending_payment", false)]
     [InlineData("created", false)]
     [InlineData("paid", true)]

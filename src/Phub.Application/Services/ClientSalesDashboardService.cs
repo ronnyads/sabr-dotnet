@@ -73,24 +73,50 @@ public sealed class ClientSalesDashboardService
         var fees = currentPaid.SelectMany(order => order.Items).Sum(item => item.SaleFee ?? 0m);
         var totalUnits = currentPaid.SelectMany(order => order.Items).Sum(item => item.Quantity);
 
+        var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, ResolveSaoPauloTimeZone()).Date);
         var products = currentPaid
-            .SelectMany(order => order.Items.Select(item => new { order.Id, Item = item }))
+            .SelectMany(order => order.Items.Select(item => new { Order = order, Item = item }))
             .GroupBy(row => ResolveProductKey(row.Item), StringComparer.OrdinalIgnoreCase)
             .Select(group => new ClientSalesSkuResult
             {
+                SellerId = group.First().Item.SellerId,
                 ChannelItemId = group.First().Item.MlItemId,
                 ChannelVariationId = group.First().Item.MlVariationId,
                 Sku = ResolveDisplaySku(group.First().Item),
                 ProductName = group.Select(row => row.Item.ProductName).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
-                Orders = group.Select(row => row.Id).Distinct().Count(),
+                Orders = group.Select(row => row.Order.Id).Distinct().Count(),
                 Units = group.Sum(row => row.Item.Quantity),
                 Revenue = Math.Round(group.Sum(row => ItemRevenue(row.Item)), 2),
-                IsMapped = group.All(row => !string.IsNullOrWhiteSpace(row.Item.SabrVariantSku))
+                IsMapped = group.All(row => !string.IsNullOrWhiteSpace(row.Item.SabrVariantSku)),
+                OverdueOrders = group.Where(row => !row.Order.SabrPaymentConfirmedAt.HasValue
+                    && row.Order.ShipByDeadlineAt.HasValue && row.Order.ShipByDeadlineAt.Value < now)
+                    .Select(row => row.Order.Id).Distinct().Count(),
+                DueTodayOrders = group.Where(row => !row.Order.SabrPaymentConfirmedAt.HasValue
+                    && row.Order.ShipByDeadlineAt.HasValue
+                    && DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(row.Order.ShipByDeadlineAt.Value, ResolveSaoPauloTimeZone()).Date) == localToday)
+                    .Select(row => row.Order.Id).Distinct().Count(),
+                DueTodayUnits = group.Where(row => !row.Order.SabrPaymentConfirmedAt.HasValue
+                    && row.Order.ShipByDeadlineAt.HasValue
+                    && DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(row.Order.ShipByDeadlineAt.Value, ResolveSaoPauloTimeZone()).Date) == localToday)
+                    .Sum(row => row.Item.Quantity),
+                EarliestDeadlineAt = group.Where(row => !row.Order.SabrPaymentConfirmedAt.HasValue)
+                    .Min(row => row.Order.ShipByDeadlineAt)
             })
-            .OrderByDescending(row => row.Units)
+            .OrderByDescending(row => !row.IsMapped && row.OverdueOrders > 0)
+            .ThenByDescending(row => !row.IsMapped && row.DueTodayOrders > 0)
+            .ThenBy(row => row.IsMapped ? DateTimeOffset.MaxValue : row.EarliestDeadlineAt ?? DateTimeOffset.MaxValue)
+            .ThenByDescending(row => row.Orders)
+            .ThenByDescending(row => row.Units)
             .ThenByDescending(row => row.Revenue)
             .ThenBy(row => row.ProductName)
             .ToList();
+        foreach (var product in products.Where(product => !product.IsMapped))
+        {
+            product.MappingPriority = product.OverdueOrders > 0 ? "OVERDUE"
+                : product.DueTodayOrders > 0 ? "DUE_TODAY" : "PENDING";
+            product.MappingReason = product.OverdueOrders > 0 ? "Pedido com prazo vencido"
+                : product.DueTodayOrders > 0 ? "Pedido para enviar hoje" : "Produto vendido sem SKU interno";
+        }
 
         var dailyLookup = currentPaid
             .GroupBy(order => DateOnly.FromDateTime(EffectiveDate(order).UtcDateTime.Date))
@@ -281,11 +307,7 @@ public sealed class ClientSalesDashboardService
         => (item.UnitPrice ?? item.FullUnitPrice ?? 0m) * item.Quantity;
 
     private static string ResolveProductKey(MarketplaceOrderItem item)
-        => !string.IsNullOrWhiteSpace(item.SabrVariantSku)
-            ? $"sabr:{item.SabrVariantSku.Trim()}"
-            : !string.IsNullOrWhiteSpace(item.ChannelSku)
-                ? $"channel:{item.ChannelSku.Trim()}"
-                : $"item:{item.MlItemId.Trim()}:{item.MlVariationId?.Trim() ?? "base"}";
+        => $"seller:{item.SellerId}:item:{item.MlItemId.Trim()}:variation:{item.MlVariationId?.Trim() ?? "base"}";
 
     private static string ResolveDisplaySku(MarketplaceOrderItem item)
         => item.SabrVariantSku?.Trim()

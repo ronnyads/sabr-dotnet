@@ -410,9 +410,11 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         }
 
         using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var quote = await (await client.GetAsync($"/api/v1/client/orders/{orderId}/payment-quote"))
+            .Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
         var response = await client.PostAsJsonAsync(
-            $"/api/v1/client/orders/{orderId}/mark-paid",
-            new { force = false });
+            $"/api/v1/client/orders/{orderId}/checkout/confirm",
+            new { quoteHash = quote!.QuoteHash });
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
         var payload = await response.Content.ReadFromJsonAsync<ApiError>();
@@ -450,8 +452,10 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         }
 
         using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var quote = await (await client.GetAsync($"/api/v1/client/orders/{orderId}/payment-quote"))
+            .Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
         var response = await client.PostAsJsonAsync(
-            $"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
+            $"/api/v1/client/orders/{orderId}/checkout/confirm", new { quoteHash = quote!.QuoteHash });
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
         var payload = await response.Content.ReadFromJsonAsync<ApiError>();
@@ -534,8 +538,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(3_000, insufficientQuote.TotalChargeCents);
 
         var insufficient = await client.PostAsJsonAsync(
-            $"/api/v1/client/orders/{orderId}/mark-paid",
-            new { force = false, quoteHash = insufficientQuote.QuoteHash });
+            $"/api/v1/client/orders/{orderId}/checkout/confirm",
+            new { quoteHash = insufficientQuote.QuoteHash });
         Assert.Equal(HttpStatusCode.UnprocessableEntity, insufficient.StatusCode);
 
         using (var scope = _factory.Services.CreateScope())
@@ -554,8 +558,39 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var quote = await quoteResponse.Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
         Assert.NotNull(quote);
         Assert.True(quote!.HasSufficientBalance);
+        Assert.True(quote.HasCompleteReservation);
         Assert.Equal(3_000, quote.ProductSubtotalCents);
         Assert.Equal(997_000, quote.WalletBalanceAfterCents);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            (await db.StockReservations.SingleAsync(item => item.MarketplaceOrderId == orderId)).Status = StockReservationStatus.Released;
+            await db.SaveChangesAsync();
+        }
+
+        var noReservationQuoteResponse = await client.GetAsync($"/api/v1/client/orders/{orderId}/payment-quote");
+        var noReservationQuote = await noReservationQuoteResponse.Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
+        Assert.NotNull(noReservationQuote);
+        Assert.False(noReservationQuote!.HasCompleteReservation);
+        var noReservationPayment = await client.PostAsJsonAsync(
+            $"/api/v1/client/orders/{orderId}/checkout/confirm",
+            new { quoteHash = noReservationQuote.QuoteHash });
+        Assert.Equal(HttpStatusCode.BadRequest, noReservationPayment.StatusCode);
+        Assert.Contains("PAYMENT_RESERVATION_MISSING", await noReservationPayment.Content.ReadAsStringAsync());
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1_000_000, (await db.WalletAccounts.SingleAsync(item => item.TenantId == tenantId && item.ClientId == clientId)).BalanceCents);
+            Assert.Equal(0, await db.WalletLedgerEntries.CountAsync(item => item.OrderId == orderId));
+            (await db.StockReservations.SingleAsync(item => item.MarketplaceOrderId == orderId)).Status = StockReservationStatus.Reserved;
+            await db.SaveChangesAsync();
+        }
+
+        var legacy = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid",
+            new { force = true, quoteHash = quote.QuoteHash });
+        Assert.Equal(HttpStatusCode.Conflict, legacy.StatusCode);
 
         using (var scope = _factory.Services.CreateScope())
         {
@@ -565,8 +600,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         }
 
         var staleQuote = await client.PostAsJsonAsync(
-            $"/api/v1/client/orders/{orderId}/mark-paid",
-            new { force = false, quoteHash = quote.QuoteHash });
+            $"/api/v1/client/orders/{orderId}/checkout/confirm",
+            new { quoteHash = quote.QuoteHash });
         Assert.Equal(HttpStatusCode.Conflict, staleQuote.StatusCode);
 
         using (var scope = _factory.Services.CreateScope())
@@ -578,9 +613,9 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         }
 
         var first = await client.PostAsJsonAsync(
-            $"/api/v1/client/orders/{orderId}/mark-paid",
-            new { force = false, quoteHash = quote.QuoteHash });
-        var second = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
+            $"/api/v1/client/orders/{orderId}/checkout/confirm",
+            new { quoteHash = quote.QuoteHash });
+        var second = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/checkout/confirm", new { quoteHash = quote.QuoteHash });
 
         var firstBody = await first.Content.ReadAsStringAsync();
         var secondBody = await second.Content.ReadAsStringAsync();
@@ -706,21 +741,22 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         }
 
         using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
-        var withoutForce = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
+        var quote = await (await client.GetAsync($"/api/v1/client/orders/{orderId}/payment-quote"))
+            .Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
+        var withoutForce = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/checkout/confirm", new { quoteHash = quote!.QuoteHash });
         Assert.Equal(HttpStatusCode.Conflict, withoutForce.StatusCode);
 
         var conflict = await withoutForce.Content.ReadFromJsonAsync<ApiError>();
         Assert.NotNull(conflict);
         Assert.Equal("PAYMENT_CONFIRMATION_REQUIRED", conflict!.Code);
 
-        var withForce = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = true });
-        Assert.Equal(HttpStatusCode.OK, withForce.StatusCode);
+        var withForce = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/checkout/confirm", new { force = true, quoteHash = quote.QuoteHash });
+        Assert.Equal(HttpStatusCode.BadRequest, withForce.StatusCode);
 
         using var verifyScope = _factory.Services.CreateScope();
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
         var order = await verifyDb.MarketplaceOrders.SingleAsync(item => item.Id == orderId);
-        Assert.NotNull(order.SabrPaymentConfirmedAt);
-        Assert.Contains("PAID_AFTER_DEADLINE", order.RiskFlagsJson ?? string.Empty, StringComparison.Ordinal);
+        Assert.Null(order.SabrPaymentConfirmedAt);
     }
 
     [Fact]
@@ -1837,7 +1873,9 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         }
 
         using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
-        var response = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/mark-paid", new { force = false });
+        var quote = await (await client.GetAsync($"/api/v1/client/orders/{orderId}/payment-quote"))
+            .Content.ReadFromJsonAsync<MarketplaceOrderPaymentQuoteResult>();
+        var response = await client.PostAsJsonAsync($"/api/v1/client/orders/{orderId}/checkout/confirm", new { quoteHash = quote!.QuoteHash });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         var content = await response.Content.ReadAsStringAsync();

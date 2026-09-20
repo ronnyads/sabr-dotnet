@@ -41,7 +41,8 @@ public sealed class FinancialLedgerService
             cancellationToken);
         if (existing != null) return existing;
 
-        await using var transaction = _db.Database.IsRelational()
+        var ownsTransaction = _db.Database.IsRelational() && _db.Database.CurrentTransaction == null;
+        await using var transaction = ownsTransaction
             ? await _db.Database.BeginTransactionAsync(cancellationToken)
             : null;
 

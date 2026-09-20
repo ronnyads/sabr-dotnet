@@ -205,20 +205,33 @@ public sealed class ClientMarketplaceOrdersController : ControllerBase
     }
 
     [HttpPost("{orderId:guid}/mark-paid")]
-    public async Task<IActionResult> MarkPaid(
+    public IActionResult MarkPaid(
+        [FromRoute] Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out _, out _, out var error)) return error!;
+        return Conflict(CreateApiError("LEGACY_PAYMENT_ENDPOINT_DISABLED",
+            "Use o checkout da carteira em Meus Pedidos."));
+    }
+
+    [HttpPost("{orderId:guid}/checkout/confirm")]
+    public async Task<IActionResult> ConfirmCheckout(
         [FromRoute] Guid orderId,
         [FromBody] MarketplaceMarkPaidRequest? request,
         CancellationToken cancellationToken = default)
     {
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
             return error!;
+        if (request == null || request.Force || string.IsNullOrWhiteSpace(request.QuoteHash))
+            return BadRequest(CreateApiError("INVALID_CHECKOUT_REQUEST",
+                "Confirme a cotação atual sem substituição de bloqueios."));
 
         var result = await _checkoutService.ConfirmAsync(
             tenantId!,
             clientId,
             orderId,
-            request?.Force ?? false,
-            request?.QuoteHash,
+            false,
+            request.QuoteHash,
             cancellationToken);
 
         if (!result.Succeeded || result.Data == null)

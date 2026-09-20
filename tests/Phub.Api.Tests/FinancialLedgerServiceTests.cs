@@ -10,6 +10,51 @@ namespace Phub.Api.Tests;
 public sealed class FinancialLedgerServiceTests
 {
     [Fact]
+    public async Task ProductCost_UsesInternalPaidSnapshotAndConfirmsWithoutRewritingEstimate()
+    {
+        await using var db = CreateDb();
+        var clientId = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = "tenant", ClientId = clientId, SellerId = 10,
+            Provider = MarketplaceProvider.MercadoLivre, MlOrderId = "ORDER-COST-SNAPSHOT",
+            Status = "paid", RawJson = "{}"
+        };
+        var item = new MarketplaceOrderItem
+        {
+            TenantId = order.TenantId, ClientId = clientId, SellerId = 10,
+            MarketplaceOrderId = order.Id, Provider = order.Provider, MlItemId = "MLB-COST",
+            SabrVariantSku = "PH-COST", MappingState = MarketplaceMappingStates.Mapped,
+            Quantity = 2, UnitPrice = 30m, RawJson = "{}"
+        };
+        db.MarketplaceOrders.Add(order);
+        db.MarketplaceOrderItems.Add(item);
+        db.ProductVariants.Add(new ProductVariant
+        {
+            BaseSku = "PH-COST", VariantSku = "PH-COST", Name = "Produto interno",
+            CatalogPriceCents = 800, PhysicalStock = 10, AvailableStock = 8
+        });
+        await db.SaveChangesAsync();
+        var projection = new OperationalFinancialProjectionService(db, new FinancialLedgerService(db));
+
+        await projection.ProjectOrderAsync(order.Id);
+        item.CatalogUnitPriceCentsAtPayment = 1_000;
+        (await db.ProductVariants.SingleAsync()).CatalogPriceCents = 1_200;
+        await db.SaveChangesAsync();
+        await projection.ProjectOrderAsync(order.Id);
+        await projection.ConfirmProductCostsAsync(order.Id, DateTimeOffset.UtcNow);
+
+        var costs = await db.MarketplaceFinancialEntries.Where(x => x.EntryType == FinancialEntryTypes.ProductCost)
+            .OrderBy(x => x.ObservedAt).ToListAsync();
+        Assert.Equal(3, costs.Count);
+        Assert.Equal(-1_600, costs[0].AmountCents);
+        Assert.Equal(-2_000, costs[1].AmountCents);
+        Assert.Equal(-2_000, costs[2].AmountCents);
+        Assert.Equal(FinancialEntryStatuses.Confirmed, costs[2].Status);
+        Assert.Equal(costs[2].Id, (await db.FinancialEconomicHeads.SingleAsync(x => x.EconomicKey.Contains("PRODUCT_COST"))).ActiveEntryId);
+    }
+
+    [Fact]
     public async Task AppendAsync_PreservesEstimateAndMovesSingleEconomicHeadToConfirmation()
     {
         await using var db = CreateDb();
@@ -182,6 +227,108 @@ public sealed class FinancialLedgerServiceTests
         var expected = result.CurrencyId == "BRL" ? 10_000 : 5_000;
         Assert.Equal(expected, result.GrossRevenueCents);
         Assert.NotEqual(15_000, result.GrossRevenueCents);
+    }
+
+    [Fact]
+    public async Task Projection_LeavesMarketplaceFeePending_WhenProviderDidNotSupplyIt()
+    {
+        await using var db = CreateDb();
+        var order = new MarketplaceOrder
+        {
+            TenantId = "tenant-fee-pending", ClientId = Guid.NewGuid(), Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = 994, MlOrderId = "ORDER-FEE-PENDING", Status = "paid", ImportedAt = DateTimeOffset.UtcNow
+        };
+        order.Items.Add(new MarketplaceOrderItem { Quantity = 1, UnitPrice = 100m, SaleFee = null });
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+
+        var projection = new OperationalFinancialProjectionService(db, new FinancialLedgerService(db));
+        await projection.RebuildOrderStateAsync(order);
+        var state = await db.MarketplaceOrderFinancialStates.SingleAsync();
+        Assert.Equal(FinancialMaturity.Incomplete, state.Maturity);
+        Assert.Contains("MARKETPLACE_FEE_PENDING", state.IncompleteReasonsJson);
+
+        order.Items.Single().SaleFee = 0m;
+        await db.SaveChangesAsync();
+        await projection.RebuildOrderStateAsync(order);
+        Assert.DoesNotContain("MARKETPLACE_FEE_PENDING", state.IncompleteReasonsJson);
+    }
+
+    [Fact]
+    public async Task Profitability_UsesMarketplaceNetLessInternalCatalogCost()
+    {
+        await using var db = CreateDb();
+        var tenant = "tenant-profit-equation";
+        var client = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenant, ClientId = client, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = 995, MlOrderId = "ORDER-PROFIT", Status = "paid",
+            PaidAt = DateTimeOffset.UtcNow.AddDays(-1), ImportedAt = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+        var ledger = new FinancialLedgerService(db);
+        var facts = new (string Type, long Cents)[]
+        {
+            (FinancialEntryTypes.GrossSale, 10_000),
+            (FinancialEntryTypes.SaleFee, -1_000),
+            (FinancialEntryTypes.SellerShippingCost, -500),
+            (FinancialEntryTypes.Refund, -300),
+            (FinancialEntryTypes.PlatformAdjustment, 200),
+            (FinancialEntryTypes.ProductCost, -3_000)
+        };
+        foreach (var (type, cents) in facts)
+            await ledger.AppendAsync(CreateRequest(type, cents, type, FinancialEntryStatuses.Estimated, tenant, client, order.Id, 995));
+
+        var result = await new FinancialProfitabilityService(db).GetAsync(tenant, client,
+            DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow, MarketplaceProvider.MercadoLivre, 995);
+
+        Assert.Equal(10_000, result.GrossRevenueCents);
+        Assert.Equal(1_000, result.MarketplaceFeesCents);
+        Assert.Equal(500, result.SellerShippingCents);
+        Assert.Equal(300, result.RefundsCents);
+        Assert.Equal(200, result.AdjustmentsCents);
+        Assert.Equal(8_400, result.MarketplaceNetAmountCents);
+        Assert.Equal(-3_000, result.ProductCostCents);
+        Assert.Equal(5_400, result.OperationalProfitCents);
+        Assert.Equal(54m, result.OperationalMarginPct);
+    }
+
+    [Fact]
+    public async Task ConfirmedMarketplaceValue_DoesNotIncludeInternalConfirmedProductCost()
+    {
+        await using var db = CreateDb();
+        var tenant = "tenant-confirmed-separation";
+        var client = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenant, ClientId = client, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = 996, MlOrderId = "ORDER-CONFIRMED-SEPARATION", Status = "paid",
+            PaidAt = DateTimeOffset.UtcNow.AddDays(-1), ImportedAt = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+        var ledger = new FinancialLedgerService(db);
+
+        var external = CreateRequest(FinancialEntryTypes.GrossSale, 8_500, "external-confirmed",
+            FinancialEntryStatuses.Confirmed, tenant, client, order.Id, 996);
+        external.Layer = FinancialLayers.Reconciled;
+        external.FinancialConfirmedAt = DateTimeOffset.UtcNow;
+        await ledger.AppendAsync(external);
+
+        var internalCost = CreateRequest(FinancialEntryTypes.ProductCost, -3_000, "internal-confirmed",
+            FinancialEntryStatuses.Confirmed, tenant, client, order.Id, 996);
+        internalCost.Layer = FinancialLayers.InternalConfirmed;
+        internalCost.FinancialConfirmedAt = DateTimeOffset.UtcNow;
+        await ledger.AppendAsync(internalCost);
+
+        var result = await new FinancialProfitabilityService(db).GetAsync(tenant, client,
+            DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow, MarketplaceProvider.MercadoLivre, 996);
+
+        Assert.Equal(8_500, result.ReconciledConfirmedValueCents);
+        Assert.Equal(-3_000, result.ProductCostCents);
+        Assert.Equal(5_500, result.OperationalProfitCents);
     }
 
     private static AppendFinancialEntryRequest CreateRequest(string type, long cents, string idempotency, string status,

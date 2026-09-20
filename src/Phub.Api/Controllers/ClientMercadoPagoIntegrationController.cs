@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Phub.Api.Security;
 using Phub.Application.Abstractions;
 using Phub.Application.Options;
+using Phub.Domain.Entities;
 using Phub.Domain.Enums;
 
 namespace Phub.Api.Controllers;
@@ -53,17 +54,32 @@ public sealed class ClientMercadoPagoIntegrationController : ControllerBase
                 x.LastCapabilityVerifiedAt,
                 x.RequiresReauthorization,
                 x.CapabilitiesJson,
-                x.CapabilityError
+                x.CapabilityError,
+                x.UpdatedAt
             })
             .ToListAsync(cancellationToken);
+        var hasReconciliation = await _db.MarketplaceFinancialEntries.AsNoTracking()
+            .AnyAsync(x => x.TenantId == tenantId && x.ClientId == clientId
+                && x.Layer == FinancialLayers.Reconciled, cancellationToken);
+        var connected = grants.Any(x => x.Connected);
+        var verified = grants.Any(x => x.Connected && x.LastCapabilityVerifiedAt.HasValue &&
+            x.CapabilitiesJson.Contains("\"billingMercadoPago\":true"));
+        var retryAfter = grants.Where(x => x.CapabilityError == "MP_BILLING_RATE_LIMITED")
+            .Select(x => (DateTimeOffset?)x.UpdatedAt.AddMinutes(5)).Max();
         return Ok(new
         {
             configured = _oauth.IsConfigured(out _),
-            connected = grants.Any(x => x.Connected),
-            billingVerified = grants.Any(x => x.Connected && x.LastCapabilityVerifiedAt.HasValue &&
-                x.CapabilitiesJson.Contains("\"billingMercadoPago\":true")),
+            connected,
+            billingVerified = verified,
+            authorizationStatus = connected ? "CONNECTED" : "NOT_CONNECTED",
+            verificationStatus = verified ? "VERIFIED" : retryAfter > DateTimeOffset.UtcNow
+                ? "TEMPORARILY_UNAVAILABLE" : "PENDING",
+            reconciliationStatus = hasReconciliation ? "HAS_CONFIRMED_VALUES" : "NOT_STARTED",
+            retryAfter,
             grants = grants.Select(x => new { x.SellerId, x.Connected, x.TokenExpiresAt,
-                x.LastCapabilityVerifiedAt, x.RequiresReauthorization, x.CapabilityError })
+                x.LastCapabilityVerifiedAt, x.RequiresReauthorization, x.CapabilityError,
+                RetryAfter = x.CapabilityError == "MP_BILLING_RATE_LIMITED"
+                    ? x.UpdatedAt.AddMinutes(5) : (DateTimeOffset?)null })
         });
     }
 

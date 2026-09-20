@@ -48,24 +48,34 @@ public sealed class OperationalFinancialProjectionService
             if (!string.IsNullOrWhiteSpace(item.SabrVariantSku))
             {
                 var productCostKey = $"PHUB:{order.ClientId}:ORDER:{order.MlOrderId}:ITEM:{line}:PRODUCT_COST";
-                var hasCostSnapshot = await _db.FinancialEconomicHeads.AsNoTracking().AnyAsync(x => x.TenantId == order.TenantId
-                    && x.ClientId == order.ClientId && x.Provider == order.Provider && x.SellerId == order.SellerId
-                    && x.EconomicKey == productCostKey, cancellationToken);
-                if (hasCostSnapshot) continue;
-                var catalogPrice = await _db.ProductVariants.AsNoTracking()
+                var currentCost = await (from head in _db.FinancialEconomicHeads.AsNoTracking()
+                    join entry in _db.MarketplaceFinancialEntries.AsNoTracking() on head.ActiveEntryId equals entry.Id
+                    where head.TenantId == order.TenantId && head.ClientId == order.ClientId
+                          && head.Provider == order.Provider && head.SellerId == order.SellerId
+                          && head.EconomicKey == productCostKey
+                    select entry).FirstOrDefaultAsync(cancellationToken);
+                // The paid item snapshot is authoritative. A current catalog price is used
+                // only for the first estimate; the marketplace sale price is never a cost.
+                if (currentCost != null && !item.CatalogUnitPriceCentsAtPayment.HasValue) continue;
+                var currentCatalogPrice = await _db.ProductVariants.AsNoTracking()
                     .Where(x => x.VariantSku == item.SabrVariantSku)
                     .Select(x => (long?)x.CatalogPriceCents)
                     .FirstOrDefaultAsync(cancellationToken);
+                var catalogPrice = item.CatalogUnitPriceCentsAtPayment ?? currentCatalogPrice;
                 if (catalogPrice.HasValue && catalogPrice.Value > 0)
                 {
+                    var expectedCost = -checked(catalogPrice.Value * item.Quantity);
+                    if (currentCost != null && (currentCost.AmountCents == expectedCost
+                        || currentCost.Status == FinancialEntryStatuses.Confirmed)) continue;
                     var snapshot = JsonSerializer.Serialize(new
                     {
                         item.SabrVariantSku,
                         catalogUnitPriceCents = catalogPrice.Value,
-                        item.Quantity
+                        item.Quantity,
+                        source = item.CatalogUnitPriceCentsAtPayment.HasValue ? "PAID_ITEM_SNAPSHOT" : "INTERNAL_CATALOG"
                     });
                     await AppendIfNonZeroAsync(order, item, FinancialEntryTypes.ProductCost,
-                        -checked(catalogPrice.Value * item.Quantity),
+                        expectedCost,
                         productCostKey,
                         occurredAt, currency, snapshot, cancellationToken);
                 }
@@ -161,12 +171,14 @@ public sealed class OperationalFinancialProjectionService
             .Select(x => x.MarketplaceOrderItemId!.Value).ToHashSet();
         var skuResolved = order.Items.Count > 0 && order.Items.All(x => !string.IsNullOrWhiteSpace(x.SabrVariantSku));
         var costResolved = order.Items.Count > 0 && order.Items.All(x => itemIdsWithCost.Contains(x.Id));
+        var grossResolved = order.Items.Count > 0 && order.Items.All(x => x.GrossPrice.HasValue || x.UnitPrice.HasValue || x.FullUnitPrice.HasValue);
+        var feeResolved = order.Items.Count > 0 && order.Items.All(x => x.SaleFee.HasValue);
         var freightResolved = string.IsNullOrWhiteSpace(order.ShipmentId)
                               || activeEntries.Any(x => x.EntryType is FinancialEntryTypes.SellerShippingCost
                                   or FinancialEntryTypes.ShippingDiscountOrCompensation);
         var allocationResolved = !activeEntries.Any(x => x.MarketplaceOrderItemId == null
             && x.EntryType is FinancialEntryTypes.Refund or FinancialEntryTypes.ChargebackOrClaim or FinancialEntryTypes.PlatformAdjustment);
-        var operationalResolved = skuResolved && costResolved && freightResolved && allocationResolved;
+        var operationalResolved = skuResolved && costResolved && grossResolved && feeResolved && freightResolved && allocationResolved;
         var externalEntries = activeEntries.Where(x => x.Layer != FinancialLayers.InternalConfirmed).ToList();
         var anyConfirmed = externalEntries.Any(x => x.Status == FinancialEntryStatuses.Confirmed);
         var confirmedResolved = externalEntries.Count > 0 && externalEntries.All(x => x.Status == FinancialEntryStatuses.Confirmed);
@@ -174,6 +186,8 @@ public sealed class OperationalFinancialProjectionService
         var reasons = new List<string>();
         if (!skuResolved) reasons.Add("SKU_PENDING");
         if (!costResolved) reasons.Add("CATALOG_COST_PENDING");
+        if (!grossResolved) reasons.Add("GROSS_REVENUE_PENDING");
+        if (!feeResolved) reasons.Add("MARKETPLACE_FEE_PENDING");
         if (!freightResolved) reasons.Add("SHIPPING_COST_PENDING");
         if (!allocationResolved) reasons.Add("UNALLOCATED_EXTERNAL_VALUE");
 
@@ -192,7 +206,9 @@ public sealed class OperationalFinancialProjectionService
                                                     && x.EntryType != FinancialEntryTypes.SellerTaxEstimate)
             .Sum(x => x.AmountCents);
         var productCost = Sum(activeEntries, FinancialEntryTypes.ProductCost, FinancialEntryTypes.ProductCostRecovery);
-        var confirmed = activeEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents);
+        var confirmed = activeEntries.Where(x => x.Layer == FinancialLayers.Reconciled
+                                                  && x.Status == FinancialEntryStatuses.Confirmed)
+            .Sum(x => x.AmountCents);
         var unallocated = activeEntries.Where(x => x.MarketplaceOrderItemId == null
             && x.EntryType is FinancialEntryTypes.Refund or FinancialEntryTypes.ChargebackOrClaim or FinancialEntryTypes.PlatformAdjustment)
             .Sum(x => x.AmountCents);

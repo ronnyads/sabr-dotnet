@@ -62,10 +62,17 @@ public sealed class ClientProfitabilityResult
     public string CurrencyId { get; set; } = "BRL";
     public string Maturity { get; set; } = string.Empty;
     public long GrossRevenueCents { get; set; }
+    public long MarketplaceNetAmountCents { get; set; }
+    public long MarketplaceFeesCents { get; set; }
+    public long SellerShippingCents { get; set; }
+    public long RefundsCents { get; set; }
+    public long AdjustmentsCents { get; set; }
     public long EstimatedEconomicNetCents { get; set; }
     public long ProductCostCents { get; set; }
+    public string ProductCostMaturity { get; set; } = "INCOMPLETO";
     public long ReconciledConfirmedValueCents { get; set; }
     public long OperationalProfitCents { get; set; }
+    public decimal? OperationalMarginPct { get; set; }
     public long SellerReportedEstimatedTaxCents { get; set; }
     public long ProfitAfterSellerTaxEstimateCents { get; set; }
     public long UnallocatedCents { get; set; }

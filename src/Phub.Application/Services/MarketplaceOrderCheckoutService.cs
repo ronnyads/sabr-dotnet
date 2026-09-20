@@ -24,6 +24,7 @@ public sealed class MarketplaceOrderCheckoutService
     private readonly MarketplaceOrderInventoryService _inventory;
     private readonly StockAvailabilityService _stockAvailability;
     private readonly MarketplaceAuditLogService _audit;
+    private readonly OperationalFinancialProjectionService _financialProjection;
     private readonly MercadoLivreOptions _options;
 
     public MarketplaceOrderCheckoutService(
@@ -31,12 +32,14 @@ public sealed class MarketplaceOrderCheckoutService
         MarketplaceOrderInventoryService inventory,
         StockAvailabilityService stockAvailability,
         MarketplaceAuditLogService audit,
+        OperationalFinancialProjectionService financialProjection,
         IOptions<MercadoLivreOptions> options)
     {
         _db = db;
         _inventory = inventory;
         _stockAvailability = stockAvailability;
         _audit = audit;
+        _financialProjection = financialProjection;
         _options = options.Value;
     }
 
@@ -75,7 +78,12 @@ public sealed class MarketplaceOrderCheckoutService
             order,
             shipments,
             await _inventory.BuildItemSummariesAsync(items, cancellationToken));
-        var quote = BuildQuote(order, items, variants, walletBalance, inventorySummary.PaymentBlockers);
+        var reservations = await _db.StockReservations.AsNoTracking()
+            .Where(item => item.MarketplaceOrderId == order.Id && item.TenantId == tenantId
+                           && item.ClientId == clientId && item.Status == StockReservationStatus.Reserved)
+            .ToListAsync(cancellationToken);
+        var quote = BuildQuote(order, items, variants, reservations, walletBalance,
+            WithReservationBlocker(items, reservations, inventorySummary.PaymentBlockers));
         return ServiceResult<MarketplaceOrderPaymentQuoteResult>.Success(quote);
     }
 
@@ -89,31 +97,6 @@ public sealed class MarketplaceOrderCheckoutService
     {
         if (!IsContextValid(tenantId, clientId, orderId))
             return Failure<MarketplaceMarkPaidExecutionResult>("context", "INVALID_PAYMENT_CONTEXT");
-
-        // Reconciliacao pode criar a reserva. Ela termina antes do checkout para manter
-        // a transacao financeira curta e sem chamadas externas.
-        var orderForReconciliation = await _db.MarketplaceOrders
-            .Include(item => item.Items)
-            .FirstOrDefaultAsync(item => item.Id == orderId
-                                         && item.TenantId == tenantId
-                                         && item.ClientId == clientId,
-                cancellationToken);
-        if (orderForReconciliation == null)
-            return Failure<MarketplaceMarkPaidExecutionResult>("orderId", "ORDER_NOT_FOUND");
-
-        // Um retry idempotente nunca pode recriar reservas de um pedido que ja foi
-        // confirmado. A verificacao definitiva ainda ocorre sob lock abaixo.
-        if (!orderForReconciliation.SabrPaymentConfirmedAt.HasValue
-            && orderForReconciliation.Items.Count > 0
-            && orderForReconciliation.Items.All(item => !MarketplaceMappingStates.IsUnmapped(item.MappingState)))
-        {
-            await _inventory.ReconcileReservationsAsync(
-                orderForReconciliation,
-                orderForReconciliation.SellerId,
-                reservationTtlHours: 24,
-                cancellationToken);
-            await _db.SaveChangesAsync(cancellationToken);
-        }
 
         ((DbContext)_db).ChangeTracker.Clear();
         IDbContextTransaction? transaction = null;
@@ -164,13 +147,21 @@ public sealed class MarketplaceOrderCheckoutService
                 await _inventory.BuildItemSummariesAsync(items, cancellationToken));
 
             var wallet = await LoadWalletForUpdateAsync(tenantId, clientId, cancellationToken);
-            var quote = BuildQuote(order, items, variants, wallet?.BalanceCents ?? 0, inventorySummary.PaymentBlockers);
+            var reservations = await _db.StockReservations
+                .Where(item => item.MarketplaceOrderId == order.Id
+                               && item.TenantId == tenantId
+                               && item.ClientId == clientId
+                               && item.Status == StockReservationStatus.Reserved)
+                .OrderBy(item => item.ReservedAt)
+                .ToListAsync(cancellationToken);
+            var quote = BuildQuote(order, items, variants, reservations, wallet?.BalanceCents ?? 0,
+                WithReservationBlocker(items, reservations, inventorySummary.PaymentBlockers));
             var blockerError = ResolveBlockerError(quote.PaymentBlockers);
             if (blockerError != null)
                 return await RollbackFailureAsync<MarketplaceMarkPaidExecutionResult>(transaction, blockerError.Value.Field, blockerError.Value.Code, cancellationToken);
 
-            if (!string.IsNullOrWhiteSpace(expectedQuoteHash)
-                && !CryptographicOperations.FixedTimeEquals(
+            if (string.IsNullOrWhiteSpace(expectedQuoteHash)
+                || !CryptographicOperations.FixedTimeEquals(
                     Encoding.ASCII.GetBytes(expectedQuoteHash.Trim().ToUpperInvariant()),
                     Encoding.ASCII.GetBytes(quote.QuoteHash)))
             {
@@ -193,13 +184,6 @@ public sealed class MarketplaceOrderCheckoutService
             if (wallet == null || wallet.BalanceCents < quote.TotalChargeCents)
                 return await RollbackFailureAsync<MarketplaceMarkPaidExecutionResult>(transaction, "balance", "INSUFFICIENT_WALLET_BALANCE", cancellationToken);
 
-            var reservations = await _db.StockReservations
-                .Where(item => item.MarketplaceOrderId == order.Id
-                               && item.TenantId == tenantId
-                               && item.ClientId == clientId
-                               && item.Status == StockReservationStatus.Reserved)
-                .OrderBy(item => item.ReservedAt)
-                .ToListAsync(cancellationToken);
             ConsumeReservations(items, reservations, variants, changedSkus, nowUtc);
 
             // ReservedStock e uma projecao. Reconstroi a partir das reservas ativas
@@ -271,6 +255,8 @@ public sealed class MarketplaceOrderCheckoutService
                 cancellationToken);
 
             await _db.SaveChangesAsync(cancellationToken);
+            await _financialProjection.ProjectOrderAsync(order.Id, cancellationToken);
+            await _financialProjection.ConfirmProductCostsAsync(order.Id, nowUtc, cancellationToken);
             if (transaction != null)
                 await transaction.CommitAsync(cancellationToken);
 
@@ -379,6 +365,7 @@ public sealed class MarketplaceOrderCheckoutService
         MarketplaceOrder order,
         IReadOnlyCollection<MarketplaceOrderItem> items,
         IReadOnlyDictionary<string, ProductVariant> variants,
+        IReadOnlyCollection<StockReservation> reservations,
         long walletBalance,
         IReadOnlyCollection<string> inventoryBlockers)
     {
@@ -404,6 +391,8 @@ public sealed class MarketplaceOrderCheckoutService
                 Sku = variant.VariantSku,
                 ProductName = string.IsNullOrWhiteSpace(item.ProductName) ? variant.Name : item.ProductName,
                 Quantity = item.Quantity,
+                ReservedQuantity = reservations.Where(reservation => reservation.MarketplaceOrderItemId == item.Id
+                    && reservation.SabrVariantSku == variant.VariantSku).Sum(reservation => Math.Max(0, reservation.Quantity)),
                 UnitPriceCents = unitPrice,
                 LineTotalCents = lineTotal
             });
@@ -419,7 +408,7 @@ public sealed class MarketplaceOrderCheckoutService
         var hashSource = JsonSerializer.Serialize(new
         {
             order.Id,
-            Items = quoteItems.Select(item => new { item.OrderItemId, item.Sku, item.Quantity, item.UnitPriceCents, item.LineTotalCents }),
+            Items = quoteItems.Select(item => new { item.OrderItemId, item.Sku, item.Quantity, item.ReservedQuantity, item.UnitPriceCents, item.LineTotalCents }),
             ProductSubtotalCents = subtotal,
             FreightCents = freight,
             AdditionalCents = additional,
@@ -440,11 +429,39 @@ public sealed class MarketplaceOrderCheckoutService
             WalletBalanceCents = walletBalance,
             WalletBalanceAfterCents = walletBalance - total,
             HasSufficientBalance = walletBalance >= total,
+            HasCompleteReservation = !blockers.Contains(MarketplaceOrderPaymentBlockers.ReservationMissing),
             QuoteHash = quoteHash,
             GeneratedAt = DateTimeOffset.UtcNow,
             PaymentBlockers = blockers.OrderBy(item => item, StringComparer.Ordinal).ToList(),
             Items = quoteItems
         };
+    }
+
+    private static IReadOnlyCollection<string> WithReservationBlocker(
+        IReadOnlyCollection<MarketplaceOrderItem> items,
+        IReadOnlyCollection<StockReservation> reservations,
+        IReadOnlyCollection<string> existingBlockers)
+    {
+        var blockers = new HashSet<string>(existingBlockers, StringComparer.Ordinal);
+        if (!HasCompleteReservation(items, reservations))
+            blockers.Add(MarketplaceOrderPaymentBlockers.ReservationMissing);
+        return blockers;
+    }
+
+    public static bool HasCompleteReservation(
+        IReadOnlyCollection<MarketplaceOrderItem> items,
+        IReadOnlyCollection<StockReservation> reservations)
+    {
+        var required = items
+            .Where(item => MarketplaceMappingStates.IsMapped(item.MappingState)
+                           && !string.IsNullOrWhiteSpace(item.SabrVariantSku))
+            .GroupBy(item => item.SabrVariantSku!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(item => Math.Max(0, item.Quantity)), StringComparer.Ordinal);
+        var reserved = reservations
+            .GroupBy(item => item.SabrVariantSku, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(item => Math.Max(0, item.Quantity)), StringComparer.Ordinal);
+        return required.Count > 0 && !reserved.Keys.Any(sku => !required.ContainsKey(sku))
+            && required.All(pair => reserved.GetValueOrDefault(pair.Key) >= pair.Value);
     }
 
     private static void ConsumeReservations(
@@ -542,6 +559,7 @@ public sealed class MarketplaceOrderCheckoutService
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.ChannelPaymentPending, StringComparer.Ordinal)) return ("channelPayment", "CHANNEL_PAYMENT_NOT_CONFIRMED");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.UnmappedItem, StringComparer.Ordinal)) return ("mapping", "ML_UNMAPPED_ITEM");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.OutOfStock, StringComparer.Ordinal)) return ("stock", "OUT_OF_STOCK_FOR_PAYMENT");
+        if (blockers.Contains(MarketplaceOrderPaymentBlockers.ReservationMissing, StringComparer.Ordinal)) return ("reservation", "PAYMENT_RESERVATION_MISSING");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.CancellationPending, StringComparer.Ordinal)) return ("cancellation", "CANCELLATION_PENDING");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.LabelMissing, StringComparer.Ordinal)) return ("label", "LABEL_REQUIRED_BEFORE_PAYMENT");
         if (blockers.Contains(MarketplaceOrderPaymentBlockers.PricingMissing, StringComparer.Ordinal)) return ("pricing", "PAYMENT_PRICE_NOT_CONFIGURED");

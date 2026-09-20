@@ -3,6 +3,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Globalization;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -14,14 +16,68 @@ public sealed class FinancialSyncJobService
 {
     private readonly IAppDbContext _db;
     private readonly MercadoLivreSyncService _sync;
+    private readonly BillingFinancialReconciliationService _billing;
     private readonly ILogger<FinancialSyncJobService> _logger;
 
     public FinancialSyncJobService(IAppDbContext db, MercadoLivreSyncService sync,
+        BillingFinancialReconciliationService billing,
         ILogger<FinancialSyncJobService>? logger = null)
     {
         _db = db;
         _sync = sync;
+        _billing = billing;
         _logger = logger ?? NullLogger<FinancialSyncJobService>.Instance;
+    }
+
+    public async Task<FinancialSyncEnqueueResult> EnqueueBillingReconciliationAsync(
+        string tenantId, Guid clientId, long? sellerId, int lookbackDays = 90,
+        CancellationToken cancellationToken = default)
+    {
+        lookbackDays = Math.Clamp(lookbackDays, 1, 365);
+        var from = DateTimeOffset.UtcNow.AddDays(-lookbackDays);
+        var query = _db.MarketplaceOrders.AsNoTracking().Where(x => x.TenantId == tenantId && x.ClientId == clientId
+            && x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId > 0
+            && (x.PaidAt ?? x.ChannelCreatedAt ?? x.ImportedAt) >= from
+            && (x.Status == "paid" || x.Status == "partially_refunded" || x.Status == "refunded"));
+        if (sellerId.HasValue) query = query.Where(x => x.SellerId == sellerId.Value);
+        var rows = await query.OrderBy(x => x.SellerId).ThenBy(x => x.PaidAt ?? x.ImportedAt)
+            .Select(x => new { x.SellerId, x.MlOrderId }).ToListAsync(cancellationToken);
+        if (rows.Count == 0) throw new InvalidOperationException("Nenhum pedido pago disponível para conferência.");
+        var result = new FinancialSyncEnqueueResult();
+        foreach (var sellerGroup in rows.GroupBy(x => x.SellerId))
+        {
+            var batchDedupe = $"BILLING:BATCH:{tenantId}:{clientId:N}:{sellerGroup.Key}:{DateTimeOffset.UtcNow:yyyyMMddHH}";
+            var existing = await _db.FinancialSyncJobs.AsNoTracking().FirstOrDefaultAsync(x =>
+                x.TenantId == tenantId && x.ClientId == clientId && x.SellerId == sellerGroup.Key
+                && x.DedupeKey == batchDedupe, cancellationToken);
+            if (existing != null) { result.Jobs.Add(Map(existing)); continue; }
+            var parent = new FinancialSyncJob
+            {
+                TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = sellerGroup.Key, JobType = FinancialSyncJobTypes.BillingReconciliationBatch,
+                RangeFrom = from, RangeTo = DateTimeOffset.UtcNow, Status = "PENDING",
+                DedupeKey = batchDedupe
+            };
+            _db.FinancialSyncJobs.Add(parent);
+            foreach (var batch in sellerGroup.Select(x => x.MlOrderId).Distinct().Chunk(60))
+            {
+                var orderPayload = JsonSerializer.Serialize(batch);
+                var orderHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(orderPayload))).ToLowerInvariant();
+                _db.FinancialSyncJobs.Add(new FinancialSyncJob
+                {
+                    ParentJobId = parent.Id, TenantId = tenantId, ClientId = clientId,
+                    Provider = MarketplaceProvider.MercadoLivre, SellerId = sellerGroup.Key,
+                    JobType = FinancialSyncJobTypes.BillingReconciliation, RangeFrom = from,
+                    RangeTo = parent.RangeTo, Status = "PENDING",
+                    DedupeKey = $"BILLING:ORDERS:{sellerGroup.Key}:{orderHash}",
+                    PayloadJson = orderPayload
+                });
+                parent.Total++;
+            }
+            result.Jobs.Add(Map(parent));
+        }
+        await _db.SaveChangesAsync(cancellationToken);
+        return result;
     }
 
     public async Task<FinancialSyncEnqueueResult> EnqueueOperationalBackfillAsync(
@@ -98,12 +154,13 @@ public sealed class FinancialSyncJobService
         FinancialSyncJob? job;
         await using (var transaction = _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync(cancellationToken) : null)
         {
-            var query = _db.FinancialSyncJobs.Where(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
+            var query = _db.FinancialSyncJobs.Where(x => (x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
+                    || x.JobType == FinancialSyncJobTypes.BillingReconciliation)
                 && (x.Status == "PENDING" || x.Status == "RETRY" || x.Status == "RUNNING")
                 && (!x.NextAttemptAt.HasValue || x.NextAttemptAt <= now)
                 && (!x.LeaseUntil.HasValue || x.LeaseUntil < now)).OrderBy(x => x.CreatedAt);
             job = _db.Database.IsRelational()
-                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type = 'OPERATIONAL_SYNC_CHUNK' AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
+                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type IN ('OPERATIONAL_SYNC_CHUNK','BILLING_RECONCILIATION') AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
                 : await query.FirstOrDefaultAsync(cancellationToken);
             if (job == null) return false;
             job.Status = "RUNNING";
@@ -138,6 +195,16 @@ public sealed class FinancialSyncJobService
             job.Id, job.SellerId, job.Attempts, segmentFrom, segmentTo);
         try
         {
+            if (job.JobType == FinancialSyncJobTypes.BillingReconciliation)
+            {
+                var orderIds = JsonSerializer.Deserialize<string[]>(job.PayloadJson) ?? [];
+                var count = await _billing.ReconcileOrdersAsync(job.TenantId, job.ClientId, job.SellerId, orderIds, cancellationToken);
+                job.ResultJson = JsonSerializer.Serialize(new { ordersReconciled = count });
+                job.Status = "COMPLETED"; job.Processed = 1; job.Total = 1; job.CompletedAt = DateTimeOffset.UtcNow;
+                job.LastError = null;
+            }
+            else
+            {
             var syncResult = await _sync.SyncRangeNowAsync(job.TenantId, job.ClientId, job.SellerId,
                 segmentFrom, segmentTo, cancellationToken);
             if (!syncResult.Succeeded)
@@ -166,6 +233,19 @@ public sealed class FinancialSyncJobService
             job.LastError = null;
             _logger.LogInformation("Financial sync segment completed job={JobId} seller={SellerId} checkpoint={Checkpoint} chunkComplete={ChunkComplete}",
                 job.Id, job.SellerId, job.Checkpoint, job.Status == "COMPLETED");
+            }
+        }
+        catch (BillingRateLimitedException ex)
+        {
+            job.Status = "RETRY";
+            job.NextAttemptAt = DateTimeOffset.UtcNow.Add(ex.RetryAfter);
+            job.LastError = ex.Message;
+        }
+        catch (BillingPartialContentException ex)
+        {
+            job.Status = "RETRY";
+            job.NextAttemptAt = DateTimeOffset.UtcNow.AddMinutes(15);
+            job.LastError = ex.Message;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {

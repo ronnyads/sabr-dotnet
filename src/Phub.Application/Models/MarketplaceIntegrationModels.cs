@@ -463,6 +463,7 @@ public sealed class ClientSalesDailyResult
 
 public sealed class ClientSalesSkuResult
 {
+    public long SellerId { get; set; }
     public string ChannelItemId { get; set; } = string.Empty;
     public string? ChannelVariationId { get; set; }
     public string Sku { get; set; } = string.Empty;
@@ -471,6 +472,12 @@ public sealed class ClientSalesSkuResult
     public int Units { get; set; }
     public decimal Revenue { get; set; }
     public bool IsMapped { get; set; }
+    public int OverdueOrders { get; set; }
+    public int DueTodayOrders { get; set; }
+    public int DueTodayUnits { get; set; }
+    public DateTimeOffset? EarliestDeadlineAt { get; set; }
+    public string MappingPriority { get; set; } = "NORMAL";
+    public string MappingReason { get; set; } = string.Empty;
 }
 
 public sealed class ClientSalesStatusResult
@@ -780,6 +787,7 @@ public static class MarketplaceOrderPaymentBlockers
     public const string NoImportedItems = "no_imported_items";
     public const string UnmappedItem = "unmapped_item";
     public const string OutOfStock = "out_of_stock";
+    public const string ReservationMissing = "reservation_missing";
     public const string LabelMissing = "label_missing";
     public const string CancellationPending = "cancellation_pending";
     public const string PricingMissing = "pricing_missing";
@@ -820,6 +828,7 @@ public sealed class MarketplaceOrderPaymentQuoteItemResult
     public string Sku { get; set; } = string.Empty;
     public string ProductName { get; set; } = string.Empty;
     public int Quantity { get; set; }
+    public int ReservedQuantity { get; set; }
     public long UnitPriceCents { get; set; }
     public long LineTotalCents { get; set; }
 }
@@ -836,6 +845,7 @@ public sealed class MarketplaceOrderPaymentQuoteResult
     public long WalletBalanceCents { get; set; }
     public long WalletBalanceAfterCents { get; set; }
     public bool HasSufficientBalance { get; set; }
+    public bool HasCompleteReservation { get; set; }
     public string QuoteHash { get; set; } = string.Empty;
     public DateTimeOffset GeneratedAt { get; set; }
     public List<string> PaymentBlockers { get; set; } = [];

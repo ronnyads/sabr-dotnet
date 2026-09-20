@@ -26,6 +26,15 @@ Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da op
 10. Ausência de dado não equivale a zero.
 11. Corrigido em 20/09/2026 (achado 2.6 da auditoria `mercado-livre-360-auditoria.md`): `FinancialProfitabilityService.GetAsync` somava `AmountCents` de todas as chaves econômicas estimadas/confirmadas para compor `Divergence.AbsoluteCents`, mesmo quando uma chave só tinha um dos dois lados — violando esta mesma regra (item 10). Agora `estimatedTotal`/`confirmedTotal` só acumulam chaves com estimativa **e** confirmação, no mesmo laço que já faz esse pareamento para `componentDeltas`. Também passou a agrupar `gross`, `externalNet`, `productCost` e `ReconciledConfirmedValueCents` pela moeda dominante (`sameCurrencyEntries`) em vez de somar `AmountCents` entre moedas diferentes. Cobertura: `Profitability_DivergenceOnlyCountsKeysWithBothEstimateAndConfirmation` e `Profitability_KeepsTotalsInOneCurrency_WhenEntriesAreMixed` (`tests/Phub.Api.Tests/FinancialLedgerServiceTests.cs`).
 
+## Equação operacional por item e pedido
+
+`marketplaceNetAmount = grossRevenue - marketplaceFees - sellerShipping - refunds ± adjustments`.
+`productCost = Σ(catalogPriceSnapshot × quantity)`.
+`operationalProfit = marketplaceNetAmount - productCost`.
+`operationalMarginPct = operationalProfit / grossRevenue × 100`; faturamento zero deixa a margem não calculável.
+
+O custo vem apenas do SKU interno e do preço de catálogo fotografado. Preço de venda do anúncio nunca é fallback. SKU/custo ausente torna o pedido incompleto, sem zero inventado. O custo estimado passa a confirmado após débito interno por nova entrada append-only, preservando o snapshot. A UI distingue resultado parcial de valor confirmado e expõe a composição da conta.
+
 ## Maturidade
 
 - `INCOMPLETO`: falta SKU, custo, frete, alocação ou componente obrigatório.
@@ -86,4 +95,15 @@ As migrações são aditivas. Ativar primeiro em shadow mode, auditar grants sep
 - 403 e respostas inválidas deixam a capacidade não verificada. 429/5xx/erro transitório preservam o último resultado comprovado e expõem a pendência de integração. Nenhum desses casos registra lucro confirmado igual a zero.
 - Após um 429, probes manuais respeitam cooldown de cinco minutos gravado no metadado do grant; cliques repetidos não renovam a janela nem geram novas chamadas ao Billing. A homologação real de 20/09/2026 no seller 2496573592 encontrou `ML_BILLING_RATE_LIMITED`, com HTTP interno 200 e risco visível no Admin.
 - A consulta segue as [boas práticas oficiais de Billing](https://developers.mercadolivre.com.br/pt_br/boas-praticas-para-o-consumo-das-apis-de-relatorios-de-faturamento): Billing é pós-venda e não substitui Orders/Shipments; detalhes futuros deverão usar `from_id`, consumo sequencial e tratamento de `206`/`429`.
-- Esta entrega não consome detalhes, não avança cursores e não cria lançamentos conciliados. O gate de amostra manual e divergência de centavos permanece obrigatório antes de habilitar rentabilidade confirmada.
+- A reconciliação financeira consome detalhes oficiais por pedido em lotes de até 60 IDs, separados por seller. Cada lote é persistido como job idempotente e respeita `Retry-After`, respostas parciais e retomada por lease. Venda bruta, comissão e frete só substituem a estimativa quando a origem fornece correspondência inequívoca; demais cobranças/créditos permanecem no grão do pedido como ajustes não alocados, sem rateio inventado entre SKUs.
+- O gate de amostra manual e divergência de centavos permanece obrigatório antes de promover o seller piloto a resultado integralmente confirmado. A implantação pode coletar e comparar os fatos em shadow mode sem esconder pendências.
+
+## Apresentação e verificação financeira (20/09/2026)
+
+- O portal distingue autorização OAuth, acesso aos dados financeiros e conferência concluída. Um `MP_BILLING_RATE_LIMITED` mantém a conta conectada e mostra indisponibilidade temporária, não pedido de reconexão.
+- O probe MP guarda uma janela mínima de cinco minutos após HTTP 429; tentativas nesse período não chamam o provedor. O status informa quando tentar novamente. O código técnico fica recolhido na interface.
+- A API de rentabilidade expõe bruto, tarifas, frete, refunds, ajustes, líquido do marketplace, custo, lucro, margem e maturidade do custo. O lucro negativo é tratado visualmente como prejuízo estimado e os dados incompletos seguem parciais.
+- O custo confirmado após checkout usa uma nova entrada financeira append-only da mesma chave econômica. Nenhum snapshot histórico é modificado.
+- Receita bruta usa o valor dos itens antes das deduções; tarifa, frete, reembolso e ajuste são fatos separados com sinais próprios. A soma externa ativa representa o líquido econômico estimado, não necessariamente o valor já disponível na conta Mercado Pago.
+- Se o pedido não trouxer preço bruto ou `sale_fee` para algum item, a projeção inclui `GROSS_REVENUE_PENDING` ou `MARKETPLACE_FEE_PENDING` e permanece incompleta; ausência desses dados não significa valor zero. A interface traduz esses motivos para linguagem do seller.
+- O líquido efetivamente creditado só recebe status conferido após conciliação dos recursos oficiais. A implementação produz entradas `Reconciled` apenas para componentes com correspondência inequívoca e mantém o restante como pendência ou ajuste não alocado. O indicador integralmente confirmado continua bloqueado até a amostra manual explicar diferenças de competência, liberação, retenções, estornos e eventuais centavos.

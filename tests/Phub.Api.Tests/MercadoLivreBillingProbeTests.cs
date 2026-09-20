@@ -37,6 +37,56 @@ public sealed class MercadoLivreBillingProbeTests
         Assert.Equal("Bearer test-token", authorization);
     }
 
+    [Fact]
+    public async Task BillingOrderDetails_ParsesConfirmedAmountsAndChargeIdentity()
+    {
+        const string body = """
+        {"results":[{"order_id":2000001,"currency_info":{"currency_id":"BRL"},
+          "sales_info":[{"operation_id":9001,"transaction_amount":100.00}],
+          "sale_fee":{"net":12.50},"details":[{"charge_info":{"detail_id":77,
+          "detail_amount":8.25,"detail_type":"CHARGE","detail_sub_type":"CXD",
+          "debited_from_operation":"YES","creation_date_time":"2026-09-20T10:00:00-03:00"},
+          "shipping_info":{"shipping_id":555}}]}]}
+        """;
+        Uri? requestedUri = null;
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            requestedUri = request.RequestUri;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        })) { BaseAddress = new Uri("https://api.mercadolibre.com") };
+        var api = new MercadoLivreApiClient(client, Microsoft.Extensions.Options.Options.Create(new MercadoLivreOptions()));
+
+        var result = await api.GetBillingOrderDetailsAsync(["2000001"], "token");
+
+        var order = Assert.Single(result.Orders);
+        Assert.Equal("2000001", order.OrderId);
+        Assert.Equal(9001, order.PaymentId);
+        Assert.Equal(10_000, order.GrossAmountCents);
+        Assert.Equal(1_250, order.SaleFeeNetCents);
+        var charge = Assert.Single(order.Charges);
+        Assert.Equal("77", charge.DetailId);
+        Assert.Equal(825, charge.AmountCents);
+        Assert.Equal("555", charge.ShipmentId);
+        Assert.Contains("order_ids=2000001", requestedUri?.Query);
+    }
+
+    [Fact]
+    public async Task BillingOrderDetails_HonorsProviderRetryAfter()
+    {
+        using var client = new HttpClient(new StubHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMinutes(7));
+            return response;
+        })) { BaseAddress = new Uri("https://api.mercadolibre.com") };
+        var api = new MercadoLivreApiClient(client, Microsoft.Extensions.Options.Options.Create(new MercadoLivreOptions()));
+
+        var result = await api.GetBillingOrderDetailsAsync(["1"], "token");
+
+        Assert.True(result.RateLimited);
+        Assert.Equal(TimeSpan.FromMinutes(7), result.RetryAfter);
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

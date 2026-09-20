@@ -100,6 +100,19 @@ public sealed class FinancialProfitabilityService
         var productCost = sameCurrencyEntries.Where(x => x.EntryType is FinancialEntryTypes.ProductCost or FinancialEntryTypes.ProductCostRecovery)
             .Sum(x => x.AmountCents);
         var profit = externalNet + productCost;
+        var fees = -sameCurrencyEntries.Where(x => x.EntryType is FinancialEntryTypes.SaleFee
+            or FinancialEntryTypes.FinancingOrFixedFee).Sum(x => x.AmountCents);
+        var shipping = -sameCurrencyEntries.Where(x => x.EntryType == FinancialEntryTypes.SellerShippingCost)
+            .Sum(x => x.AmountCents);
+        var refunds = -sameCurrencyEntries.Where(x => x.EntryType == FinancialEntryTypes.Refund)
+            .Sum(x => x.AmountCents);
+        // Ajustes incluem descontos, compensacoes e claims no grao oficial, sem rateio inventado.
+        var adjustments = externalNet - gross + fees + shipping + refunds;
+        var costEntries = sameCurrencyEntries.Where(x => x.EntryType == FinancialEntryTypes.ProductCost).ToList();
+        var costMaturity = states.Any(x => !x.CostResolved) || costEntries.Count == 0
+            ? FinancialMaturity.Incomplete
+            : costEntries.All(x => x.Status == FinancialEntryStatuses.Confirmed)
+                ? FinancialMaturity.Confirmed : FinancialMaturity.Estimated;
         var tax = taxRate <= 0 ? 0L : -checked((long)Math.Round(gross * taxRate / 10_000m, MidpointRounding.AwayFromZero));
 
         var lastOperational = await _db.TenantMarketplaceConnections.AsNoTracking()
@@ -120,10 +133,21 @@ public sealed class FinancialProfitabilityService
             CurrencyId = dominantCurrencyId,
             Maturity = AggregateMaturity(states),
             GrossRevenueCents = gross,
+            MarketplaceNetAmountCents = externalNet,
+            MarketplaceFeesCents = fees,
+            SellerShippingCents = shipping,
+            RefundsCents = refunds,
+            AdjustmentsCents = adjustments,
             EstimatedEconomicNetCents = externalNet,
             ProductCostCents = productCost,
-            ReconciledConfirmedValueCents = sameCurrencyEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents),
+            ProductCostMaturity = costMaturity,
+            // This is the externally confirmed marketplace amount. Internal wallet
+            // settlement confirms product cost, but must never be presented as money
+            // credited by Mercado Livre/Mercado Pago.
+            ReconciledConfirmedValueCents = sameCurrencyEntries.Where(x =>
+                x.Layer == FinancialLayers.Reconciled && x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents),
             OperationalProfitCents = profit,
+            OperationalMarginPct = gross == 0 ? null : Math.Round(profit * 100m / gross, 2),
             SellerReportedEstimatedTaxCents = tax,
             ProfitAfterSellerTaxEstimateCents = profit + tax,
             UnallocatedCents = states.Sum(x => x.UnallocatedCents),

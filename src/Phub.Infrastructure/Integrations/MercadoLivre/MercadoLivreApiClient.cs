@@ -141,6 +141,86 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         return new FinancialBillingProbeResponse(false, false, $"ML_BILLING_HTTP_{(int)response.StatusCode}");
     }
 
+    public async Task<FinancialBillingOrderDetailsResponse> GetBillingOrderDetailsAsync(
+        IReadOnlyCollection<string> orderIds, string accessToken, CancellationToken cancellationToken = default)
+    {
+        var ids = orderIds.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).Take(60).ToArray();
+        if (ids.Length == 0) return new FinancialBillingOrderDetailsResponse([], false, false, null);
+        var uri = "/billing/integration/group/ML/order/details?order_ids=" +
+                  Uri.EscapeDataString(string.Join(',', ids));
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            return new FinancialBillingOrderDetailsResponse([], false, true,
+                response.Headers.RetryAfter?.Delta ?? TimeSpan.FromMinutes(5));
+        var partial = response.StatusCode == HttpStatusCode.PartialContent;
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var orders = new List<FinancialBillingOrderDetail>();
+        if (!document.RootElement.TryGetProperty("results", out var results) || results.ValueKind != JsonValueKind.Array)
+            return new FinancialBillingOrderDetailsResponse([], partial, false, null);
+        foreach (var result in results.EnumerateArray())
+        {
+            var orderId = GetOptionalString(result, "order_id") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(orderId)) continue;
+            var currency = result.TryGetProperty("currency_info", out var currencyInfo)
+                ? GetOptionalString(currencyInfo, "currency_id") ?? "BRL" : "BRL";
+            long gross = 0;
+            long? paymentId = null;
+            var seenOperations = new HashSet<long>();
+            if (result.TryGetProperty("sales_info", out var salesInfo) && salesInfo.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var sale in salesInfo.EnumerateArray())
+                {
+                    var operation = GetOptionalLong(sale, "operation_id");
+                    if (operation.HasValue && !seenOperations.Add(operation.Value)) continue;
+                    gross += ToCents(GetOptionalDecimal(sale, "transaction_amount") ?? 0m);
+                    paymentId ??= operation;
+                }
+            }
+            long? saleFee = null;
+            if (result.TryGetProperty("sale_fee", out var fee) && fee.ValueKind == JsonValueKind.Object)
+                saleFee = ToCents(GetOptionalDecimal(fee, "net") ?? 0m);
+            var charges = new List<FinancialBillingChargeDetail>();
+            if (result.TryGetProperty("details", out var details) && details.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var detail in details.EnumerateArray())
+                {
+                    if (detail.TryGetProperty("sales_info", out var detailSales) && detailSales.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var sale in detailSales.EnumerateArray())
+                        {
+                            var operation = GetOptionalLong(sale, "operation_id");
+                            if (operation.HasValue && !seenOperations.Add(operation.Value)) continue;
+                            gross += ToCents(GetOptionalDecimal(sale, "transaction_amount") ?? 0m);
+                            paymentId ??= operation;
+                        }
+                    }
+                    if (!detail.TryGetProperty("charge_info", out var charge)) continue;
+                    var detailId = GetOptionalString(charge, "detail_id") ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(detailId)) continue;
+                    string? shipmentId = null;
+                    if (detail.TryGetProperty("shipping_info", out var shipping) && shipping.ValueKind == JsonValueKind.Object)
+                        shipmentId = GetOptionalString(shipping, "shipping_id");
+                    charges.Add(new FinancialBillingChargeDetail(
+                        detailId,
+                        GetOptionalString(charge, "detail_type") ?? "CHARGE",
+                        GetOptionalString(charge, "detail_sub_type"),
+                        ToCents(GetOptionalDecimal(charge, "detail_amount") ?? 0m),
+                        string.Equals(GetOptionalString(charge, "debited_from_operation"), "YES", StringComparison.OrdinalIgnoreCase),
+                        GetOptionalString(charge, "status"),
+                        GetOptionalString(charge, "charge_bonified_id"),
+                        shipmentId,
+                        DateTimeOffset.TryParse(GetOptionalString(charge, "creation_date_time"), out var at) ? at : null,
+                        detail.GetRawText()));
+                }
+            }
+            orders.Add(new FinancialBillingOrderDetail(orderId, paymentId, gross, saleFee, currency, charges, result.GetRawText()));
+        }
+        return new FinancialBillingOrderDetailsResponse(orders, partial, false, null);
+    }
+
     public async Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchSellerItemsAsync(
         string sellerId,
         string query,
@@ -1833,6 +1913,21 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
 
         return false;
     }
+
+    private static long? GetOptionalLong(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value)) return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt64(out var parsed) => parsed,
+            JsonValueKind.String when long.TryParse(value.GetString(), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static long ToCents(decimal amount) =>
+        checked((long)Math.Round(amount * 100m, MidpointRounding.AwayFromZero));
 
     private static DateTimeOffset? FindFirstDate(JsonElement element, string propertyName)
     {

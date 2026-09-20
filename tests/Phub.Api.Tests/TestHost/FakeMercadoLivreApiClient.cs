@@ -5,6 +5,12 @@ namespace Phub.Api.Tests.TestHost;
 
 public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
 {
+    public Func<IReadOnlyCollection<string>, FinancialBillingOrderDetailsResponse>? BillingOrderDetailsFactory { get; set; }
+
+    public Task<FinancialBillingOrderDetailsResponse> GetBillingOrderDetailsAsync(
+        IReadOnlyCollection<string> orderIds, string accessToken, CancellationToken cancellationToken = default)
+        => Task.FromResult(BillingOrderDetailsFactory?.Invoke(orderIds)
+            ?? new FinancialBillingOrderDetailsResponse([], false, false, null));
     public Exception? ExchangeCodeException { get; set; }
     public Exception? CreateItemException { get; set; }
     public Exception? RefreshTokenException { get; set; }

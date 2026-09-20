@@ -9,6 +9,9 @@ public interface IMercadoLivreApiClient
     Task<MercadoLivreUserMeResponse> GetUserMeAsync(string accessToken, CancellationToken cancellationToken = default);
     Task<FinancialBillingProbeResponse> ProbeBillingPeriodsAsync(string accessToken, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("Mercado Livre Billing probe is not implemented by this client.");
+    Task<FinancialBillingOrderDetailsResponse> GetBillingOrderDetailsAsync(
+        IReadOnlyCollection<string> orderIds, string accessToken, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Mercado Livre Billing order details are not implemented by this client.");
     Task<IReadOnlyList<MercadoLivreSellerItemDetails>> SearchSellerItemsAsync(
         string sellerId,
         string query,
@@ -114,3 +117,12 @@ public interface IMercadoLivreApiClient
 }
 
 public sealed record FinancialBillingProbeResponse(bool Verified, bool TransientFailure, string? ErrorCode);
+public sealed record FinancialBillingOrderDetailsResponse(
+    IReadOnlyList<FinancialBillingOrderDetail> Orders, bool Partial, bool RateLimited, TimeSpan? RetryAfter);
+public sealed record FinancialBillingOrderDetail(
+    string OrderId, long? PaymentId, long GrossAmountCents, long? SaleFeeNetCents,
+    string CurrencyId, IReadOnlyList<FinancialBillingChargeDetail> Charges, string RawJson);
+public sealed record FinancialBillingChargeDetail(
+    string DetailId, string DetailType, string? DetailSubType, long AmountCents,
+    bool DebitedFromOperation, string? Status, string? BonifiedChargeId,
+    string? ShipmentId, DateTimeOffset? OccurredAt, string RawJson);

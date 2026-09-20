@@ -396,6 +396,7 @@ builder.Services.AddScoped<ClientSalesDashboardService>();
 builder.Services.AddScoped<FinancialLedgerService>();
 builder.Services.AddScoped<OperationalFinancialProjectionService>();
 builder.Services.AddScoped<FinancialProfitabilityService>();
+builder.Services.AddScoped<BillingFinancialReconciliationService>();
 builder.Services.AddScoped<FinancialSyncJobService>();
 builder.Services.AddScoped<FinancialCapabilityService>();
 builder.Services.AddScoped<SentinelService>();

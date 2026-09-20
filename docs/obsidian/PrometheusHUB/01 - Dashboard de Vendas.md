@@ -107,3 +107,11 @@ A página inicial apresenta:
 - status cancelado;
 - build cliente/admin;
 - migration consistente com o snapshot.
+
+## Vínculo de SKU e leitura financeira (setembro de 2026)
+
+- Produtos vendidos sem vínculo são agrupados por seller, item e variação do marketplace. A prioridade de revisão considera pedidos vencidos, pedidos com envio hoje, menor prazo e volume afetado.
+- `Revisar SKU` abre `Meus Produtos` com seller, item e variação para destacar a pendência correspondente.
+- O painel separa faturamento bruto, líquido estimado, custo de catálogo, resultado operacional estimado e confirmação financeira externa. Resultado negativo parcial é apresentado como prejuízo **estimado**, não como lucro confirmado.
+- Custo ausente ou SKU não vinculado é pendência, nunca custo zero ou preço de venda usado como substituto.
+- A confirmação do custo interno ocorre no checkout da carteira; a confirmação externa depende de conciliação própria e não bloqueia a operação.

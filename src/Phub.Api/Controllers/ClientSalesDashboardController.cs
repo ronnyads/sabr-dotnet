@@ -106,6 +106,17 @@ public sealed class ClientSalesDashboardController : ControllerBase
         try
         {
             var result = await _financialSync.EnqueueOperationalBackfillAsync(tenantId!, clientId, sellerId, cancellationToken: cancellationToken);
+            try
+            {
+                var billing = await _financialSync.EnqueueBillingReconciliationAsync(
+                    tenantId!, clientId, sellerId, 90, cancellationToken);
+                result.Jobs.AddRange(billing.Jobs);
+            }
+            catch (InvalidOperationException)
+            {
+                // Operational synchronization is still useful when no paid order is
+                // currently eligible for financial reconciliation.
+            }
             return Accepted(result);
         }
         catch (InvalidOperationException ex)
