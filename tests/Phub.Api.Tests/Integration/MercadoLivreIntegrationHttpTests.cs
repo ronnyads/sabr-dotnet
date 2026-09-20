@@ -2314,6 +2314,51 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.True(await db.Products.AnyAsync(x => x.Sku == "PH-BOCA-ROSA-01" && x.CatalogPriceCents == 800));
     }
 
+    [Fact]
+    public async Task FinancialSyncJobService_ProcessNextAsync_ReleasesLease_ForOwningWorker()
+    {
+        // Regressão do achado 2.3 da auditoria: a liberação final do lease em
+        // FinancialSyncJobService.ProcessNextAsync deve persistir apenas enquanto o
+        // worker que está terminando ainda é o dono do lock (WHERE LockedBy = workerId),
+        // nunca um SaveChanges/clear incondicional. Este teste cobre o caminho feliz de
+        // ponta a ponta (o provider InMemory usado aqui cai no fallback não-relacional
+        // do guard). A prova de que o guard bloqueia uma escrita tardia de um worker que
+        // já perdeu o lease foi validada à parte contra PostgreSQL real (ver auditoria
+        // mercado-livre-360-auditoria.md, achado 2.3) porque o caminho ExecuteUpdateAsync
+        // não é suportado pelo provider InMemory.
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-sync-job";
+        const string tenantSlug = "mlsyncjob";
+        const string sellerId = "1001200";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, "ITEM-SYNC-JOB", null, "SKU-SYNC-JOB");
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var jobService = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            var enqueueResult = await jobService.EnqueueOperationalBackfillAsync(
+                tenantId, clientId, ParseSellerId(sellerId), lookbackDays: 1, chunkDays: 1);
+            Assert.NotEmpty(enqueueResult.Jobs);
+
+            var processed = await jobService.ProcessNextAsync("worker-test-1", CancellationToken.None);
+            Assert.True(processed);
+        }
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var db = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var chunk = await db.FinancialSyncJobs.SingleAsync(
+            x => x.TenantId == tenantId && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk);
+
+        // The claimed lease must be fully released once the owning worker finishes —
+        // exactly the write path fixed in achado 2.3.
+        Assert.Null(chunk.LockedBy);
+        Assert.Null(chunk.LeaseUntil);
+        Assert.True(chunk.Status is "PENDING" or "COMPLETED");
+        Assert.NotNull(chunk.Checkpoint);
+    }
+
     private async Task SeedTenantClientAsync(string tenantId, string tenantSlug, Guid clientId)
     {
         using var scope = _factory.Services.CreateScope();

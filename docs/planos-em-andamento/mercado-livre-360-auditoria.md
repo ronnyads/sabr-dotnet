@@ -40,9 +40,15 @@ Esse é exatamente o caminho citado no apêndice do plano ("`LoadVariantsAsync` 
 
 **Limitação:** a suíte de testes de integração usa `UseInMemoryDatabase`, então nenhum teste automatizado exercita este caminho `FromSqlRaw`/Npgsql-específico (nem antes nem depois da correção) — só é exercitado com PostgreSQL real em produção/homologação. Recomendo rodar manualmente `dotnet test` local e, se possível, um teste manual do fluxo de confirmação de pagamento contra um PostgreSQL de homologação antes de considerar 100% validado.
 
-### 2.3 Alto — `FinancialSyncJobService.ProcessNextAsync` libera o lease sem compare-and-set do dono
+### 2.3 [CORRIGIDO em 20/09/2026] Alto — `FinancialSyncJobService.ProcessNextAsync` liberava o lease sem compare-and-set do dono
 
 O bloco `finally` (linha 178-185) sempre zera `LockedBy`/`LeaseUntil`, mesmo que o lease já tenha expirado e outro worker tenha reclamado o job nesse meio-tempo. Um worker atrasado que termina depois pode sobrescrever o progresso do worker que already reclamou o job. Falta um `WHERE LockedBy = @workerId` na escrita final.
+
+**Evidência da correção (20/09/2026):** o cenário é real e mais sério do que só o lease — o job (`LockedBy`/`LeaseUntil`/`Status`/`Checkpoint`/`ResultJson`/`Attempts`) não tem coluna de concorrência otimista (sem `[Timestamp]`/rowversion no modelo), e o `finally` original fazia um `SaveChangesAsync` incondicional de um `job` já rastreado desde o claim inicial — ou seja, um worker atrasado (a chamada HTTP de sincronização fica deliberadamente fora da transação e pode ultrapassar os 30 minutos do lease) não só liberava o lease de outro worker, como sobrescrevia **todo o estado do job** (status, checkpoint, resultado) com valores obsoletos, podendo reverter progresso de um worker mais novo e permitir que um terceiro worker reclame a mesma linha ao mesmo tempo.
+
+Correção: `job` é destacado do change tracker logo após o claim inicial; a escrita final agora usa `ExecuteUpdateAsync` com `WHERE Id = jobId AND LockedBy = workerId` (Postgres), com fallback equivalente de leitura+checagem para o provider InMemory usado em teste (`ExecuteUpdateAsync` não é suportado pelo InMemory). Se o `WHERE` não bate (lease já reclamado por outro worker), a escrita é um no-op deliberado e um aviso é logado — em vez de sobrescrever o progresso mais novo. Validei o SQL do guard diretamente contra PostgreSQL 16 real: uma escrita tardia com `LockedBy` errado afeta 0 linhas e preserva o estado do dono atual; a escrita do dono legítimo afeta 1 linha normalmente. Também adicionei o teste de integração `FinancialSyncJobService_ProcessNextAsync_ReleasesLease_ForOwningWorker` cobrindo o caminho feliz (via InMemory) — a suíte .NET não pôde ser executada neste ambiente (bloqueio de rede ao NuGet), mas o `dotnet build`/`test` já passou uma vez no CI do GitHub Actions para os dois achados anteriores, então a expectativa é que este também compile e passe.
+
+**Observação relacionada (não corrigida agora, ver achado 2.8):** o mesmo padrão de liberação incondicional de lease existe em `SentinelReconciliationService.EnqueueDueAsync` — risco bem menor porque a janela entre claim e liberação ali é só operações de banco locais (sem chamada HTTP externa no meio) e o lease dura 45 segundos, mas é o mesmo defeito de fundo.
 
 ### 2.4 Alto — `StockAvailabilityService.ProcessStockJobAsync` não revalida a mapping atual, só a versão de estoque
 
@@ -60,6 +66,10 @@ O serviço já processa por tópico/recurso específico (melhor do que o apêndi
 ### 2.7 Baixo/Médio — `MercadoLivreCatalogImportService.ImportAsync`: `ItemIds` vazio ainda pode selecionar tudo
 
 `requestedItemIds.Count == 0 || requestedItemIds.Contains(...)` deixa passar todos os anúncios quando `ItemIds` vem vazio, inclusive fora do modo `PreviewOnly`. Não há validação que exija seleção explícita antes de uma gravação real, como a nota do Obsidian descreve ("nenhuma gravação acontece antes da seleção explícita"). Vale adicionar essa validação explicitamente, mesmo que hoje o frontend sempre mande a lista.
+
+### 2.8 Baixo — `SentinelReconciliationService.EnqueueDueAsync` também libera lease sem checar o dono
+
+Mesmo padrão do achado 2.3 (`ExecuteUpdateAsync` de liberação sem `WHERE LockedBy = @workerId`), encontrado ao corrigir aquele achado. Risco bem menor aqui: a janela entre claim e liberação é só uma leitura `AsNoTracking`/`AnyAsync` e um insert de `MarketplaceEventLog`, sem chamada HTTP externa no meio, e o lease dura só 45 segundos — a corrida exigiria latência/GC pause extremos para se manifestar. Não corrigido nesta rodada para manter o commit do achado 2.3 focado; recomendo aplicar a mesma correção (`WHERE LockedBy = @_workerId` na liberação) na próxima passada de baixo risco.
 
 ## 3. Confirmado como já implementado corretamente (não mexer sem necessidade)
 
@@ -87,7 +97,7 @@ Por risco decrescente:
 
 1. ~~`ExpireReservationsAsync` liberando reserva de pedido ativo por timer (2.1)~~ — **corrigido em 20/09/2026**, ver evidência acima. Pendente apenas confirmação de build/teste local (rede bloqueada neste ambiente).
 2. ~~`LoadVariantsAsync` do checkout com `ANY({0})`/`string[]` (2.2)~~ — **corrigido em 20/09/2026**, ver evidência acima (validado contra PostgreSQL real, mas não pelo dotnet test).
-3. Compare-and-set de lease no `FinancialSyncJobService` (2.3).
+3. ~~Compare-and-set de lease no `FinancialSyncJobService` (2.3)~~ — **corrigido em 20/09/2026**, ver evidência acima.
 4. Revalidação de mapping no `StockAvailabilityService.ProcessStockJobAsync` (2.4).
 5. Lease/heartbeat e sincronização pontual no webhook (2.5).
 6. Segregação de moeda e divergência pareada no `FinancialProfitabilityService` (2.6).

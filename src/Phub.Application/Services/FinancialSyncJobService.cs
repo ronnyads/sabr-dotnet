@@ -118,6 +118,16 @@ public sealed class FinancialSyncJobService
             if (transaction != null) await transaction.CommitAsync(cancellationToken);
         }
 
+        // From here on, job.LockedBy/LeaseUntil is only a local snapshot: the external
+        // sync call below is deliberately unbounded and kept outside any DB transaction,
+        // so the 30-minute lease taken above can expire mid-call and another worker can
+        // legitimately reclaim and start progressing the same row. Detach job now so no
+        // ambient SaveChangesAsync (this method's own, or UpdateParentAsync's) can flush
+        // a stale snapshot of it later; the final write at the bottom is instead an
+        // explicit "WHERE LockedBy = workerId" guarded update.
+        if (_db is DbContext detachContext)
+            detachContext.Entry(job).State = EntityState.Detached;
+
         var segmentFrom = job.RangeFrom;
         if (DateTimeOffset.TryParse(job.Checkpoint, CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind, out var checkpoint)
@@ -159,14 +169,11 @@ public sealed class FinancialSyncJobService
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            // A failed sync may leave invalid order entities tracked. Persisting the
-            // retry status with that same change tracker would replay the failed write.
+            // A failed sync may leave invalid order entities tracked by this same
+            // DbContext (job itself was already detached above). Clearing the tracker
+            // keeps those out of every save that follows, including UpdateParentAsync's.
             if (_db is DbContext context)
-            {
-                var jobId = job.Id;
                 context.ChangeTracker.Clear();
-                job = await _db.FinancialSyncJobs.SingleAsync(x => x.Id == jobId, cancellationToken);
-            }
             job.Status = job.Attempts >= 8 ? "FAILED" : "RETRY";
             var exponent = Math.Min(job.Attempts, 5);
             var ceilingSeconds = Math.Min(900, 30 * (1 << exponent));
@@ -177,10 +184,69 @@ public sealed class FinancialSyncJobService
         }
         finally
         {
-            job.LockedBy = null;
-            job.LeaseUntil = null;
-            job.UpdatedAt = DateTimeOffset.UtcNow;
-            await _db.SaveChangesAsync(cancellationToken);
+            // Only persist this attempt's outcome, and only release the lease, while
+            // this worker still owns it (WHERE LockedBy = workerId). If another worker
+            // already reclaimed the row because the lease expired mid-call, this write
+            // is a deliberate no-op: overwriting that worker's newer progress here would
+            // silently lose whatever it already accomplished, and freeing a lease that
+            // is not ours to free could let a third worker pile onto the same row.
+            var releasedAt = DateTimeOffset.UtcNow;
+            int updatedRows;
+            if (_db.Database.IsRelational())
+            {
+                updatedRows = await _db.FinancialSyncJobs
+                    .Where(x => x.Id == job.Id && x.LockedBy == workerId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(x => x.Status, job.Status)
+                        .SetProperty(x => x.Checkpoint, job.Checkpoint)
+                        .SetProperty(x => x.ResultJson, job.ResultJson)
+                        .SetProperty(x => x.Processed, job.Processed)
+                        .SetProperty(x => x.Total, job.Total)
+                        .SetProperty(x => x.Attempts, job.Attempts)
+                        .SetProperty(x => x.NextAttemptAt, job.NextAttemptAt)
+                        .SetProperty(x => x.LastError, job.LastError)
+                        .SetProperty(x => x.CompletedAt, job.CompletedAt)
+                        .SetProperty(x => x.LockedBy, (string?)null)
+                        .SetProperty(x => x.LeaseUntil, (DateTimeOffset?)null)
+                        .SetProperty(x => x.UpdatedAt, releasedAt),
+                        cancellationToken);
+            }
+            else
+            {
+                // ExecuteUpdateAsync is not supported by the InMemory provider used in
+                // tests; fall back to an equivalent read-check-write guarded by the same
+                // LockedBy comparison.
+                var current = await _db.FinancialSyncJobs.SingleOrDefaultAsync(x => x.Id == job.Id, cancellationToken);
+                if (current != null && current.LockedBy == workerId)
+                {
+                    current.Status = job.Status;
+                    current.Checkpoint = job.Checkpoint;
+                    current.ResultJson = job.ResultJson;
+                    current.Processed = job.Processed;
+                    current.Total = job.Total;
+                    current.Attempts = job.Attempts;
+                    current.NextAttemptAt = job.NextAttemptAt;
+                    current.LastError = job.LastError;
+                    current.CompletedAt = job.CompletedAt;
+                    current.LockedBy = null;
+                    current.LeaseUntil = null;
+                    current.UpdatedAt = releasedAt;
+                    await _db.SaveChangesAsync(cancellationToken);
+                    updatedRows = 1;
+                }
+                else
+                {
+                    updatedRows = 0;
+                }
+            }
+
+            if (updatedRows == 0)
+            {
+                _logger.LogWarning(
+                    "Financial sync chunk job={JobId} seller={SellerId} lease was reclaimed by another worker before {WorkerId} finished; this attempt's result was discarded to avoid overwriting newer progress.",
+                    job.Id, job.SellerId, workerId);
+            }
+
             await UpdateParentAsync(job.ParentJobId, cancellationToken);
         }
         return true;
