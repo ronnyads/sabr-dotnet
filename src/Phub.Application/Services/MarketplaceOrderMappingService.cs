@@ -418,8 +418,6 @@ public sealed class MarketplaceOrderMappingService
                                || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
                                || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized))
             .ToListAsync(cancellationToken);
-        if (pendingItems.Count == 0) return 0;
-
         var resolvedAt = DateTimeOffset.UtcNow;
         foreach (var item in pendingItems)
         {
@@ -437,18 +435,41 @@ public sealed class MarketplaceOrderMappingService
             item.UpdatedAt = resolvedAt;
         }
 
-        var orderIds = pendingItems.Select(item => item.MarketplaceOrderId).Distinct().ToList();
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        var newlyResolvedOrderIds = pendingItems.Select(item => item.MarketplaceOrderId).Distinct().ToList();
+        if (pendingItems.Count > 0)
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        // Repair projections created before financial reprojection was attached to mapping.
+        // The SKU and mapping snapshot themselves remain immutable; existing cost heads are
+        // also immutable and the projection service will not replace them.
+        var projectionOrderIds = await _dbContext.MarketplaceOrderItems
+            .AsNoTracking()
+            .Where(item => item.TenantId == mapping.TenantId
+                           && item.ClientId == mapping.ClientId
+                           && item.Provider == mapping.Provider
+                           && item.SellerId == mapping.SellerId
+                           && item.MappingSnapshotId == mapping.Id
+                           && item.SabrVariantSku == mapping.SabrVariantSku)
+            .Select(item => item.MarketplaceOrderId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        foreach (var orderId in newlyResolvedOrderIds)
+        {
+            if (!projectionOrderIds.Contains(orderId)) projectionOrderIds.Add(orderId);
+        }
+        if (projectionOrderIds.Count == 0) return 0;
 
         // Mapping snapshots are durable before derived stock and financial projections.
         // Any later checkout repeats inventory validation transactionally.
         try
         {
             var pendingOrders = await _dbContext.MarketplaceOrders
-                .Where(item => orderIds.Contains(item.Id))
+                .Where(item => newlyResolvedOrderIds.Contains(item.Id))
                 .ToListAsync(cancellationToken);
             var allOrderItems = await _dbContext.MarketplaceOrderItems
-                .Where(item => orderIds.Contains(item.MarketplaceOrderId))
+                .Where(item => newlyResolvedOrderIds.Contains(item.MarketplaceOrderId))
                 .ToListAsync(cancellationToken);
             foreach (var pendingOrder in pendingOrders.Where(item => !item.SabrPaymentConfirmedAt.HasValue))
             {
@@ -463,7 +484,7 @@ public sealed class MarketplaceOrderMappingService
             }
 
             await _dbContext.SaveChangesAsync(cancellationToken);
-            foreach (var orderId in orderIds)
+            foreach (var orderId in projectionOrderIds)
             {
                 await _financialProjection.ProjectOrderAsync(orderId, cancellationToken);
             }
@@ -478,10 +499,10 @@ public sealed class MarketplaceOrderMappingService
                 exception,
                 "Mapping {MappingId} was saved but derived refresh was deferred for {OrderCount} order(s).",
                 mapping.Id,
-                orderIds.Count);
+                projectionOrderIds.Count);
         }
 
-        return orderIds.Count;
+        return projectionOrderIds.Count;
     }
 
     public async Task<ServiceResult<MarketplaceMappingReanalysisResult>> ReanalyzePendingItemsAsync(
