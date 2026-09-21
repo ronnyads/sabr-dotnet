@@ -82,6 +82,9 @@ public sealed class CatalogService
             join product in _dbContext.Products.AsNoTracking() on variant.BaseSku equals product.Sku
             where variant.IsActive
                   && product.IsActive
+                  && !variant.VariantSku.StartsWith("MLB")
+                  && !variant.BaseSku.StartsWith("MLB")
+                  && !product.Sku.StartsWith("MLB")
                   && allowedSkuQuery.Contains(variant.BaseSku)
             select new { variant, product };
 
@@ -116,7 +119,9 @@ public sealed class CatalogService
 
         var productsWithoutVariantsQuery = _dbContext.Products
             .AsNoTracking()
-            .Where(product => product.IsActive && allowedSkuQuery.Contains(product.Sku))
+            .Where(product => product.IsActive
+                              && !product.Sku.StartsWith("MLB")
+                              && allowedSkuQuery.Contains(product.Sku))
             .Where(product => !_dbContext.ProductVariants.Any(variant => variant.BaseSku == product.Sku && variant.IsActive));
 
         if (!string.IsNullOrWhiteSpace(productSku))

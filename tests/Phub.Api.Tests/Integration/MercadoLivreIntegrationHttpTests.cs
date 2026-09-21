@@ -2609,6 +2609,79 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task LegacyMlIdentifier_IsPendingAndCannotBeSelectedAsInternalCatalogSku()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-external-sku";
+        const string tenantSlug = "mlexternalsku";
+        const string sellerId = "2496573592";
+        const string itemId = "MLB7587011902";
+        const string internalSku = "PH-PAYOT-03";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedVariantAsync(itemId, itemId, physicalStock: 1000, reservedStock: 0);
+        await SeedVariantAsync(internalSku, internalSku, physicalStock: 1000, reservedStock: 0);
+        await SeedPublicCatalogAuthorizationAsync(itemId);
+        await SeedPublicCatalogAuthorizationAsync(internalSku);
+        await SeedConnectionAndMappingAsync(tenantId, clientId, sellerId, itemId, null, itemId);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var order = new MarketplaceOrder
+            {
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlOrderId = "ORDER-LEGACY-MLB-SKU",
+                Status = "paid"
+            };
+            db.MarketplaceOrders.Add(order);
+            db.MarketplaceOrderItems.Add(new MarketplaceOrderItem
+            {
+                MarketplaceOrderId = order.Id,
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlItemId = itemId,
+                ChannelSku = itemId,
+                SabrVariantSku = itemId,
+                ProductName = "Base Matte Payot Cor 03",
+                Quantity = 1,
+                MappingState = MarketplaceMappingStates.MappedByListingMap,
+                RawJson = "{}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var optionsResponse = await client.GetAsync("/api/v1/client/catalog/variants?limit=200");
+        Assert.Equal(HttpStatusCode.OK, optionsResponse.StatusCode);
+        var options = await optionsResponse.Content.ReadFromJsonAsync<PagedResult<CatalogVariantDto>>();
+        Assert.NotNull(options);
+        Assert.DoesNotContain(options!.Items, item => item.VariantSku == itemId);
+        Assert.Contains(options.Items, item => item.VariantSku == internalSku);
+
+        var pendingResponse = await client.GetAsync("/api/v1/client/marketplace-mappings/unmapped-items?provider=MercadoLivre");
+        Assert.Equal(HttpStatusCode.OK, pendingResponse.StatusCode);
+        var pending = await pendingResponse.Content.ReadFromJsonAsync<List<MarketplaceUnmappedItemDto>>();
+        Assert.Contains(pending!, item => item.ExternalItemId == itemId);
+
+        var mappingResponse = await client.PostAsJsonAsync(
+            "/api/v1/client/marketplace-mappings",
+            new MarketplaceUpsertMappingRequest
+            {
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = sellerId,
+                ExternalItemId = itemId,
+                SelectedCatalogSku = itemId
+            });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, mappingResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task AdminCatalogImport_WithEmptyItemIds_RejectsOutsidePreview_AndWritesNothing()
     {
         // Regressão do achado 2.7 da auditoria: requestedItemIds.Count == 0 deixava

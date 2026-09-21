@@ -514,6 +514,7 @@ public sealed class MyProductsService
             where draft.TenantId == tenantId
                   && draft.ClientId == clientId
                   && draft.Status == PublicationStatus.Draft
+                  && !draft.ProductSku.StartsWith("MLB")
             select new DraftProjection
             {
                 Id = draft.Id,

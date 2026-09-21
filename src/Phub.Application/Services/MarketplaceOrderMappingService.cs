@@ -53,7 +53,8 @@ public sealed class MarketplaceOrderMappingService
             .AsNoTracking()
             .Where(item => item.TenantId == tenantId
                            && item.ClientId == clientId
-                           && item.Provider == provider);
+                           && item.Provider == provider
+                           && !item.SabrVariantSku.StartsWith("MLB"));
 
         if (normalizedSellerId.HasValue)
         {
@@ -150,6 +151,7 @@ public sealed class MarketplaceOrderMappingService
                            && item.ClientId == clientId
                            && item.Provider == provider
                            && (string.IsNullOrWhiteSpace(item.SabrVariantSku)
+                               || item.SabrVariantSku.StartsWith("MLB")
                                || item.MappingState == MarketplaceMappingStates.Unmapped
                                || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
@@ -245,6 +247,15 @@ public sealed class MarketplaceOrderMappingService
                 ServiceErrorCodes.ValidationError,
                 "selectedCatalogSku",
                 "Selecione um produto ou variante do catalogo.");
+        }
+
+        if (request.Provider == MarketplaceProvider.MercadoLivre
+            && InternalCatalogSkuPolicy.IsMarketplaceExternalIdentifier(selectedSku))
+        {
+            return ServiceResult<MarketplaceMappingListItemDto>.Failure(
+                ServiceErrorCodes.ValidationError,
+                "selectedCatalogSku",
+                "O codigo MLB identifica um anuncio do Mercado Livre, nao um SKU interno do PrometheusHUB.");
         }
 
         var resolvedVariant = await ResolveSelectedCatalogSkuAsync(
@@ -411,6 +422,7 @@ public sealed class MarketplaceOrderMappingService
                            && item.MlItemId == mapping.MlItemId
                            && item.MlVariationId == mapping.MlVariationId
                            && (item.SabrVariantSku == null
+                               || item.SabrVariantSku.StartsWith("MLB")
                                || item.MappingState == MarketplaceMappingStates.Unmapped
                                || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
@@ -517,6 +529,7 @@ public sealed class MarketplaceOrderMappingService
                            && item.ClientId == clientId
                            && item.Provider == provider
                            && (string.IsNullOrWhiteSpace(item.SabrVariantSku)
+                               || item.SabrVariantSku.StartsWith("MLB")
                                || item.MappingState == MarketplaceMappingStates.Unmapped
                                || item.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
@@ -681,6 +694,12 @@ public sealed class MarketplaceOrderMappingService
         var normalizedVariationId = NormalizeNullable(externalVariationId);
         var normalizedChannelSku = NormalizeSku(channelSku);
 
+        if (provider == MarketplaceProvider.MercadoLivre
+            && InternalCatalogSkuPolicy.IsMarketplaceExternalIdentifier(normalizedChannelSku))
+        {
+            normalizedChannelSku = null;
+        }
+
         var manualMapping = await _dbContext.TenantMarketplaceListingMaps
             .AsNoTracking()
             .Where(
@@ -699,6 +718,17 @@ public sealed class MarketplaceOrderMappingService
 
         if (manualMapping != null)
         {
+            if (provider == MarketplaceProvider.MercadoLivre
+                && InternalCatalogSkuPolicy.IsMarketplaceExternalIdentifier(manualMapping.SabrVariantSku))
+            {
+                return new MarketplaceItemResolutionResult(
+                    null,
+                    MarketplaceMappingStates.UnmappedMappingNotAuthorized,
+                    MarketplaceMappingReasonCodes.UnmappedMappedSkuNotAuthorized,
+                    normalizedChannelSku,
+                    "legacy_marketplace_id_is_not_internal_sku");
+            }
+
             var mappedVariant = await _dbContext.ProductVariants
                 .AsNoTracking()
                 .FirstOrDefaultAsync(item => item.VariantSku == manualMapping.SabrVariantSku && item.IsActive, cancellationToken);
@@ -921,6 +951,15 @@ public sealed class MarketplaceOrderMappingService
                 ServiceErrorCodes.ValidationError,
                 "selectedCatalogSku",
                 "SKU do catalogo invalida.");
+        }
+
+
+        if (InternalCatalogSkuPolicy.IsMarketplaceExternalIdentifier(normalizedSku))
+        {
+            return ServiceResult<ProductVariant>.Failure(
+                ServiceErrorCodes.ValidationError,
+                "selectedCatalogSku",
+                "O codigo MLB identifica um anuncio do Mercado Livre, nao um SKU interno do PrometheusHUB.");
         }
 
         var exactVariant = await _dbContext.ProductVariants
