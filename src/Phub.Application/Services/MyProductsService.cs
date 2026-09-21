@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -444,7 +445,7 @@ public sealed class MyProductsService
         };
 
         _dbContext.Publications.Add(publication);
-        _dbContext.AuditEvents.Add(new AuditEvent
+        var addAuditEvent = new AuditEvent
         {
             TenantId = tenantId,
             ActorType = "TenantUser",
@@ -460,14 +461,25 @@ public sealed class MyProductsService
                 publication.MarkupPercent,
                 publication.FixedPriceCents
             })
-        });
+        };
+        _dbContext.AuditEvents.Add(addAuditEvent);
 
         try
         {
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex) when (IsDraftNaturalKeyUniqueViolation(ex))
         {
+            // Another request created the same draft between our read and insert.
+            // SaveChanges leaves failed Added entries tracked, so detach both rows
+            // before reading the winner; otherwise a later SaveChanges retries the
+            // losing INSERT and turns an idempotent operation into a 500.
+            if (_dbContext is DbContext efDbContext)
+            {
+                efDbContext.Entry(publication).State = EntityState.Detached;
+                efDbContext.Entry(addAuditEvent).State = EntityState.Detached;
+            }
+
             var duplicateDraftProjection = await BuildDraftProjectionQuery(tenantId, clientId)
                 .FirstOrDefaultAsync(item => item.ProductSku == sku, cancellationToken);
             if (duplicateDraftProjection != null)
@@ -503,6 +515,38 @@ public sealed class MyProductsService
             Created = true,
             Draft = createdDraft
         });
+    }
+
+    private static bool IsDraftNaturalKeyUniqueViolation(DbUpdateException ex)
+    {
+        for (var current = (Exception)ex; current != null; current = current.InnerException)
+        {
+            if (!string.Equals(TryGetPostgresProperty(current, "SqlState"), "23505", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var constraintName = TryGetPostgresProperty(current, "ConstraintName");
+            if (string.Equals(constraintName, "ux_publications_draft_tenant_client_sku", StringComparison.OrdinalIgnoreCase)
+                || current.Message.Contains("ux_publications_draft_tenant_client_sku", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? TryGetPostgresProperty(Exception ex, string propertyName)
+    {
+        if (!string.Equals(ex.GetType().Name, "PostgresException", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return ex.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)
+            ?.GetValue(ex)
+            ?.ToString();
     }
 
     private IQueryable<DraftProjection> BuildDraftProjectionQuery(string tenantId, Guid clientId)
