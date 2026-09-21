@@ -317,7 +317,7 @@ public sealed class MercadoLivreCatalogImportService
     private static string AssignmentKey(string? itemId, string? variationId) => $"{itemId?.Trim() ?? string.Empty}|{variationId?.Trim() ?? string.Empty}";
 
     private static bool IsMercadoLivreItemId(string sku) =>
-        sku.Length > 3 && sku.StartsWith("MLB", StringComparison.Ordinal) && sku[3..].All(char.IsDigit);
+        InternalCatalogSkuPolicy.IsMarketplaceExternalIdentifier(sku);
 
     private static MercadoLivreCatalogImportItemResult ToResult(MercadoLivreSellerItemDetails item, string? channelSku, string? variationId, string? internalSku, string action) => new()
     {

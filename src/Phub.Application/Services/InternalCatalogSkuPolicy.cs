@@ -6,8 +6,10 @@ public static class InternalCatalogSkuPolicy
     {
         if (string.IsNullOrWhiteSpace(sku)) return false;
         var normalized = sku.Trim().ToUpperInvariant();
-        return normalized.Length > 3
-               && normalized.StartsWith("MLB", StringComparison.Ordinal)
-               && normalized[3..].All(char.IsDigit);
+        if (!normalized.StartsWith("MLB", StringComparison.Ordinal)) return false;
+        var identifier = normalized.StartsWith("MLBU", StringComparison.Ordinal)
+            ? normalized[4..]
+            : normalized[3..];
+        return identifier.Length > 0 && identifier.All(char.IsDigit);
     }
 }

@@ -155,6 +155,8 @@ public sealed class ProductAdminService
         }
 
         var normalizedSku = Sku.Normalize(request.Sku);
+        if (createOnly && InternalCatalogSkuPolicy.IsMarketplaceExternalIdentifier(normalizedSku))
+            return ServiceResult<ProductPricingUpdateResult>.Failure([new ValidationError("sku", "Use um SKU interno próprio; códigos MLB/MLBU são identificadores externos do Mercado Livre.")]);
         var categoryResolution = await ResolveCategoryForUpsertAsync(request.CategoryId, cancellationToken);
         if (!categoryResolution.Succeeded || string.IsNullOrWhiteSpace(categoryResolution.Data))
         {
