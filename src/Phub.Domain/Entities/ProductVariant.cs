@@ -19,9 +19,11 @@ public sealed class ProductVariant
     public string Name { get; set; } = string.Empty;
     public long CostPriceCents { get; set; }
     public long CatalogPriceCents { get; set; }
+    public string PricingMode { get; set; } = ProductPricingModes.Inherited;
     public int PhysicalStock { get; set; }
     public int ReservedStock { get; set; }
     public int AvailableStock { get; set; }
+    public int ClientOwnedStock { get; set; }
     public int SafetyBuffer { get; set; } = 2;
     public long InventoryVersion { get; set; } = 1;
     public bool IsActive { get; set; } = true;

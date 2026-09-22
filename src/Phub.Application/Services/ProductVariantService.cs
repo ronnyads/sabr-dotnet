@@ -90,10 +90,16 @@ public sealed class ProductVariantService
         var name = string.IsNullOrWhiteSpace(request.Name) ? product.Name : request.Name.Trim();
         var costPriceCents = request.CostPriceCents ?? product.CostPriceCents;
         var catalogPriceCents = request.CatalogPriceCents ?? product.CatalogPriceCents;
+        var pricingMode = request.PricingMode ?? (request.CostPriceCents.HasValue || request.CatalogPriceCents.HasValue
+            ? ProductPricingModes.Override : ProductPricingModes.Inherited);
         var physicalStock = request.PhysicalStock ?? 0;
         var reservedStock = request.ReservedStock ?? 0;
         var safetyBuffer = request.SafetyBuffer ?? 2;
         var isActive = request.IsActive ?? true;
+
+        if (!string.Equals(pricingMode, ProductPricingModes.Inherited, StringComparison.Ordinal)
+            && !string.Equals(pricingMode, ProductPricingModes.Override, StringComparison.Ordinal))
+            return ServiceResult<AdminProductVariantResult>.Failure(new[] { new ValidationError("pricingMode", "Pricing mode is invalid") });
 
         errors = ValidateVariantFields(name, costPriceCents, catalogPriceCents, physicalStock, reservedStock, safetyBuffer);
         if (errors.Count > 0)
@@ -108,6 +114,7 @@ public sealed class ProductVariantService
             Name = name,
             CostPriceCents = costPriceCents,
             CatalogPriceCents = catalogPriceCents,
+            PricingMode = pricingMode,
             PhysicalStock = physicalStock,
             ReservedStock = reservedStock,
             AvailableStock = Math.Max(0, physicalStock - reservedStock - safetyBuffer),
@@ -119,6 +126,13 @@ public sealed class ProductVariantService
         };
 
         _dbContext.ProductVariants.Add(variant);
+        _dbContext.ProductPriceVersions.Add(new ProductPriceVersion
+        {
+            ProductSku = normalizedBaseSku, VariantSku = normalizedVariantSku, PricingMode = pricingMode,
+            CostPriceCents = costPriceCents, CatalogPriceCents = catalogPriceCents,
+            ValidFrom = variant.CreatedAt, Version = 1, ChangedByUserId = actorUserId,
+            Reason = "Criação da variação"
+        });
         AddAuditEvent(actorUserId, tenantId, "AdminProducts.Variants.Create", normalizedBaseSku, normalizedVariantSku, new
         {
             variant.BaseSku,
@@ -172,12 +186,18 @@ public sealed class ProductVariantService
             ? (string.IsNullOrWhiteSpace(request.Name) ? variant.Name : request.Name.Trim())
             : variant.Name;
 
-        var costPriceCents = request.CostPriceCents ?? variant.CostPriceCents;
-        var catalogPriceCents = request.CatalogPriceCents ?? variant.CatalogPriceCents;
+        var pricingMode = request.PricingMode ?? variant.PricingMode;
+        var inherited = string.Equals(pricingMode, ProductPricingModes.Inherited, StringComparison.Ordinal);
+        var costPriceCents = inherited ? product.CostPriceCents : request.CostPriceCents ?? variant.CostPriceCents;
+        var catalogPriceCents = inherited ? product.CatalogPriceCents : request.CatalogPriceCents ?? variant.CatalogPriceCents;
         var physicalStock = request.PhysicalStock ?? variant.PhysicalStock;
         var reservedStock = request.ReservedStock ?? variant.ReservedStock;
         var safetyBuffer = request.SafetyBuffer ?? variant.SafetyBuffer;
         var isActive = request.IsActive ?? variant.IsActive;
+
+        if (!string.Equals(pricingMode, ProductPricingModes.Inherited, StringComparison.Ordinal)
+            && !string.Equals(pricingMode, ProductPricingModes.Override, StringComparison.Ordinal))
+            return ServiceResult<AdminProductVariantResult>.Failure(new[] { new ValidationError("pricingMode", "Pricing mode is invalid") });
 
         errors = ValidateVariantFields(name, costPriceCents, catalogPriceCents, physicalStock, reservedStock, safetyBuffer);
         if (errors.Count > 0)
@@ -185,15 +205,34 @@ public sealed class ProductVariantService
             return ServiceResult<AdminProductVariantResult>.Failure(errors);
         }
 
+        var priceChanged = variant.CostPriceCents != costPriceCents || variant.CatalogPriceCents != catalogPriceCents
+                           || variant.PricingMode != pricingMode;
         variant.Name = name;
         variant.CostPriceCents = costPriceCents;
         variant.CatalogPriceCents = catalogPriceCents;
+        variant.PricingMode = pricingMode;
         variant.PhysicalStock = physicalStock;
         variant.ReservedStock = reservedStock;
         variant.SafetyBuffer = safetyBuffer;
-        variant.AvailableStock = Math.Max(0, physicalStock - reservedStock - safetyBuffer);
+        variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
         variant.IsActive = isActive;
         variant.UpdatedAt = DateTimeOffset.UtcNow;
+
+        if (priceChanged)
+        {
+            var current = await _dbContext.ProductPriceVersions
+                .Where(x => x.ProductSku == normalizedBaseSku && x.VariantSku == normalizedVariantSku && x.ValidTo == null)
+                .OrderByDescending(x => x.Version).FirstOrDefaultAsync(cancellationToken);
+            if (current != null) current.ValidTo = variant.UpdatedAt;
+            _dbContext.ProductPriceVersions.Add(new ProductPriceVersion
+            {
+                ProductSku = normalizedBaseSku, VariantSku = normalizedVariantSku, PricingMode = pricingMode,
+                CostPriceCents = costPriceCents, CatalogPriceCents = catalogPriceCents,
+                ValidFrom = variant.UpdatedAt, Version = (current?.Version ?? 0) + 1,
+                ChangeType = ProductPriceChangeTypes.Change, ChangedByUserId = actorUserId,
+                Reason = string.IsNullOrWhiteSpace(request.PriceChangeReason) ? "Alteração de preço" : request.PriceChangeReason.Trim()
+            });
+        }
 
         AddAuditEvent(actorUserId, tenantId, "AdminProducts.Variants.Update", normalizedBaseSku, normalizedVariantSku, new
         {
@@ -391,6 +430,7 @@ public sealed class ProductVariantService
             Name = item.Name,
             CostPriceCents = item.CostPriceCents,
             CatalogPriceCents = item.CatalogPriceCents,
+            PricingMode = item.PricingMode,
             PhysicalStock = item.PhysicalStock,
             ReservedStock = item.ReservedStock,
             AvailableStock = item.AvailableStock,

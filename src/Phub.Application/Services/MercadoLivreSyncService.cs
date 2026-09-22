@@ -21,6 +21,7 @@ public sealed class MercadoLivreSyncService
     private readonly MarketplaceOrderMappingService _mappingService;
     private readonly MarketplaceOrderInventoryService _inventoryService;
     private readonly OperationalFinancialProjectionService _financialProjection;
+    private readonly StockReservationAllocationService _reservationAllocations;
     private readonly MercadoLivreOptions _options;
     private readonly ILogger<MercadoLivreSyncService> _logger;
 
@@ -34,6 +35,7 @@ public sealed class MercadoLivreSyncService
         MarketplaceOrderMappingService mappingService,
         MarketplaceOrderInventoryService inventoryService,
         OperationalFinancialProjectionService financialProjection,
+        StockReservationAllocationService reservationAllocations,
         IOptions<MercadoLivreOptions> options,
         ILogger<MercadoLivreSyncService> logger)
     {
@@ -46,6 +48,7 @@ public sealed class MercadoLivreSyncService
         _mappingService = mappingService;
         _inventoryService = inventoryService;
         _financialProjection = financialProjection;
+        _reservationAllocations = reservationAllocations;
         _options = options.Value;
         _logger = logger;
     }
@@ -332,8 +335,7 @@ public sealed class MercadoLivreSyncService
                 cancellationToken);
             if (variant != null)
             {
-                variant.ReservedStock = Math.Max(0, variant.ReservedStock - reservation.Quantity);
-                variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
+                await _reservationAllocations.ReleaseAsync(reservation, variant, cancellationToken);
                 changedKeys.Add($"{reservation.TenantId}|{reservation.ClientId}|{variant.VariantSku}");
             }
         }

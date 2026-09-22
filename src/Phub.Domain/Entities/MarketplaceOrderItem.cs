@@ -24,6 +24,11 @@ public sealed class MarketplaceOrderItem
     public long? CatalogUnitPriceCentsAtPayment { get; set; }
     public long? CostUnitPriceCentsAtPayment { get; set; }
     public long? ChargeLineTotalCentsAtPayment { get; set; }
+    public DateTimeOffset? EconomicAt { get; set; }
+    public string? EconomicAtSource { get; set; }
+    public string? CostSource { get; set; }
+    public Guid? CatalogPriceVersionId { get; set; }
+    public string CostReferencesJson { get; set; } = "{}";
     public int ReservedQuantity { get; set; }
     public string MappingState { get; set; } = "UNMAPPED";
     public Guid? MappingSnapshotId { get; set; }

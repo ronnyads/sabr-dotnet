@@ -12,17 +12,20 @@ public sealed class OrderCancellationService
     private readonly StockAvailabilityService _stockAvailabilityService;
     private readonly MarketplaceAuditLogService _auditLogService;
     private readonly TinyIntegrationService _tinyIntegrationService;
+    private readonly StockReservationAllocationService _reservationAllocations;
 
     public OrderCancellationService(
         IAppDbContext dbContext,
         StockAvailabilityService stockAvailabilityService,
         MarketplaceAuditLogService auditLogService,
-        TinyIntegrationService tinyIntegrationService)
+        TinyIntegrationService tinyIntegrationService,
+        StockReservationAllocationService reservationAllocations)
     {
         _dbContext = dbContext;
         _stockAvailabilityService = stockAvailabilityService;
         _auditLogService = auditLogService;
         _tinyIntegrationService = tinyIntegrationService;
+        _reservationAllocations = reservationAllocations;
     }
 
     public async Task<ServiceResult<OrderActionResult>> CancelOrderAsync(
@@ -339,6 +342,14 @@ public sealed class OrderCancellationService
             {
                 restoreBySku.TryGetValue(reservation.SabrVariantSku, out var qty);
                 restoreBySku[reservation.SabrVariantSku] = qty + reservation.Quantity;
+            }
+
+            if (reservation.Status == StockReservationStatus.Reserved)
+            {
+                var reservedVariant = await _dbContext.ProductVariants.FirstOrDefaultAsync(
+                    v => v.VariantSku == reservation.SabrVariantSku, cancellationToken);
+                if (reservedVariant != null)
+                    await _reservationAllocations.ReleaseAsync(reservation, reservedVariant, cancellationToken);
             }
 
             reservation.Status = StockReservationStatus.Released;

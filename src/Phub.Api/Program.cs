@@ -386,6 +386,10 @@ builder.Services.AddScoped<IMarketplaceListingAdapter, MercadoLivreLegacyListing
 builder.Services.AddScoped<IMarketplaceListingAdapter, MercadoLivreUserProductListingAdapter>();
 builder.Services.AddScoped<MarketplaceListingService>();
 builder.Services.AddScoped<MarketplaceOrderInventoryService>();
+builder.Services.AddScoped<SellerOwnedStockLotService>();
+builder.Services.AddScoped<StockReservationAllocationService>();
+builder.Services.AddScoped<HistoricalProductCostService>();
+builder.Services.AddScoped<FinancialCostCorrectionPlanService>();
 builder.Services.AddScoped<MarketplaceOrderPaymentService>();
 builder.Services.AddScoped<MarketplaceOrderCheckoutService>();
 builder.Services.AddScoped<MarketplaceShipmentLabelService>();

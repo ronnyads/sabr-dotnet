@@ -11,6 +11,7 @@ public sealed class StockReservation
     public Guid MarketplaceOrderId { get; set; }
     public Guid MarketplaceOrderItemId { get; set; }
     public int Quantity { get; set; }
+    public string Source { get; set; } = StockReservationSources.GeneralStock;
     public StockReservationStatus Status { get; set; } = StockReservationStatus.Reserved;
     public DateTimeOffset ReservedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ExpiresAt { get; set; }

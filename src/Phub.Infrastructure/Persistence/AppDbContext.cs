@@ -44,6 +44,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<Publication> Publications => Set<Publication>();
     public DbSet<ListingDraft> ListingDrafts => Set<ListingDraft>();
     public DbSet<ProductPriceHistory> ProductPriceHistories => Set<ProductPriceHistory>();
+    public DbSet<ProductPriceVersion> ProductPriceVersions => Set<ProductPriceVersion>();
     public DbSet<TenantMarketplaceConnection> TenantMarketplaceConnections => Set<TenantMarketplaceConnection>();
     public DbSet<TenantMarketplaceListingMap> TenantMarketplaceListingMaps => Set<TenantMarketplaceListingMap>();
     public DbSet<ProductMarketplaceCategoryLock> ProductMarketplaceCategoryLocks => Set<ProductMarketplaceCategoryLock>();
@@ -55,6 +56,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<MarketplaceShipmentOperationalState> MarketplaceShipmentOperationalStates => Set<MarketplaceShipmentOperationalState>();
     public DbSet<MarketplaceShipmentDispatchDeadlineVersion> MarketplaceShipmentDispatchDeadlineVersions => Set<MarketplaceShipmentDispatchDeadlineVersion>();
     public DbSet<StockReservation> StockReservations => Set<StockReservation>();
+    public DbSet<StockReservationAllocation> StockReservationAllocations => Set<StockReservationAllocation>();
+    public DbSet<SellerOwnedStockLot> SellerOwnedStockLots => Set<SellerOwnedStockLot>();
     public DbSet<MarketplaceEventLog> MarketplaceEventLogs => Set<MarketplaceEventLog>();
     public DbSet<MarketplaceOperationJob> MarketplaceOperationJobs => Set<MarketplaceOperationJob>();
     public DbSet<MarketplaceFinancialEntry> MarketplaceFinancialEntries => Set<MarketplaceFinancialEntry>();
@@ -63,6 +66,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<SellerTaxProfileVersion> SellerTaxProfileVersions => Set<SellerTaxProfileVersion>();
     public DbSet<FinancialReconciliationCursor> FinancialReconciliationCursors => Set<FinancialReconciliationCursor>();
     public DbSet<FinancialSyncJob> FinancialSyncJobs => Set<FinancialSyncJob>();
+    public DbSet<FinancialCorrectionPlan> FinancialCorrectionPlans => Set<FinancialCorrectionPlan>();
+    public DbSet<FinancialCorrectionPlanEntry> FinancialCorrectionPlanEntries => Set<FinancialCorrectionPlanEntry>();
     public DbSet<MarketplaceOAuthGrant> MarketplaceOAuthGrants => Set<MarketplaceOAuthGrant>();
     public DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules => Set<TenantMarketplaceSlaRule>();
     public DbSet<AiPromptConfig> AiPromptConfigs => Set<AiPromptConfig>();
@@ -201,7 +206,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 entry.Entity.CreatedAt = now;
                 entry.Entity.UpdatedAt = now;
                 entry.Entity.SafetyBuffer = Math.Max(0, entry.Entity.SafetyBuffer);
-                entry.Entity.AvailableStock = Math.Max(0, entry.Entity.PhysicalStock - entry.Entity.ReservedStock - entry.Entity.SafetyBuffer);
+                entry.Entity.AvailableStock = Math.Max(0, entry.Entity.PhysicalStock - entry.Entity.ClientOwnedStock - entry.Entity.ReservedStock - entry.Entity.SafetyBuffer);
                 entry.Entity.InventoryVersion = Math.Max(1, entry.Entity.InventoryVersion);
             }
 
@@ -213,7 +218,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 entry.Entity.VariantSku = Sku.Normalize(entry.Entity.VariantSku);
                 entry.Entity.BaseSku = Sku.Normalize(entry.Entity.BaseSku);
                 entry.Entity.SafetyBuffer = Math.Max(0, entry.Entity.SafetyBuffer);
-                entry.Entity.AvailableStock = Math.Max(0, entry.Entity.PhysicalStock - entry.Entity.ReservedStock - entry.Entity.SafetyBuffer);
+                entry.Entity.AvailableStock = Math.Max(0, entry.Entity.PhysicalStock - entry.Entity.ClientOwnedStock - entry.Entity.ReservedStock - entry.Entity.SafetyBuffer);
                 if (inventoryChanged)
                 {
                     entry.Entity.InventoryVersion = Math.Max(1, entry.Entity.InventoryVersion + 1);
@@ -956,9 +961,11 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.Name).HasColumnName("name").HasMaxLength(250).IsRequired();
             entity.Property(e => e.CostPriceCents).HasColumnName("cost_price_cents").IsRequired();
             entity.Property(e => e.CatalogPriceCents).HasColumnName("catalog_price_cents").IsRequired();
+            entity.Property(e => e.PricingMode).HasColumnName("pricing_mode").HasMaxLength(20).IsRequired();
             entity.Property(e => e.PhysicalStock).HasColumnName("physical_stock").IsRequired();
             entity.Property(e => e.ReservedStock).HasColumnName("reserved_stock").IsRequired();
             entity.Property(e => e.AvailableStock).HasColumnName("available_stock").IsRequired();
+            entity.Property(e => e.ClientOwnedStock).HasColumnName("client_owned_stock").IsRequired();
             entity.Property(e => e.SafetyBuffer).HasColumnName("safety_buffer").HasDefaultValue(2).IsRequired();
             entity.Property(e => e.InventoryVersion).HasColumnName("inventory_version").HasDefaultValue(1L).IsRequired();
             entity.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
@@ -973,7 +980,9 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasCheckConstraint("ck_product_variants_available_non_negative", "\"available_stock\" >= 0");
             entity.HasCheckConstraint("ck_product_variants_buffer_non_negative", "\"safety_buffer\" >= 0");
             entity.HasCheckConstraint("ck_product_variants_inventory_version_positive", "\"inventory_version\" > 0");
-            entity.HasCheckConstraint("ck_product_variants_available_consistency", "\"available_stock\" = GREATEST(0, \"physical_stock\" - \"reserved_stock\" - \"safety_buffer\")");
+            entity.HasCheckConstraint("ck_product_variants_client_owned_non_negative", "\"client_owned_stock\" >= 0");
+            entity.HasCheckConstraint("ck_product_variants_owned_not_above_physical", "\"client_owned_stock\" <= \"physical_stock\"");
+            entity.HasCheckConstraint("ck_product_variants_available_consistency", "\"available_stock\" = GREATEST(0, \"physical_stock\" - \"client_owned_stock\" - \"reserved_stock\" - \"safety_buffer\")");
             entity.HasIndex(e => e.BaseSku).HasDatabaseName("ix_product_variants_base_sku");
             entity.HasIndex(e => new { e.BaseSku, e.IsActive }).HasDatabaseName("ix_product_variants_base_sku_active");
             entity.HasOne<Product>()
@@ -1302,6 +1311,33 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<ProductPriceVersion>(entity =>
+        {
+            entity.ToTable("product_price_versions", table =>
+            {
+                table.HasCheckConstraint("ck_product_price_version_mode", "pricing_mode IN ('INHERITED','OVERRIDE')");
+                table.HasCheckConstraint("ck_product_price_version_change", "change_type IN ('CHANGE','CORRECTION')");
+                table.HasCheckConstraint("ck_product_price_version_range", "valid_to IS NULL OR valid_to > valid_from");
+                table.HasCheckConstraint("ck_product_price_version_amounts", "cost_price_cents >= 0 AND catalog_price_cents >= 0");
+            });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.ProductSku).HasColumnName("product_sku").HasMaxLength(Sku.MaxLength).IsRequired();
+            entity.Property(e => e.VariantSku).HasColumnName("variant_sku").HasMaxLength(Sku.MaxLength);
+            entity.Property(e => e.PricingMode).HasColumnName("pricing_mode").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.CostPriceCents).HasColumnName("cost_price_cents").IsRequired();
+            entity.Property(e => e.CatalogPriceCents).HasColumnName("catalog_price_cents").IsRequired();
+            entity.Property(e => e.ValidFrom).HasColumnName("valid_from").IsRequired();
+            entity.Property(e => e.ValidTo).HasColumnName("valid_to");
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.Property(e => e.ChangeType).HasColumnName("change_type").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.ChangedByUserId).HasColumnName("changed_by_user_id").IsRequired();
+            entity.Property(e => e.Reason).HasColumnName("reason").HasMaxLength(1000).IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.HasIndex(e => new { e.ProductSku, e.VariantSku, e.Version }).IsUnique().HasDatabaseName("ux_product_price_versions_scope_version");
+            entity.HasIndex(e => new { e.ProductSku, e.VariantSku, e.ValidFrom }).HasDatabaseName("ix_product_price_versions_scope_valid_from");
+        });
+
         modelBuilder.Entity<WalletDepositRequest>(entity =>
         {
             entity.ToTable("wallet_deposit_requests", table =>
@@ -1373,6 +1409,11 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.SaleFee).HasColumnName("sale_fee").HasPrecision(18, 2);
             entity.Property(e => e.CatalogUnitPriceCentsAtPayment).HasColumnName("catalog_unit_price_cents_at_payment");
             entity.Property(e => e.CostUnitPriceCentsAtPayment).HasColumnName("cost_unit_price_cents_at_payment");
+            entity.Property(e => e.EconomicAt).HasColumnName("economic_at");
+            entity.Property(e => e.EconomicAtSource).HasColumnName("economic_at_source").HasMaxLength(40);
+            entity.Property(e => e.CostSource).HasColumnName("cost_source").HasMaxLength(30);
+            entity.Property(e => e.CatalogPriceVersionId).HasColumnName("catalog_price_version_id");
+            entity.Property(e => e.CostReferencesJson).HasColumnName("cost_references_json").HasColumnType("jsonb").IsRequired();
             entity.Property(e => e.ChargeLineTotalCentsAtPayment).HasColumnName("charge_line_total_cents_at_payment");
             entity.Property(e => e.ReservedQuantity).HasColumnName("reserved_quantity").IsRequired();
             entity.Property(e => e.MappingState).HasColumnName("mapping_state").HasMaxLength(40).IsRequired();
@@ -1554,6 +1595,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.MarketplaceOrderId).HasColumnName("marketplace_order_id").IsRequired();
             entity.Property(e => e.MarketplaceOrderItemId).HasColumnName("marketplace_order_item_id").IsRequired();
             entity.Property(e => e.Quantity).HasColumnName("quantity").IsRequired();
+            entity.Property(e => e.Source).HasColumnName("source").HasMaxLength(30).IsRequired();
             entity.Property(e => e.Status).HasColumnName("status").IsRequired();
             entity.Property(e => e.ReservedAt).HasColumnName("reserved_at").IsRequired();
             entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
@@ -1608,6 +1650,55 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .HasDatabaseName("ix_marketplace_event_logs_status_created");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId })
                 .HasDatabaseName("ix_marketplace_event_logs_scope_seller");
+        });
+
+        modelBuilder.Entity<SellerOwnedStockLot>(entity =>
+        {
+            entity.ToTable("seller_owned_stock_lots", table =>
+            {
+                table.HasCheckConstraint("ck_seller_owned_stock_lot_quantities", "original_quantity > 0 AND available_quantity >= 0 AND reserved_quantity >= 0 AND consumed_quantity >= 0 AND available_quantity + reserved_quantity + consumed_quantity = original_quantity");
+                table.HasCheckConstraint("ck_seller_owned_stock_lot_cost", "unit_cost_cents > 0");
+            });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.VariantSku).HasColumnName("variant_sku").HasMaxLength(Sku.MaxLength).IsRequired();
+            entity.Property(e => e.OriginalQuantity).HasColumnName("original_quantity").IsRequired();
+            entity.Property(e => e.AvailableQuantity).HasColumnName("available_quantity").IsRequired();
+            entity.Property(e => e.ReservedQuantity).HasColumnName("reserved_quantity").IsRequired();
+            entity.Property(e => e.ConsumedQuantity).HasColumnName("consumed_quantity").IsRequired();
+            entity.Property(e => e.UnitCostCents).HasColumnName("unit_cost_cents").IsRequired();
+            entity.Property(e => e.CurrencyId).HasColumnName("currency_id").HasMaxLength(3).IsRequired();
+            entity.Property(e => e.SourceType).HasColumnName("source_type").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.SourceId).HasColumnName("source_id").HasMaxLength(200).IsRequired();
+            entity.Property(e => e.EvidenceReference).HasColumnName("evidence_reference").HasMaxLength(1000);
+            entity.Property(e => e.AcquiredAt).HasColumnName("acquired_at").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.CreatedByUserId).HasColumnName("created_by_user_id").IsRequired();
+            entity.Property(e => e.Reason).HasColumnName("reason").HasMaxLength(1000).IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.SellerId, e.SourceType, e.SourceId }).IsUnique().HasDatabaseName("ux_seller_owned_stock_lots_source");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.SellerId, e.VariantSku, e.AcquiredAt }).HasDatabaseName("ix_seller_owned_stock_lots_fifo");
+            entity.HasOne<ProductVariant>().WithMany().HasForeignKey(e => e.VariantSku).HasPrincipalKey(e => e.VariantSku).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<StockReservationAllocation>(entity =>
+        {
+            entity.ToTable("stock_reservation_allocations", table => table.HasCheckConstraint("ck_stock_reservation_allocation_quantity", "quantity > 0"));
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.StockReservationId).HasColumnName("stock_reservation_id").IsRequired();
+            entity.Property(e => e.SellerOwnedStockLotId).HasColumnName("seller_owned_stock_lot_id");
+            entity.Property(e => e.Source).HasColumnName("source").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.Quantity).HasColumnName("quantity").IsRequired();
+            entity.Property(e => e.UnitCostCents).HasColumnName("unit_cost_cents");
+            entity.Property(e => e.CurrencyId).HasColumnName("currency_id").HasMaxLength(3).IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.ConsumedAt).HasColumnName("consumed_at");
+            entity.HasIndex(e => new { e.StockReservationId, e.SellerOwnedStockLotId, e.Source }).IsUnique().HasDatabaseName("ux_stock_reservation_allocations_origin");
+            entity.HasOne<StockReservation>().WithMany().HasForeignKey(e => e.StockReservationId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<SellerOwnedStockLot>().WithMany().HasForeignKey(e => e.SellerOwnedStockLotId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<MarketplaceOperationJob>(entity =>
@@ -1694,6 +1785,50 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasOne<MarketplaceFinancialEntry>().WithMany().HasForeignKey(e => e.SupersedesEntryId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<MarketplaceOrder>().WithMany().HasForeignKey(e => e.MarketplaceOrderId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<MarketplaceOrderItem>().WithMany().HasForeignKey(e => e.MarketplaceOrderItemId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FinancialCorrectionPlan>(entity =>
+        {
+            entity.ToTable("financial_correction_plans");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.PlanHash).HasColumnName("plan_hash").HasMaxLength(64).IsRequired();
+            entity.Property(e => e.ScopeJson).HasColumnName("scope_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.ReportJson).HasColumnName("report_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.Reason).HasColumnName("reason").HasMaxLength(1000).IsRequired();
+            entity.Property(e => e.TotalEntries).HasColumnName("total_entries").IsRequired();
+            entity.Property(e => e.ProcessedEntries).HasColumnName("processed_entries").IsRequired();
+            entity.Property(e => e.LastProcessedEntryId).HasColumnName("last_processed_entry_id");
+            entity.Property(e => e.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            entity.Property(e => e.CreatedByUserId).HasColumnName("created_by_user_id").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.StartedAt).HasColumnName("started_at");
+            entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.SellerId, e.PlanHash }).IsUnique().HasDatabaseName("ux_financial_correction_plans_hash");
+            entity.HasIndex(e => new { e.Status, e.UpdatedAt }).HasDatabaseName("ix_financial_correction_plans_status_updated");
+        });
+
+        modelBuilder.Entity<FinancialCorrectionPlanEntry>(entity =>
+        {
+            entity.ToTable("financial_correction_plan_entries");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.PlanId).HasColumnName("plan_id").IsRequired();
+            entity.Property(e => e.OriginalEntryId).HasColumnName("original_entry_id").IsRequired();
+            entity.Property(e => e.ReplacementEntryId).HasColumnName("replacement_entry_id").IsRequired();
+            entity.Property(e => e.MarketplaceOrderId).HasColumnName("marketplace_order_id");
+            entity.Property(e => e.EconomicKey).HasColumnName("economic_key").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.HasIndex(e => new { e.PlanId, e.OriginalEntryId }).IsUnique().HasDatabaseName("ux_financial_correction_plan_entries_original");
+            entity.HasIndex(e => e.ReplacementEntryId).IsUnique().HasDatabaseName("ux_financial_correction_plan_entries_replacement");
+            entity.HasOne<FinancialCorrectionPlan>().WithMany().HasForeignKey(e => e.PlanId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<MarketplaceFinancialEntry>().WithMany().HasForeignKey(e => e.OriginalEntryId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<MarketplaceFinancialEntry>().WithMany().HasForeignKey(e => e.ReplacementEntryId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<FinancialEconomicHead>(entity =>

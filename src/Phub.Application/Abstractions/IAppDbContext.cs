@@ -34,6 +34,7 @@ public interface IAppDbContext
     DbSet<Publication> Publications { get; }
     DbSet<ListingDraft> ListingDrafts { get; }
     DbSet<ProductPriceHistory> ProductPriceHistories { get; }
+    DbSet<ProductPriceVersion> ProductPriceVersions { get; }
     DbSet<TenantMarketplaceConnection> TenantMarketplaceConnections { get; }
     DbSet<TenantMarketplaceListingMap> TenantMarketplaceListingMaps { get; }
     DbSet<ProductMarketplaceCategoryLock> ProductMarketplaceCategoryLocks { get; }
@@ -45,6 +46,8 @@ public interface IAppDbContext
     DbSet<MarketplaceShipmentOperationalState> MarketplaceShipmentOperationalStates { get; }
     DbSet<MarketplaceShipmentDispatchDeadlineVersion> MarketplaceShipmentDispatchDeadlineVersions { get; }
     DbSet<StockReservation> StockReservations { get; }
+    DbSet<StockReservationAllocation> StockReservationAllocations { get; }
+    DbSet<SellerOwnedStockLot> SellerOwnedStockLots { get; }
     DbSet<MarketplaceEventLog> MarketplaceEventLogs { get; }
     DbSet<MarketplaceOperationJob> MarketplaceOperationJobs { get; }
     DbSet<MarketplaceFinancialEntry> MarketplaceFinancialEntries { get; }
@@ -53,6 +56,8 @@ public interface IAppDbContext
     DbSet<SellerTaxProfileVersion> SellerTaxProfileVersions { get; }
     DbSet<FinancialReconciliationCursor> FinancialReconciliationCursors { get; }
     DbSet<FinancialSyncJob> FinancialSyncJobs { get; }
+    DbSet<FinancialCorrectionPlan> FinancialCorrectionPlans { get; }
+    DbSet<FinancialCorrectionPlanEntry> FinancialCorrectionPlanEntries { get; }
     DbSet<MarketplaceOAuthGrant> MarketplaceOAuthGrants { get; }
     DbSet<TenantMarketplaceSlaRule> TenantMarketplaceSlaRules { get; }
     DbSet<AiPromptConfig> AiPromptConfigs { get; }

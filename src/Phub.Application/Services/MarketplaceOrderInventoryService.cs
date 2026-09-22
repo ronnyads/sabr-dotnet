@@ -11,10 +11,12 @@ namespace Phub.Application.Services;
 public sealed class MarketplaceOrderInventoryService
 {
     private readonly IAppDbContext _dbContext;
+    private readonly StockReservationAllocationService _allocations;
 
-    public MarketplaceOrderInventoryService(IAppDbContext dbContext)
+    public MarketplaceOrderInventoryService(IAppDbContext dbContext, StockReservationAllocationService allocations)
     {
         _dbContext = dbContext;
+        _allocations = allocations;
     }
 
     public async Task<MarketplaceOrderInventorySummary> BuildSummaryAsync(
@@ -237,8 +239,7 @@ public sealed class MarketplaceOrderInventoryService
                         if (!string.IsNullOrWhiteSpace(reservation.SabrVariantSku)
                             && variants.TryGetValue(reservation.SabrVariantSku, out var variantToRelease))
                         {
-                            variantToRelease.ReservedStock = Math.Max(0, variantToRelease.ReservedStock - reservation.Quantity);
-                            variantToRelease.AvailableStock = StockAvailabilityService.ComputeAvailable(variantToRelease);
+                            await _allocations.ReleaseAsync(reservation, variantToRelease, cancellationToken);
                         }
 
                         reservation.Status = StockReservationStatus.Released;
@@ -259,8 +260,7 @@ public sealed class MarketplaceOrderInventoryService
 
             if (delta > 0 && !string.IsNullOrWhiteSpace(item.SabrVariantSku))
             {
-                if (!variants.TryGetValue(item.SabrVariantSku!, out var reservableVariant)
-                    || StockAvailabilityService.ComputeAvailable(reservableVariant) < delta)
+                if (!variants.TryGetValue(item.SabrVariantSku!, out var reservableVariant))
                 {
                     item.ReservedQuantity = currentReserved;
                     item.SellerId = sellerId;
@@ -268,7 +268,7 @@ public sealed class MarketplaceOrderInventoryService
                     continue;
                 }
 
-                _dbContext.StockReservations.Add(new StockReservation
+                var reservation = new StockReservation
                 {
                     TenantId = order.TenantId,
                     ClientId = order.ClientId,
@@ -279,42 +279,47 @@ public sealed class MarketplaceOrderInventoryService
                     Status = StockReservationStatus.Reserved,
                     ReservedAt = nowUtc,
                     ExpiresAt = nowUtc.AddHours(Math.Max(1, reservationTtlHours))
-                });
+                };
+                if (!await _allocations.AllocateAsync(reservation, reservableVariant, sellerId, cancellationToken))
+                {
+                    item.ReservedQuantity = currentReserved;
+                    item.SellerId = sellerId;
+                    item.UpdatedAt = nowUtc;
+                    continue;
+                }
+                _dbContext.StockReservations.Add(reservation);
 
                 item.ReservedQuantity = currentReserved + delta;
 
-                reservableVariant.ReservedStock += delta;
                 reservableVariant.AvailableStock = StockAvailabilityService.ComputeAvailable(reservableVariant);
             }
             else if (delta < 0)
             {
-                var releaseRemaining = -delta;
                 foreach (var reservation in currentReservations)
                 {
-                    if (releaseRemaining <= 0)
-                    {
-                        break;
-                    }
-
-                    var released = Math.Min(releaseRemaining, reservation.Quantity);
-                    reservation.Quantity -= released;
+                    if (variants.TryGetValue(reservation.SabrVariantSku, out var variantToRelease))
+                        await _allocations.ReleaseAsync(reservation, variantToRelease, cancellationToken);
+                    reservation.Quantity = 0;
+                    reservation.Status = StockReservationStatus.Released;
                     reservation.UpdatedAt = nowUtc;
-                    releaseRemaining -= released;
-
-                    if (reservation.Quantity == 0)
+                }
+                item.ReservedQuantity = 0;
+                if (desiredReservation > 0 && !string.IsNullOrWhiteSpace(item.SabrVariantSku)
+                    && variants.TryGetValue(item.SabrVariantSku, out var variant))
+                {
+                    var replacement = new StockReservation
                     {
-                        reservation.Status = StockReservationStatus.Released;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(reservation.SabrVariantSku)
-                        && variants.TryGetValue(reservation.SabrVariantSku, out var variant))
+                        TenantId = order.TenantId, ClientId = order.ClientId, SabrVariantSku = item.SabrVariantSku,
+                        MarketplaceOrderId = order.Id, MarketplaceOrderItemId = item.Id, Quantity = desiredReservation,
+                        Status = StockReservationStatus.Reserved, ReservedAt = nowUtc,
+                        ExpiresAt = nowUtc.AddHours(Math.Max(1, reservationTtlHours))
+                    };
+                    if (await _allocations.AllocateAsync(replacement, variant, sellerId, cancellationToken))
                     {
-                        variant.ReservedStock = Math.Max(0, variant.ReservedStock - released);
-                        variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
+                        _dbContext.StockReservations.Add(replacement);
+                        item.ReservedQuantity = desiredReservation;
                     }
                 }
-
-                item.ReservedQuantity = desiredReservation;
             }
             else
             {

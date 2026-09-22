@@ -25,6 +25,8 @@ public sealed class MarketplaceOrderCheckoutService
     private readonly StockAvailabilityService _stockAvailability;
     private readonly MarketplaceAuditLogService _audit;
     private readonly OperationalFinancialProjectionService _financialProjection;
+    private readonly StockReservationAllocationService _reservationAllocations;
+    private readonly HistoricalProductCostService _historicalCosts;
     private readonly MercadoLivreOptions _options;
 
     public MarketplaceOrderCheckoutService(
@@ -33,6 +35,8 @@ public sealed class MarketplaceOrderCheckoutService
         StockAvailabilityService stockAvailability,
         MarketplaceAuditLogService audit,
         OperationalFinancialProjectionService financialProjection,
+        StockReservationAllocationService reservationAllocations,
+        HistoricalProductCostService historicalCosts,
         IOptions<MercadoLivreOptions> options)
     {
         _db = db;
@@ -40,6 +44,8 @@ public sealed class MarketplaceOrderCheckoutService
         _stockAvailability = stockAvailability;
         _audit = audit;
         _financialProjection = financialProjection;
+        _reservationAllocations = reservationAllocations;
+        _historicalCosts = historicalCosts;
         _options = options.Value;
     }
 
@@ -82,7 +88,11 @@ public sealed class MarketplaceOrderCheckoutService
             .Where(item => item.MarketplaceOrderId == order.Id && item.TenantId == tenantId
                            && item.ClientId == clientId && item.Status == StockReservationStatus.Reserved)
             .ToListAsync(cancellationToken);
-        var quote = BuildQuote(order, items, variants, reservations, walletBalance,
+        var reservationIds = reservations.Select(x => x.Id).ToList();
+        var allocations = await _db.StockReservationAllocations.AsNoTracking()
+            .Where(x => reservationIds.Contains(x.StockReservationId)).ToListAsync(cancellationToken);
+        var priceSnapshots = await ResolvePriceSnapshotsAsync(order, items, cancellationToken);
+        var quote = BuildQuote(order, items, variants, reservations, allocations, priceSnapshots, walletBalance,
             WithReservationBlocker(items, reservations, inventorySummary.PaymentBlockers));
         return ServiceResult<MarketplaceOrderPaymentQuoteResult>.Success(quote);
     }
@@ -154,7 +164,11 @@ public sealed class MarketplaceOrderCheckoutService
                                && item.Status == StockReservationStatus.Reserved)
                 .OrderBy(item => item.ReservedAt)
                 .ToListAsync(cancellationToken);
-            var quote = BuildQuote(order, items, variants, reservations, wallet?.BalanceCents ?? 0,
+            var reservationIds = reservations.Select(x => x.Id).ToList();
+            var allocations = await _db.StockReservationAllocations
+                .Where(x => reservationIds.Contains(x.StockReservationId)).ToListAsync(cancellationToken);
+            var priceSnapshots = await ResolvePriceSnapshotsAsync(order, items, cancellationToken);
+            var quote = BuildQuote(order, items, variants, reservations, allocations, priceSnapshots, wallet?.BalanceCents ?? 0,
                 WithReservationBlocker(items, reservations, inventorySummary.PaymentBlockers));
             var blockerError = ResolveBlockerError(quote.PaymentBlockers);
             if (blockerError != null)
@@ -184,7 +198,7 @@ public sealed class MarketplaceOrderCheckoutService
             if (wallet == null || wallet.BalanceCents < quote.TotalChargeCents)
                 return await RollbackFailureAsync<MarketplaceMarkPaidExecutionResult>(transaction, "balance", "INSUFFICIENT_WALLET_BALANCE", cancellationToken);
 
-            ConsumeReservations(items, reservations, variants, changedSkus, nowUtc);
+            await ConsumeReservationsAsync(items, reservations, variants, changedSkus, nowUtc, cancellationToken);
 
             // ReservedStock e uma projecao. Reconstroi a partir das reservas ativas
             // de outros pedidos para reparar contadores antigos sem liberar estoque alheio.
@@ -203,9 +217,31 @@ public sealed class MarketplaceOrderCheckoutService
             foreach (var item in items)
             {
                 var variant = variants[item.SabrVariantSku!];
-                item.CatalogUnitPriceCentsAtPayment = variant.CatalogPriceCents;
-                item.CostUnitPriceCentsAtPayment = variant.CostPriceCents;
-                item.ChargeLineTotalCentsAtPayment = checked(variant.CatalogPriceCents * item.Quantity);
+                var itemReservationIds = reservations.Where(x => x.MarketplaceOrderItemId == item.Id).Select(x => x.Id).ToHashSet();
+                var itemAllocations = allocations.Where(x => itemReservationIds.Contains(x.StockReservationId)).ToList();
+                var lotQuantity = itemAllocations.Where(x => x.Source == StockReservationSources.PrePurchasedLot).Sum(x => x.Quantity);
+                var generalQuantity = item.Quantity - lotQuantity;
+                priceSnapshots.TryGetValue(item.Id, out var priceSnapshot);
+                if (generalQuantity > 0 && priceSnapshot == null)
+                    throw new InvalidOperationException("Preço histórico não resolvido para estoque geral.");
+                var catalogCost = priceSnapshot?.CatalogPriceCents ?? 0;
+                var costTotal = itemAllocations.Where(x => x.Source == StockReservationSources.PrePurchasedLot)
+                    .Sum(x => checked((x.UnitCostCents ?? 0) * x.Quantity))
+                    + checked(catalogCost * Math.Max(0, generalQuantity));
+                item.CatalogUnitPriceCentsAtPayment = priceSnapshot?.CatalogPriceCents;
+                item.CostUnitPriceCentsAtPayment = item.Quantity > 0 ? costTotal / item.Quantity : null;
+                item.ChargeLineTotalCentsAtPayment = checked(catalogCost * Math.Max(0, generalQuantity));
+                item.CostSource = lotQuantity == 0 ? "CATALOG_PRICE" : generalQuantity == 0 ? "PREPURCHASED_LOT" : "MIXED";
+                item.EconomicAt = priceSnapshot?.EconomicAt ?? order.PaidAt ?? order.ChannelCreatedAt;
+                item.EconomicAtSource = priceSnapshot?.EconomicAtSource;
+                item.CatalogPriceVersionId = priceSnapshot?.VersionId;
+                item.CostReferencesJson = JsonSerializer.Serialize(itemAllocations.Select(x => new
+                {
+                    source = x.Source, lotId = x.SellerOwnedStockLotId, quantity = x.Quantity,
+                    unitCostCents = x.Source == StockReservationSources.PrePurchasedLot ? x.UnitCostCents : catalogCost,
+                    catalogPriceVersionId = x.Source == StockReservationSources.GeneralStock ? priceSnapshot?.VersionId : null,
+                    priceOrigin = x.Source == StockReservationSources.GeneralStock ? priceSnapshot?.Origin : "PREPURCHASED_LOT"
+                }));
             }
 
             wallet.BalanceCents -= quote.TotalChargeCents;
@@ -366,6 +402,8 @@ public sealed class MarketplaceOrderCheckoutService
         IReadOnlyCollection<MarketplaceOrderItem> items,
         IReadOnlyDictionary<string, ProductVariant> variants,
         IReadOnlyCollection<StockReservation> reservations,
+        IReadOnlyCollection<StockReservationAllocation> allocations,
+        IReadOnlyDictionary<Guid, HistoricalProductCost> priceSnapshots,
         long walletBalance,
         IReadOnlyCollection<string> inventoryBlockers)
     {
@@ -379,11 +417,18 @@ public sealed class MarketplaceOrderCheckoutService
                 || !variants.TryGetValue(item.SabrVariantSku, out var variant))
                 continue;
 
-            if (variant.CatalogPriceCents <= 0)
+            priceSnapshots.TryGetValue(item.Id, out var priceSnapshot);
+            if (priceSnapshot == null || priceSnapshot.CatalogPriceCents <= 0)
                 blockers.Add(MarketplaceOrderPaymentBlockers.PricingMissing);
 
-            var unitPrice = Math.Max(0, variant.CatalogPriceCents);
-            var lineTotal = checked(unitPrice * Math.Max(0, item.Quantity));
+            var itemReservationIds = reservations.Where(x => x.MarketplaceOrderItemId == item.Id).Select(x => x.Id).ToHashSet();
+            var itemAllocations = allocations.Where(x => itemReservationIds.Contains(x.StockReservationId)).ToList();
+            var allocatedQuantity = itemAllocations.Sum(x => x.Quantity);
+            var prePurchasedQuantity = itemAllocations.Where(x => x.Source == StockReservationSources.PrePurchasedLot).Sum(x => x.Quantity);
+            // Reservas legadas sem alocação persistida pertencem ao estoque geral.
+            var generalQuantity = itemAllocations.Count == 0 ? item.Quantity : allocatedQuantity - prePurchasedQuantity;
+            var unitPrice = Math.Max(0, priceSnapshot?.CatalogPriceCents ?? 0);
+            var lineTotal = checked(unitPrice * Math.Max(0, generalQuantity));
             subtotal = checked(subtotal + lineTotal);
             quoteItems.Add(new MarketplaceOrderPaymentQuoteItemResult
             {
@@ -437,6 +482,18 @@ public sealed class MarketplaceOrderCheckoutService
         };
     }
 
+    private async Task<Dictionary<Guid, HistoricalProductCost>> ResolvePriceSnapshotsAsync(
+        MarketplaceOrder order, IReadOnlyCollection<MarketplaceOrderItem> items, CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<Guid, HistoricalProductCost>();
+        foreach (var item in items)
+        {
+            var snapshot = await _historicalCosts.ResolveAsync(order, item, cancellationToken);
+            if (snapshot != null) result[item.Id] = snapshot;
+        }
+        return result;
+    }
+
     private static IReadOnlyCollection<string> WithReservationBlocker(
         IReadOnlyCollection<MarketplaceOrderItem> items,
         IReadOnlyCollection<StockReservation> reservations,
@@ -464,12 +521,13 @@ public sealed class MarketplaceOrderCheckoutService
             && required.All(pair => reserved.GetValueOrDefault(pair.Key) >= pair.Value);
     }
 
-    private static void ConsumeReservations(
+    private async Task ConsumeReservationsAsync(
         IReadOnlyCollection<MarketplaceOrderItem> items,
         IReadOnlyCollection<StockReservation> reservations,
         IReadOnlyDictionary<string, ProductVariant> variants,
         ISet<string> changedSkus,
-        DateTimeOffset nowUtc)
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
     {
         var requiredBySku = items
             .Where(item => MarketplaceMappingStates.IsMapped(item.MappingState) && !string.IsNullOrWhiteSpace(item.SabrVariantSku))
@@ -483,9 +541,9 @@ public sealed class MarketplaceOrderCheckoutService
             var original = Math.Max(0, reservation.Quantity);
             var already = consumedBySku.GetValueOrDefault(reservation.SabrVariantSku);
             var consume = Math.Min(original, Math.Max(0, requiredBySku.GetValueOrDefault(reservation.SabrVariantSku) - already));
-            reservation.Quantity = consume;
-            reservation.Status = consume > 0 ? StockReservationStatus.Consumed : StockReservationStatus.Released;
-            reservation.UpdatedAt = nowUtc;
+            if (consume != original)
+                throw new InvalidOperationException("A reserva persistida deve ser consumida exatamente pela origem alocada.");
+            await _reservationAllocations.ConsumeAsync(reservation, variants[reservation.SabrVariantSku], nowUtc, cancellationToken);
             consumedBySku[reservation.SabrVariantSku] = already + consume;
             clearedBySku[reservation.SabrVariantSku] = clearedBySku.GetValueOrDefault(reservation.SabrVariantSku) + original;
         }
@@ -496,11 +554,7 @@ public sealed class MarketplaceOrderCheckoutService
         foreach (var sku in consumedBySku.Keys.Union(clearedBySku.Keys, StringComparer.Ordinal))
         {
             var variant = variants[sku];
-            variant.PhysicalStock = Math.Max(0, variant.PhysicalStock - consumedBySku.GetValueOrDefault(sku));
-            variant.ReservedStock = Math.Max(0, variant.ReservedStock - clearedBySku.GetValueOrDefault(sku));
             variant.AvailableStock = StockAvailabilityService.ComputeAvailable(variant);
-            variant.InventoryVersion = checked(variant.InventoryVersion + 1);
-            variant.UpdatedAt = nowUtc;
             changedSkus.Add(sku);
         }
     }

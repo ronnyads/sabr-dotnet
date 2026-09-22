@@ -33,7 +33,9 @@ public sealed class StockAvailabilityService
 
     public static int ComputeAvailable(ProductVariant variant)
     {
-        return Math.Max(0, variant.PhysicalStock - variant.ReservedStock - variant.SafetyBuffer);
+        // ClientOwnedStock continua fisicamente no depósito, porém deixou de pertencer
+        // ao estoque geral disponível. A transferência para lote nunca reduz PhysicalStock.
+        return Math.Max(0, variant.PhysicalStock - variant.ClientOwnedStock - variant.ReservedStock - variant.SafetyBuffer);
     }
 
     public async Task SyncStockForSkusAsync(
