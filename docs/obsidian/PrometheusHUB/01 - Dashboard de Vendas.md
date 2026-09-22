@@ -115,3 +115,6 @@ A página inicial apresenta:
 - O painel separa faturamento bruto, líquido estimado, custo de catálogo, resultado operacional estimado e confirmação financeira externa. Resultado negativo parcial é apresentado como prejuízo **estimado**, não como lucro confirmado.
 - Custo ausente ou SKU não vinculado é pendência, nunca custo zero ou preço de venda usado como substituto.
 - A confirmação do custo interno ocorre no checkout da carteira; a confirmação externa depende de conciliação própria e não bloqueia a operação.
+- Um anúncio/variação que não pertence ao catálogo PrometheusHUB pode ser classificado pelo cliente como **produto de fornecedor externo**. A identidade é isolada por tenant, cliente, provider, seller, item e variação, com fornecedor e auditoria.
+- Produto externo sem custo fica em `EXTERNAL_COST_PENDING`: permanece visível no bucket externo, mas suas linhas não entram nos totais de vendas ou lucro. Com custo informado, novas vendas passam a entrar nos resultados e podem produzir lucro ou prejuízo.
+- O dashboard expõe separadamente quantidade de produtos externos, itens com custo e itens com custo pendente. Desfazer a classificação devolve o anúncio à fila de vínculo interno.

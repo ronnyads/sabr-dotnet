@@ -49,6 +49,38 @@ public sealed class MarketplaceUnmappedItemDto
     public int OrdersAffected { get; set; }
     public int TotalUnits { get; set; }
     public DateTimeOffset LatestImportedAt { get; set; }
+    public bool IsExternalProduct { get; set; }
+    public string? ExternalSupplierName { get; set; }
+    public long? ExternalUnitCostCents { get; set; }
+    public string? ExternalCurrencyId { get; set; }
+    public bool ExternalCostPending { get; set; }
+}
+
+public sealed class MarketplaceExternalSupplierRequest
+{
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public MarketplaceProvider Provider { get; set; }
+    public Guid? IntegrationId { get; set; }
+    public string? SellerId { get; set; }
+    public string ExternalItemId { get; set; } = string.Empty;
+    public string? ExternalVariationId { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+    public string? Reason { get; set; }
+    public long? UnitCostCents { get; set; }
+    public string? CurrencyId { get; set; }
+}
+
+public sealed class MarketplaceExternalSupplierResult
+{
+    public Guid ClassificationId { get; set; }
+    public long Version { get; set; }
+    public string Classification { get; set; } = string.Empty;
+    public string? SupplierName { get; set; }
+    public string? Reason { get; set; }
+    public long? UnitCostCents { get; set; }
+    public string? CurrencyId { get; set; }
+    public DateTimeOffset EffectiveAt { get; set; }
+    public int ItemsAffected { get; set; }
 }
 
 public sealed class MarketplaceUpsertMappingRequest
@@ -77,7 +109,11 @@ public sealed record MarketplaceItemResolutionResult(
     string? ChannelSku,
     string ResolutionSource,
     Guid? MappingId = null,
-    long? MappingVersion = null);
+    long? MappingVersion = null,
+    string? ExternalSupplierName = null,
+    long? ExternalUnitCostCents = null,
+    string? ExternalCostCurrencyId = null,
+    Guid? ExternalCostVersionId = null);
 
 public static class MarketplaceMappingReasonCodes
 {
@@ -89,4 +125,6 @@ public static class MarketplaceMappingReasonCodes
     public const string UnmappedSkuNotAuthorized = "unmapped_sku_not_authorized";
     public const string UnmappedMappedSkuNotAuthorized = "unmapped_mapping_not_authorized";
     public const string UnmappedNoImportedItems = "unmapped_no_imported_items";
+    public const string ExternalSupplierClassification = "external_supplier_classification";
+    public const string ExternalSupplierCostPending = "external_supplier_cost_pending";
 }

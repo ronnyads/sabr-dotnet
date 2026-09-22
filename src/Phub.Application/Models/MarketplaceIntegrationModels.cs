@@ -158,6 +158,8 @@ public static class MarketplaceMappingStates
     public const string UnmappedAmbiguousChannelSku = "UNMAPPED_AMBIGUOUS_CHANNEL_SKU";
     public const string UnmappedSkuNotAuthorized = "UNMAPPED_SKU_NOT_AUTHORIZED";
     public const string UnmappedMappingNotAuthorized = "UNMAPPED_MAPPING_NOT_AUTHORIZED";
+    public const string ExternalSupplier = "EXTERNAL_SUPPLIER";
+    public const string ExternalCostPending = "EXTERNAL_COST_PENDING";
 
     public static bool IsMapped(string? value)
         => string.Equals(value, Mapped, StringComparison.Ordinal)
@@ -172,6 +174,10 @@ public static class MarketplaceMappingStates
            || string.Equals(value, UnmappedAmbiguousChannelSku, StringComparison.Ordinal)
            || string.Equals(value, UnmappedSkuNotAuthorized, StringComparison.Ordinal)
            || string.Equals(value, UnmappedMappingNotAuthorized, StringComparison.Ordinal);
+
+    public static bool IsExternal(string? value)
+        => string.Equals(value, ExternalSupplier, StringComparison.Ordinal)
+           || string.Equals(value, ExternalCostPending, StringComparison.Ordinal);
 }
 
 public sealed class MercadoLivreTokenResponse
@@ -431,6 +437,17 @@ public sealed class ClientSalesDashboardResult
     public List<ClientSalesSkuResult> TopSkus { get; set; } = new();
     public List<ClientSalesStatusResult> Statuses { get; set; } = new();
     public ClientShippingTodayResult ShippingToday { get; set; } = new();
+    public ExternalSupplierSalesSummary ExternalSupplier { get; set; } = new();
+}
+
+public sealed class ExternalSupplierSalesSummary
+{
+    public int Products { get; set; }
+    public int Orders { get; set; }
+    public int Units { get; set; }
+    public decimal GrossRevenue { get; set; }
+    public int ProductsWithCost { get; set; }
+    public int ProductsPendingCost { get; set; }
 }
 
 public sealed class ClientShippingTodayResult
@@ -478,6 +495,11 @@ public sealed class ClientSalesSkuResult
     public DateTimeOffset? EarliestDeadlineAt { get; set; }
     public string MappingPriority { get; set; } = "NORMAL";
     public string MappingReason { get; set; } = string.Empty;
+    public bool IsExternalSupplier { get; set; }
+    public bool HasExternalCost { get; set; }
+    public string? ExternalSupplierName { get; set; }
+    public long? ExternalUnitCostCents { get; set; }
+    public string? ExternalCurrencyId { get; set; }
 }
 
 public sealed class ClientSalesStatusResult

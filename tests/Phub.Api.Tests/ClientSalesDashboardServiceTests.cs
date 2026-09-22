@@ -168,6 +168,49 @@ public sealed class ClientSalesDashboardServiceTests
         Assert.Equal("SKU-TODAY", Assert.Single(result.ShippingToday.Products).Sku);
     }
 
+    [Fact]
+    public async Task GetAsync_SeparatesExternalSupplierSalesAndCostCoverage()
+    {
+        await using var db = CreateDb();
+        const string tenantId = "tenant-external-dashboard";
+        var clientId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        var paid = CreateOrder(tenantId, clientId, "ORDER-EXTERNAL", "paid", now.AddHours(-1), 80m);
+        paid.Items.Add(
+            new MarketplaceOrderItem
+            {
+                TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = paid.SellerId, MlItemId = "EXT-WITH-COST", ProductName = "Produto externo A",
+                Quantity = 2, UnitPrice = 20m, SaleFee = 2m, CurrencyId = "BRL",
+                MappingState = "EXTERNAL_SUPPLIER", ExternalSupplierName = "Fornecedor A",
+                ExternalUnitCostCentsSnapshot = 900, ExternalCostVersionId = Guid.NewGuid(), RawJson = "{}"
+            });
+        paid.Items.Add(
+            new MarketplaceOrderItem
+            {
+                TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = paid.SellerId, MlItemId = "EXT-PENDING", ProductName = "Produto externo B",
+                Quantity = 1, UnitPrice = 40m, SaleFee = 4m, CurrencyId = "BRL",
+                MappingState = "EXTERNAL_COST_PENDING", ExternalSupplierName = "Fornecedor B", RawJson = "{}"
+            });
+        db.MarketplaceOrders.Add(paid);
+        await db.SaveChangesAsync();
+
+        var result = await new ClientSalesDashboardService(db).GetAsync(
+            tenantId, clientId, now.AddDays(-1), now.AddMinutes(1), MarketplaceProvider.MercadoLivre);
+
+        Assert.Equal(2, result.ExternalSupplier.Products);
+        Assert.Equal(1, result.ExternalSupplier.Orders);
+        Assert.Equal(3, result.ExternalSupplier.Units);
+        Assert.Equal(80m, result.ExternalSupplier.GrossRevenue);
+        Assert.Equal(1, result.ExternalSupplier.ProductsWithCost);
+        Assert.Equal(1, result.ExternalSupplier.ProductsPendingCost);
+        Assert.Equal(40m, result.GrossRevenue);
+        Assert.Equal(2, result.TotalUnits);
+        Assert.All(result.Products, product => Assert.True(product.IsExternalSupplier));
+        Assert.Contains(result.Products, product => product.MappingPriority == "EXTERNAL_COST_PENDING");
+    }
+
     private static MarketplaceOrder CreateOrder(
         string tenantId,
         Guid clientId,

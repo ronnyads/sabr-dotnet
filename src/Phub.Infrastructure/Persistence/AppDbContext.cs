@@ -47,6 +47,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
     public DbSet<ProductPriceVersion> ProductPriceVersions => Set<ProductPriceVersion>();
     public DbSet<TenantMarketplaceConnection> TenantMarketplaceConnections => Set<TenantMarketplaceConnection>();
     public DbSet<TenantMarketplaceListingMap> TenantMarketplaceListingMaps => Set<TenantMarketplaceListingMap>();
+    public DbSet<MarketplaceListingClassificationVersion> MarketplaceListingClassificationVersions => Set<MarketplaceListingClassificationVersion>();
     public DbSet<ProductMarketplaceCategoryLock> ProductMarketplaceCategoryLocks => Set<ProductMarketplaceCategoryLock>();
     public DbSet<MarketplaceOrder> MarketplaceOrders => Set<MarketplaceOrder>();
     public DbSet<MarketplaceOrderNumberSequence> MarketplaceOrderNumberSequences => Set<MarketplaceOrderNumberSequence>();
@@ -1311,6 +1312,41 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<MarketplaceListingClassificationVersion>(entity =>
+        {
+            entity.ToTable("marketplace_listing_classification_versions", table =>
+            {
+                table.HasCheckConstraint("ck_marketplace_listing_classification", "classification IN ('EXTERNAL_SUPPLIER','PENDING')");
+                table.HasCheckConstraint("ck_marketplace_listing_external_supplier", "classification <> 'EXTERNAL_SUPPLIER' OR (supplier_name IS NOT NULL AND length(trim(supplier_name)) > 0)");
+                table.HasCheckConstraint("ck_marketplace_listing_external_cost", "external_unit_cost_cents IS NULL OR external_unit_cost_cents >= 0");
+                table.HasCheckConstraint("ck_marketplace_listing_external_currency", "external_unit_cost_cents IS NULL OR currency_id IS NOT NULL");
+                table.HasCheckConstraint("ck_marketplace_listing_classification_version", "version > 0");
+            });
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.TenantId).HasColumnName("tenant_id").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.ClientId).HasColumnName("client_id").IsRequired();
+            entity.Property(e => e.Provider).HasColumnName("provider").IsRequired();
+            entity.Property(e => e.IntegrationId).HasColumnName("integration_id");
+            entity.Property(e => e.SellerId).HasColumnName("seller_id").IsRequired();
+            entity.Property(e => e.ExternalItemId).HasColumnName("external_item_id").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.ExternalVariationKey).HasColumnName("external_variation_key").HasMaxLength(80).IsRequired();
+            entity.Property(e => e.Classification).HasColumnName("classification").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.SupplierName).HasColumnName("supplier_name").HasMaxLength(200);
+            entity.Property(e => e.Reason).HasColumnName("reason").HasMaxLength(1000);
+            entity.Property(e => e.ExternalUnitCostCents).HasColumnName("external_unit_cost_cents");
+            entity.Property(e => e.CurrencyId).HasColumnName("currency_id").HasMaxLength(3);
+            entity.Property(e => e.EffectiveAt).HasColumnName("effective_at").IsRequired();
+            entity.Property(e => e.Version).HasColumnName("version").IsRequired();
+            entity.Property(e => e.IsCurrent).HasColumnName("is_current").IsRequired();
+            entity.Property(e => e.ActorId).HasColumnName("actor_id");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.ExternalItemId, e.ExternalVariationKey, e.Version })
+                .IsUnique().HasDatabaseName("ux_marketplace_listing_classification_scope_version");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.SellerId, e.ExternalItemId, e.ExternalVariationKey })
+                .HasFilter("is_current = true").IsUnique().HasDatabaseName("ux_marketplace_listing_classification_current");
+        });
+
         modelBuilder.Entity<ProductPriceVersion>(entity =>
         {
             entity.ToTable("product_price_versions", table =>
@@ -1421,6 +1457,10 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.MappingSnapshotVersion).HasColumnName("mapping_snapshot_version");
             entity.Property(e => e.MappingResolutionReason).HasColumnName("mapping_resolution_reason").HasMaxLength(80);
             entity.Property(e => e.MappingResolvedAt).HasColumnName("mapping_resolved_at");
+            entity.Property(e => e.ExternalSupplierName).HasColumnName("external_supplier_name").HasMaxLength(200);
+            entity.Property(e => e.ExternalUnitCostCentsSnapshot).HasColumnName("external_unit_cost_cents_snapshot");
+            entity.Property(e => e.ExternalCostCurrencyId).HasColumnName("external_cost_currency_id").HasMaxLength(3);
+            entity.Property(e => e.ExternalCostVersionId).HasColumnName("external_cost_version_id");
             entity.Property(e => e.RawJson).HasColumnName("raw_json").HasColumnType("jsonb");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
@@ -1428,6 +1468,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasCheckConstraint("ck_marketplace_order_items_reserved_non_negative", "\"reserved_quantity\" >= 0");
             entity.HasCheckConstraint("ck_marketplace_order_items_prices_non_negative", "(\"unit_price\" IS NULL OR \"unit_price\" >= 0) AND (\"full_unit_price\" IS NULL OR \"full_unit_price\" >= 0) AND (\"gross_price\" IS NULL OR \"gross_price\" >= 0) AND (\"sale_fee\" IS NULL OR \"sale_fee\" >= 0)");
             entity.HasCheckConstraint("ck_marketplace_order_items_payment_prices_non_negative", "(\"catalog_unit_price_cents_at_payment\" IS NULL OR \"catalog_unit_price_cents_at_payment\" >= 0) AND (\"cost_unit_price_cents_at_payment\" IS NULL OR \"cost_unit_price_cents_at_payment\" >= 0) AND (\"charge_line_total_cents_at_payment\" IS NULL OR \"charge_line_total_cents_at_payment\" >= 0)");
+            entity.HasCheckConstraint("ck_marketplace_order_items_external_cost_non_negative", "\"external_unit_cost_cents_snapshot\" IS NULL OR \"external_unit_cost_cents_snapshot\" >= 0");
             entity.HasCheckConstraint("ck_marketplace_order_items_sku_format", "\"sabr_variant_sku\" IS NULL OR \"sabr_variant_sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");
             entity.HasIndex(e => new { e.MarketplaceOrderId, e.MlItemId, e.MlVariationId })
                 .IsUnique()

@@ -68,10 +68,12 @@ public sealed class ClientSalesDashboardService
 
         var currentPaid = current.Where(IsRevenueOrder).ToList();
         var previousPaid = previous.Where(IsRevenueOrder).ToList();
-        var grossRevenue = currentPaid.Sum(OrderRevenue);
-        var previousRevenue = previousPaid.Sum(OrderRevenue);
-        var fees = currentPaid.SelectMany(order => order.Items).Sum(item => item.SaleFee ?? 0m);
-        var totalUnits = currentPaid.SelectMany(order => order.Items).Sum(item => item.Quantity);
+        var includedPaid = currentPaid.Where(order => order.Items.Any(IsIncludedInSalesResult)).ToList();
+        var previousIncludedPaid = previousPaid.Where(order => order.Items.Any(IsIncludedInSalesResult)).ToList();
+        var grossRevenue = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue);
+        var previousRevenue = previousIncludedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue);
+        var fees = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.SaleFee ?? 0m);
+        var totalUnits = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.Quantity);
 
         var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, ResolveSaoPauloTimeZone()).Date);
         var products = currentPaid
@@ -88,6 +90,12 @@ public sealed class ClientSalesDashboardService
                 Units = group.Sum(row => row.Item.Quantity),
                 Revenue = Math.Round(group.Sum(row => ItemRevenue(row.Item)), 2),
                 IsMapped = group.All(row => !string.IsNullOrWhiteSpace(row.Item.SabrVariantSku)),
+                IsExternalSupplier = group.All(row => IsExternalSupplier(row.Item)),
+                HasExternalCost = group.All(row => row.Item.ExternalUnitCostCentsSnapshot.HasValue),
+                ExternalSupplierName = group.Select(row => row.Item.ExternalSupplierName)
+                    .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
+                ExternalUnitCostCents = group.Select(row => row.Item.ExternalUnitCostCentsSnapshot).FirstOrDefault(value => value.HasValue),
+                ExternalCurrencyId = group.Select(row => row.Item.ExternalCostCurrencyId).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
                 OverdueOrders = group.Where(row => !row.Order.SabrPaymentConfirmedAt.HasValue
                     && row.Order.ShipByDeadlineAt.HasValue && row.Order.ShipByDeadlineAt.Value < now)
                     .Select(row => row.Order.Id).Distinct().Count(),
@@ -110,15 +118,29 @@ public sealed class ClientSalesDashboardService
             .ThenByDescending(row => row.Revenue)
             .ThenBy(row => row.ProductName)
             .ToList();
-        foreach (var product in products.Where(product => !product.IsMapped))
+        foreach (var product in products.Where(product => !product.IsMapped && !product.IsExternalSupplier))
         {
             product.MappingPriority = product.OverdueOrders > 0 ? "OVERDUE"
                 : product.DueTodayOrders > 0 ? "DUE_TODAY" : "PENDING";
             product.MappingReason = product.OverdueOrders > 0 ? "Pedido com prazo vencido"
                 : product.DueTodayOrders > 0 ? "Pedido para enviar hoje" : "Produto vendido sem SKU interno";
         }
+        foreach (var product in products.Where(product => product.IsExternalSupplier))
+        {
+            product.MappingPriority = product.HasExternalCost ? MarketplaceMappingStates.ExternalSupplier : MarketplaceMappingStates.ExternalCostPending;
+            product.MappingReason = product.HasExternalCost
+                ? "Produto de fornecedor externo com custo informado"
+                : "Informe o custo do produto externo para concluir a apuração";
+        }
 
-        var dailyLookup = currentPaid
+        var externalProducts = products.Where(product => product.IsExternalSupplier).ToList();
+        var externalOrderIds = currentPaid
+            .Where(order => order.Items.Any(IsExternalSupplier))
+            .Select(order => order.Id)
+            .Distinct()
+            .Count();
+
+        var dailyLookup = includedPaid
             .GroupBy(order => DateOnly.FromDateTime(EffectiveDate(order).UtcDateTime.Date))
             .ToDictionary(
                 group => group.Key,
@@ -126,8 +148,8 @@ public sealed class ClientSalesDashboardService
                 {
                     Date = group.Key,
                     Orders = group.Count(),
-                    Units = group.SelectMany(order => order.Items).Sum(item => item.Quantity),
-                    Revenue = Math.Round(group.Sum(OrderRevenue), 2)
+                    Units = group.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.Quantity),
+                    Revenue = Math.Round(group.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue), 2)
                 });
 
         var dailySales = new List<ClientSalesDailyResult>();
@@ -170,24 +192,33 @@ public sealed class ClientSalesDashboardService
             LastSyncedAt = lastSyncedAt,
             CurrencyId = currentPaid.Select(order => order.CurrencyId).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "BRL",
             TotalOrders = current.Count,
-            PaidOrders = currentPaid.Count,
+            PaidOrders = includedPaid.Count,
             TotalUnits = totalUnits,
             GrossRevenue = Math.Round(grossRevenue, 2),
             MarketplaceFees = Math.Round(fees, 2),
             NetRevenue = Math.Round(grossRevenue - fees, 2),
-            AverageTicket = currentPaid.Count == 0 ? 0 : Math.Round(grossRevenue / currentPaid.Count, 2),
+            AverageTicket = includedPaid.Count == 0 ? 0 : Math.Round(grossRevenue / includedPaid.Count, 2),
             CancelledOrders = current.Count(order => NormalizeStatus(order.Status).Contains("cancel", StringComparison.Ordinal)),
             UnmappedUnits = currentPaid.SelectMany(order => order.Items)
-                .Where(item => string.IsNullOrWhiteSpace(item.SabrVariantSku))
+                .Where(item => string.IsNullOrWhiteSpace(item.SabrVariantSku) && !IsExternalSupplier(item))
                 .Sum(item => item.Quantity),
             OrdersChangePercent = PercentageChange(current.Count, previous.Count),
             RevenueChangePercent = PercentageChange(grossRevenue, previousRevenue),
             DailySales = dailySales,
             TotalProducts = products.Count,
             Products = products,
-            TopSkus = products.Take(10).ToList(),
+            TopSkus = products.Where(product => !product.IsExternalSupplier || product.HasExternalCost).Take(10).ToList(),
             Statuses = statuses,
             ShippingToday = shippingToday
+            ,ExternalSupplier = new ExternalSupplierSalesSummary
+            {
+                Products = externalProducts.Count,
+                Orders = externalOrderIds,
+                Units = externalProducts.Sum(product => product.Units),
+                GrossRevenue = Math.Round(externalProducts.Sum(product => product.Revenue), 2),
+                ProductsWithCost = externalProducts.Count(product => product.HasExternalCost),
+                ProductsPendingCost = externalProducts.Count(product => !product.HasExternalCost)
+            }
         };
     }
 
@@ -319,6 +350,12 @@ public sealed class ClientSalesDashboardService
 
     private static bool IsCancelled(string? status)
         => NormalizeStatus(status).Contains("cancel", StringComparison.Ordinal);
+
+    private static bool IsExternalSupplier(MarketplaceOrderItem item)
+        => MarketplaceMappingStates.IsExternal(item.MappingState);
+
+    private static bool IsIncludedInSalesResult(MarketplaceOrderItem item)
+        => item.MappingState != MarketplaceMappingStates.ExternalCostPending;
 
     private static TimeZoneInfo ResolveSaoPauloTimeZone()
     {

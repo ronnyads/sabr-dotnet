@@ -58,6 +58,14 @@ public sealed class FinancialProfitabilityService
         var activeSet = activeIds.ToHashSet();
         var activeEntries = allEntries.Where(x => activeSet.Contains(x.Id)).ToList();
 
+        var externalItems = await _db.MarketplaceOrderItems.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId
+                        && orderIds.Contains(x.MarketplaceOrderId)
+                        && (x.MappingState == MarketplaceMappingStates.ExternalSupplier
+                            || x.MappingState == MarketplaceMappingStates.ExternalCostPending))
+            .ToListAsync(cancellationToken);
+        var externalItemIds = externalItems.Select(x => x.Id).ToHashSet();
+
         var estimatedByKey = allEntries.Where(x => x.Status == FinancialEntryStatuses.Estimated)
             .GroupBy(x => x.EconomicKey).ToDictionary(x => x.Key, x => x.OrderByDescending(e => e.ObservedAt).First());
         var confirmedByKey = allEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed)
@@ -92,7 +100,18 @@ public sealed class FinancialProfitabilityService
         // single CurrencyId per response, so totals are scoped to that same dominant
         // currency rather than silently mixing units.
         var dominantCurrencyId = activeEntries.Select(x => x.CurrencyId).FirstOrDefault() ?? "BRL";
-        var sameCurrencyEntries = activeEntries.Where(x => x.CurrencyId == dominantCurrencyId).ToList();
+        var allSameCurrencyEntries = activeEntries.Where(x => x.CurrencyId == dominantCurrencyId).ToList();
+        var pendingExternalItemIds = externalItems
+            .Where(x => !x.ExternalUnitCostCentsSnapshot.HasValue)
+            .Select(x => x.Id)
+            .ToHashSet();
+        // External products without a cost are disclosed separately and do not inflate
+        // either revenue or profit. Entries without item allocation remain at order
+        // grain; they are never distributed across SKUs by assumption.
+        var sameCurrencyEntries = allSameCurrencyEntries
+            .Where(x => !x.MarketplaceOrderItemId.HasValue
+                        || !pendingExternalItemIds.Contains(x.MarketplaceOrderItemId.Value))
+            .ToList();
         var gross = sameCurrencyEntries.Where(x => x.EntryType == FinancialEntryTypes.GrossSale).Sum(x => x.AmountCents);
         var externalNet = sameCurrencyEntries.Where(x => x.EntryType is not FinancialEntryTypes.ProductCost
                                                    and not FinancialEntryTypes.ProductCostRecovery
@@ -114,6 +133,17 @@ public sealed class FinancialProfitabilityService
             : costEntries.All(x => x.Status == FinancialEntryStatuses.Confirmed)
                 ? FinancialMaturity.Confirmed : FinancialMaturity.Estimated;
         var tax = taxRate <= 0 ? 0L : -checked((long)Math.Round(gross * taxRate / 10_000m, MidpointRounding.AwayFromZero));
+        var externalEntries = allSameCurrencyEntries
+            .Where(x => x.MarketplaceOrderItemId.HasValue && externalItemIds.Contains(x.MarketplaceOrderItemId.Value))
+            .ToList();
+        var externalGross = externalEntries.Where(x => x.EntryType == FinancialEntryTypes.GrossSale).Sum(x => x.AmountCents);
+        var externalAllocatedNet = externalEntries.Where(x => x.EntryType is not FinancialEntryTypes.ProductCost
+                                                      and not FinancialEntryTypes.ProductCostRecovery
+                                                      and not FinancialEntryTypes.SellerTaxEstimate)
+            .Sum(x => x.AmountCents);
+        var externalCost = externalEntries.Where(x => x.EntryType is FinancialEntryTypes.ProductCost
+            or FinancialEntryTypes.ProductCostRecovery).Sum(x => x.AmountCents);
+        var externalPendingCost = externalItems.Count(x => !x.ExternalUnitCostCentsSnapshot.HasValue);
 
         var lastOperational = await _db.TenantMarketplaceConnections.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
@@ -160,7 +190,19 @@ public sealed class FinancialProfitabilityService
                 Percentage = estimatedTotal == 0 ? null : Math.Round(delta * 100m / Math.Abs(estimatedTotal), 2),
                 ComponentsCents = componentDeltas
             },
-            IncompleteReasons = states.SelectMany(ReadReasons).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToList()
+            IncompleteReasons = states.SelectMany(ReadReasons).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToList(),
+            ExternalSupplier = new ExternalSupplierProfitabilityResult
+            {
+                Products = externalItems.Select(x => new { x.SellerId, x.MlItemId, x.MlVariationId }).Distinct().Count(),
+                Orders = externalItems.Select(x => x.MarketplaceOrderId).Distinct().Count(),
+                Units = externalItems.Sum(x => x.Quantity),
+                GrossRevenueCents = externalGross,
+                AllocatedMarketplaceNetCents = externalAllocatedNet,
+                ProductCostCents = externalCost,
+                // An incomplete cost must never be silently interpreted as zero profit.
+                OperationalProfitCents = externalPendingCost == 0 ? externalAllocatedNet + externalCost : null,
+                ItemsPendingCost = externalPendingCost
+            }
         };
     }
 

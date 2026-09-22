@@ -25,6 +25,7 @@ Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da op
 9. Preço de catálogo é fotografado no pedido e não muda retroativamente.
 10. Ausência de dado não equivale a zero.
 11. Corrigido em 20/09/2026 (achado 2.6 da auditoria `mercado-livre-360-auditoria.md`): `FinancialProfitabilityService.GetAsync` somava `AmountCents` de todas as chaves econômicas estimadas/confirmadas para compor `Divergence.AbsoluteCents`, mesmo quando uma chave só tinha um dos dois lados — violando esta mesma regra (item 10). Agora `estimatedTotal`/`confirmedTotal` só acumulam chaves com estimativa **e** confirmação, no mesmo laço que já faz esse pareamento para `componentDeltas`. Também passou a agrupar `gross`, `externalNet`, `productCost` e `ReconciledConfirmedValueCents` pela moeda dominante (`sameCurrencyEntries`) em vez de somar `AmountCents` entre moedas diferentes. Cobertura: `Profitability_DivergenceOnlyCountsKeysWithBothEstimateAndConfirmation` e `Profitability_KeepsTotalsInOneCurrency_WhenEntriesAreMixed` (`tests/Phub.Api.Tests/FinancialLedgerServiceTests.cs`).
+12. Custo de fornecedor externo é uma fonte própria, versionada por anúncio/variação e seller; nunca usa preço de venda nem `catalogPriceSnapshot` interno. A versão é resolvida pela data econômica e fotografada no item.
 
 ## Equação operacional por item e pedido
 
@@ -34,6 +35,8 @@ Billing confirma e concilia; nunca substitui Orders e Shipments como fonte da op
 `operationalMarginPct = operationalProfit / grossRevenue × 100`; faturamento zero deixa a margem não calculável.
 
 O custo vem apenas do SKU interno e do preço de catálogo fotografado. Preço de venda do anúncio nunca é fallback. SKU/custo ausente torna o pedido incompleto, sem zero inventado. O custo estimado passa a confirmado após débito interno por nova entrada append-only, preservando o snapshot. A UI distingue resultado parcial de valor confirmado e expõe a composição da conta.
+
+Para produtos explicitamente classificados como externos, o custo vem da versão externa informada pelo cliente. Sem versão vigente, o item fica `EXTERNAL_COST_PENDING` e é divulgado fora dos totais de vendas/lucro. Com custo vigente, receita, custo e margem entram normalmente. Alterar o custo cria nova versão com vigência atual; vendas anteriores mantêm o snapshot antigo. Valores de pedido/frete/reembolso sem alocação oficial continuam no grão de origem e nunca são rateados artificialmente.
 
 ## Maturidade
 

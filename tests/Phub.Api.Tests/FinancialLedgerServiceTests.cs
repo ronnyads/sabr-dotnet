@@ -331,6 +331,129 @@ public sealed class FinancialLedgerServiceTests
         Assert.Equal(5_500, result.OperationalProfitCents);
     }
 
+    [Fact]
+    public async Task Projection_UsesExternalCostSnapshot_WithoutTreatingExternalItemAsSkuPending()
+    {
+        await using var db = CreateDb();
+        var tenant = "tenant-external-cost";
+        var client = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenant, ClientId = client, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = 997, MlOrderId = "ORDER-EXTERNAL-COST", Status = "paid",
+            PaidAt = DateTimeOffset.UtcNow.AddDays(-1), ImportedAt = DateTimeOffset.UtcNow.AddDays(-1), CurrencyId = "BRL"
+        };
+        order.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenant, ClientId = client, Provider = order.Provider, SellerId = order.SellerId,
+            MlItemId = "EXT-1", Quantity = 2, UnitPrice = 50m, SaleFee = 10m,
+            MappingState = "EXTERNAL_SUPPLIER", ExternalSupplierName = "Fornecedor externo",
+            ExternalUnitCostCentsSnapshot = 1_500, ExternalCostVersionId = Guid.NewGuid(), RawJson = "{}"
+        });
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+
+        var projection = new OperationalFinancialProjectionService(db, new FinancialLedgerService(db));
+        await projection.ProjectOrderAsync(order.Id);
+
+        var state = await db.MarketplaceOrderFinancialStates.SingleAsync();
+        Assert.True(state.SkuResolved);
+        Assert.True(state.CostResolved);
+        Assert.DoesNotContain("SKU_PENDING", state.IncompleteReasonsJson);
+        Assert.DoesNotContain("EXTERNAL_COST_PENDING", state.IncompleteReasonsJson);
+        var cost = await db.MarketplaceFinancialEntries.SingleAsync(x => x.EntryType == FinancialEntryTypes.ProductCost);
+        Assert.Equal(-3_000, cost.AmountCents);
+        Assert.Contains("EXTERNAL_SUPPLIER", cost.MetadataJson);
+    }
+
+    [Fact]
+    public async Task Projection_ExternalItemWithoutCost_RemainsExplicitlyIncomplete()
+    {
+        await using var db = CreateDb();
+        var order = new MarketplaceOrder
+        {
+            TenantId = "tenant-external-pending", ClientId = Guid.NewGuid(), Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = 998, MlOrderId = "ORDER-EXTERNAL-PENDING", Status = "paid",
+            PaidAt = DateTimeOffset.UtcNow.AddDays(-1), ImportedAt = DateTimeOffset.UtcNow.AddDays(-1), CurrencyId = "BRL"
+        };
+        order.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = order.TenantId, ClientId = order.ClientId, Provider = order.Provider, SellerId = order.SellerId,
+            MlItemId = "EXT-2", Quantity = 1, UnitPrice = 60m, SaleFee = 6m,
+            MappingState = "EXTERNAL_COST_PENDING", ExternalSupplierName = "Fornecedor externo", RawJson = "{}"
+        });
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+
+        var projection = new OperationalFinancialProjectionService(db, new FinancialLedgerService(db));
+        await projection.ProjectOrderAsync(order.Id);
+
+        var state = await db.MarketplaceOrderFinancialStates.SingleAsync();
+        Assert.Equal(FinancialMaturity.Incomplete, state.Maturity);
+        Assert.True(state.SkuResolved);
+        Assert.False(state.CostResolved);
+        Assert.Contains("EXTERNAL_COST_PENDING", state.IncompleteReasonsJson);
+        Assert.DoesNotContain("SKU_PENDING", state.IncompleteReasonsJson);
+        Assert.DoesNotContain("CATALOG_COST_PENDING", state.IncompleteReasonsJson);
+
+        var profitability = await new FinancialProfitabilityService(db).GetAsync(
+            order.TenantId, order.ClientId, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow,
+            order.Provider, order.SellerId);
+        Assert.Equal(0, profitability.GrossRevenueCents);
+        Assert.Equal(1, profitability.ExternalSupplier.ItemsPendingCost);
+        Assert.Null(profitability.ExternalSupplier.OperationalProfitCents);
+    }
+
+    [Fact]
+    public async Task Profitability_ExternalBucket_DoesNotInventAllocationForOrderLevelValues()
+    {
+        await using var db = CreateDb();
+        var tenant = "tenant-external-bucket";
+        var client = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenant, ClientId = client, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = 999, MlOrderId = "ORDER-EXTERNAL-BUCKET", Status = "paid",
+            PaidAt = DateTimeOffset.UtcNow.AddDays(-1), ImportedAt = DateTimeOffset.UtcNow.AddDays(-1), CurrencyId = "BRL"
+        };
+        var item = new MarketplaceOrderItem
+        {
+            TenantId = tenant, ClientId = client, Provider = order.Provider, SellerId = order.SellerId,
+            MlItemId = "EXT-3", Quantity = 1, UnitPrice = 100m, SaleFee = 10m,
+            MappingState = MarketplaceMappingStates.ExternalSupplier, ExternalSupplierName = "Fornecedor externo",
+            ExternalUnitCostCentsSnapshot = 3_000, ExternalCostVersionId = Guid.NewGuid(), RawJson = "{}"
+        };
+        order.Items.Add(item);
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+        var ledger = new FinancialLedgerService(db);
+        foreach (var (type, cents, allocated) in new[]
+                 {
+                     (FinancialEntryTypes.GrossSale, 10_000L, true),
+                     (FinancialEntryTypes.SaleFee, -1_000L, true),
+                     (FinancialEntryTypes.ProductCost, -3_000L, true),
+                     (FinancialEntryTypes.SellerShippingCost, -500L, false),
+                     (FinancialEntryTypes.Refund, -200L, false)
+                 })
+        {
+            var request = CreateRequest(type, cents, $"external-{type}", FinancialEntryStatuses.Estimated,
+                tenant, client, order.Id, order.SellerId);
+            request.EconomicKey = $"ML:{order.SellerId}:ORDER:{order.MlOrderId}:{type}";
+            request.MarketplaceOrderItemId = allocated ? item.Id : null;
+            await ledger.AppendAsync(request);
+        }
+
+        var result = await new FinancialProfitabilityService(db).GetAsync(tenant, client,
+            DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow, order.Provider, order.SellerId);
+
+        Assert.True(result.ExternalSupplier.IsComplete);
+        Assert.Equal(10_000, result.ExternalSupplier.GrossRevenueCents);
+        Assert.Equal(9_000, result.ExternalSupplier.AllocatedMarketplaceNetCents);
+        Assert.Equal(-3_000, result.ExternalSupplier.ProductCostCents);
+        Assert.Equal(6_000, result.ExternalSupplier.OperationalProfitCents);
+        Assert.Equal(8_300, result.MarketplaceNetAmountCents); // includes unallocated shipping/refund at order grain
+    }
+
     private static AppendFinancialEntryRequest CreateRequest(string type, long cents, string idempotency, string status,
         string tenant = "tenant", Guid? client = null, Guid? order = null, long seller = 10) => new()
     {

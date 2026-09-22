@@ -177,6 +177,35 @@ public sealed class ClientMarketplaceMappingsController : ControllerBase
         return Ok(result.Data);
     }
 
+    [HttpPost("external-supplier")]
+    public async Task<IActionResult> ClassifyExternalSupplier(
+        [FromBody] MarketplaceExternalSupplierRequest? request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        if (request == null) return BadRequest(CreateApiError("VALIDATION_ERROR", "Payload is required."));
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
+        var result = await _mappingService.ClassifyExternalSupplierAsync(tenantId!, clientId, request, actorId, cancellationToken);
+        return result.Succeeded && result.Data != null ? Ok(result.Data) : MapValidationErrors(result.Errors, result.ErrorCode);
+    }
+
+    [HttpDelete("external-supplier")]
+    public async Task<IActionResult> RevertExternalSupplier(
+        [FromQuery] string provider,
+        [FromQuery] string sellerId,
+        [FromQuery] string externalItemId,
+        [FromQuery] string? externalVariationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        if (!TryParseProvider(provider, out var providerValue))
+            return BadRequest(CreateApiError("INVALID_PROVIDER", "Marketplace provider is invalid."));
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
+        var result = await _mappingService.RevertExternalSupplierAsync(
+            tenantId!, clientId, providerValue, sellerId, externalItemId, externalVariationId, actorId, cancellationToken);
+        return result.Succeeded && result.Data != null ? Ok(result.Data) : MapValidationErrors(result.Errors, result.ErrorCode);
+    }
+
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> DeleteMapping(Guid id, CancellationToken cancellationToken = default)
     {

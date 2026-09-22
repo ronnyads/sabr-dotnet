@@ -45,7 +45,22 @@ public sealed class OperationalFinancialProjectionService
                 -Math.Abs(ToCents(item.SaleFee ?? 0m)), $"ML:{order.SellerId}:ORDER:{order.MlOrderId}:ITEM:{line}:SALE_FEE",
                 occurredAt, currency, item.RawJson ?? "{}", cancellationToken);
 
-            if (!string.IsNullOrWhiteSpace(item.SabrVariantSku))
+            if (item.MappingState == MarketplaceMappingStates.ExternalSupplier && item.ExternalUnitCostCentsSnapshot.HasValue)
+            {
+                var productCostKey = $"PHUB:{order.ClientId}:ORDER:{order.MlOrderId}:ITEM:{line}:PRODUCT_COST";
+                var snapshot = JsonSerializer.Serialize(new
+                {
+                    item.ExternalSupplierName,
+                    externalUnitCostCents = item.ExternalUnitCostCentsSnapshot.Value,
+                    externalCostVersionId = item.ExternalCostVersionId,
+                    item.Quantity,
+                    source = "EXTERNAL_SUPPLIER"
+                });
+                await AppendIfNonZeroAsync(order, item, FinancialEntryTypes.ProductCost,
+                    -checked(item.ExternalUnitCostCentsSnapshot.Value * item.Quantity),
+                    productCostKey, occurredAt, currency, snapshot, cancellationToken);
+            }
+            else if (!string.IsNullOrWhiteSpace(item.SabrVariantSku))
             {
                 var productCostKey = $"PHUB:{order.ClientId}:ORDER:{order.MlOrderId}:ITEM:{line}:PRODUCT_COST";
                 var currentCost = await (from head in _db.FinancialEconomicHeads.AsNoTracking()
@@ -169,7 +184,8 @@ public sealed class OperationalFinancialProjectionService
 
         var itemIdsWithCost = activeEntries.Where(x => x.EntryType == FinancialEntryTypes.ProductCost && x.MarketplaceOrderItemId.HasValue)
             .Select(x => x.MarketplaceOrderItemId!.Value).ToHashSet();
-        var skuResolved = order.Items.Count > 0 && order.Items.All(x => !string.IsNullOrWhiteSpace(x.SabrVariantSku));
+        var skuResolved = order.Items.Count > 0 && order.Items.All(x => !string.IsNullOrWhiteSpace(x.SabrVariantSku)
+            || MarketplaceMappingStates.IsExternal(x.MappingState));
         var costResolved = order.Items.Count > 0 && order.Items.All(x => itemIdsWithCost.Contains(x.Id));
         var grossResolved = order.Items.Count > 0 && order.Items.All(x => x.GrossPrice.HasValue || x.UnitPrice.HasValue || x.FullUnitPrice.HasValue);
         var feeResolved = order.Items.Count > 0 && order.Items.All(x => x.SaleFee.HasValue);
@@ -185,7 +201,9 @@ public sealed class OperationalFinancialProjectionService
 
         var reasons = new List<string>();
         if (!skuResolved) reasons.Add("SKU_PENDING");
-        if (!costResolved) reasons.Add("CATALOG_COST_PENDING");
+        if (order.Items.Any(x => x.MappingState == MarketplaceMappingStates.ExternalCostPending)) reasons.Add("EXTERNAL_COST_PENDING");
+        if (order.Items.Any(x => !MarketplaceMappingStates.IsExternal(x.MappingState)
+                                 && !itemIdsWithCost.Contains(x.Id))) reasons.Add("CATALOG_COST_PENDING");
         if (!grossResolved) reasons.Add("GROSS_REVENUE_PENDING");
         if (!feeResolved) reasons.Add("MARKETPLACE_FEE_PENDING");
         if (!freightResolved) reasons.Add("SHIPPING_COST_PENDING");

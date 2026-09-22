@@ -40,4 +40,6 @@ A importação cria o catálogo e os mappings. O auto-mapping só é aceito quan
 
 Cada item de pedido grava um snapshot imutável do mapping (`mapping_snapshot_id`, versão, motivo e instante). Remapear um anúncio só altera pedidos recebidos depois da mudança; pedidos e reservas históricos não são reescritos.
 
+Anúncios de fornecedor externo não recebem SKU interno artificial. O cliente registra fornecedor e custo unitário na classificação versionada do anúncio/variação. Cada pedido captura a versão vigente em sua data econômica; alteração normal de custo vale apenas dali em diante. Ao remover a classificação externa, novas ocorrências voltam a exigir vínculo com produto interno, preservando snapshots anteriores.
+
 Os mappings armazenam identidades Legacy (`itemId`/`variationId`) e `userProductId`, permitindo que os adaptadores do Mercado Livre evoluam sem vazar o formato bruto para o domínio.

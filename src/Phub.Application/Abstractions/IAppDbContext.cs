@@ -37,6 +37,7 @@ public interface IAppDbContext
     DbSet<ProductPriceVersion> ProductPriceVersions { get; }
     DbSet<TenantMarketplaceConnection> TenantMarketplaceConnections { get; }
     DbSet<TenantMarketplaceListingMap> TenantMarketplaceListingMaps { get; }
+    DbSet<MarketplaceListingClassificationVersion> MarketplaceListingClassificationVersions { get; }
     DbSet<ProductMarketplaceCategoryLock> ProductMarketplaceCategoryLocks { get; }
     DbSet<MarketplaceOrder> MarketplaceOrders { get; }
     DbSet<MarketplaceOrderNumberSequence> MarketplaceOrderNumberSequences { get; }

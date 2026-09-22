@@ -79,6 +79,20 @@ public sealed class ClientProfitabilityResult
     public FinancialCoverageResult Coverage { get; set; } = new();
     public FinancialDivergenceResult Divergence { get; set; } = new();
     public List<string> IncompleteReasons { get; set; } = new();
+    public ExternalSupplierProfitabilityResult ExternalSupplier { get; set; } = new();
+}
+
+public sealed class ExternalSupplierProfitabilityResult
+{
+    public int Products { get; set; }
+    public int Orders { get; set; }
+    public int Units { get; set; }
+    public long GrossRevenueCents { get; set; }
+    public long AllocatedMarketplaceNetCents { get; set; }
+    public long ProductCostCents { get; set; }
+    public long? OperationalProfitCents { get; set; }
+    public int ItemsPendingCost { get; set; }
+    public bool IsComplete => ItemsPendingCost == 0;
 }
 
 public class ClientProfitabilityOrderResult

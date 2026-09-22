@@ -2178,6 +2178,56 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task ExternalSupplierCost_ResolvesVersionAtEconomicDateWithoutRewritingHistory()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-external-cost-history";
+        const string tenantSlug = "externalcosthistory";
+        const string sellerId = "2496573592";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var service = scope.ServiceProvider.GetRequiredService<MarketplaceOrderMappingService>();
+        var integrationId = await db.TenantMarketplaceConnections
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
+            .Select(x => x.Id).SingleAsync();
+        var now = DateTimeOffset.UtcNow;
+        db.MarketplaceListingClassificationVersions.AddRange(
+            new MarketplaceListingClassificationVersion
+            {
+                TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+                IntegrationId = integrationId, SellerId = ParseSellerId(sellerId), ExternalItemId = "MLB-EXT-HISTORY",
+                ExternalVariationKey = string.Empty, Classification = MarketplaceListingClassifications.ExternalSupplier,
+                SupplierName = "Fornecedor", ExternalUnitCostCents = 1_000, CurrencyId = "BRL",
+                EffectiveAt = now.AddDays(-2), Version = 1, IsCurrent = false, CreatedAt = now.AddDays(-2)
+            },
+            new MarketplaceListingClassificationVersion
+            {
+                TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+                IntegrationId = integrationId, SellerId = ParseSellerId(sellerId), ExternalItemId = "MLB-EXT-HISTORY",
+                ExternalVariationKey = string.Empty, Classification = MarketplaceListingClassifications.ExternalSupplier,
+                SupplierName = "Fornecedor", ExternalUnitCostCents = 1_500, CurrencyId = "BRL",
+                EffectiveAt = now, Version = 2, IsCurrent = true, CreatedAt = now
+            });
+        await db.SaveChangesAsync();
+
+        var historical = await service.ResolveImportedItemAsync(tenantId, clientId, MarketplaceProvider.MercadoLivre,
+            ParseSellerId(sellerId), integrationId, "MLB-EXT-HISTORY", null, null,
+            economicAt: now.AddDays(-1));
+        var current = await service.ResolveImportedItemAsync(tenantId, clientId, MarketplaceProvider.MercadoLivre,
+            ParseSellerId(sellerId), integrationId, "MLB-EXT-HISTORY", null, null,
+            economicAt: now.AddMinutes(1));
+
+        Assert.Equal(1_000, historical.ExternalUnitCostCents);
+        Assert.Equal(1, historical.MappingVersion);
+        Assert.Equal(1_500, current.ExternalUnitCostCents);
+        Assert.Equal(2, current.MappingVersion);
+    }
+
+    [Fact]
     public async Task BaseSkuWithMultipleAuthorizedVariants_RemainsPendingForManualChoice()
     {
         await _factory.ResetDatabaseAsync();

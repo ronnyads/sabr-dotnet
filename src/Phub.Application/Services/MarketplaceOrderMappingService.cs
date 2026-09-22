@@ -157,7 +157,9 @@ public sealed class MarketplaceOrderMappingService
                                || item.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
                                || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
-                               || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized));
+                               || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized
+                               || item.MappingState == MarketplaceMappingStates.ExternalSupplier
+                               || item.MappingState == MarketplaceMappingStates.ExternalCostPending));
 
         if (normalizedSellerId.HasValue)
         {
@@ -198,6 +200,11 @@ public sealed class MarketplaceOrderMappingService
                     OrdersAffected = group.Select(entry => entry.order.Id).Distinct().Count(),
                     TotalUnits = group.Sum(entry => entry.item.Quantity),
                     LatestImportedAt = group.Max(entry => entry.order.ImportedAt)
+                    ,IsExternalProduct = MarketplaceMappingStates.IsExternal(first.item.MappingState)
+                    ,ExternalSupplierName = first.item.ExternalSupplierName
+                    ,ExternalUnitCostCents = first.item.ExternalUnitCostCentsSnapshot
+                    ,ExternalCurrencyId = first.item.ExternalCostCurrencyId
+                    ,ExternalCostPending = first.item.MappingState == MarketplaceMappingStates.ExternalCostPending
                 };
             })
             .OrderByDescending(item => item.LatestImportedAt)
@@ -406,6 +413,152 @@ public sealed class MarketplaceOrderMappingService
             CreatedAt = existing.CreatedAt,
             UpdatedAt = existing.UpdatedAt
         });
+    }
+
+    public async Task<ServiceResult<MarketplaceExternalSupplierResult>> ClassifyExternalSupplierAsync(
+        string tenantId,
+        Guid clientId,
+        MarketplaceExternalSupplierRequest request,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var itemId = NormalizeKey(request.ExternalItemId);
+        var variationKey = NormalizeNullable(request.ExternalVariationId) ?? string.Empty;
+        var supplier = NormalizeNullable(request.SupplierName);
+        var sellerId = NormalizeSellerId(request.Provider, request.SellerId);
+        if (string.IsNullOrWhiteSpace(itemId) || supplier == null || sellerId == null)
+            return ServiceResult<MarketplaceExternalSupplierResult>.Failure(ServiceErrorCodes.ValidationError, "classification", "Item, seller e fornecedor sao obrigatorios.");
+        if (request.UnitCostCents < 0)
+            return ServiceResult<MarketplaceExternalSupplierResult>.Failure(ServiceErrorCodes.ValidationError, "unitCostCents", "O custo nao pode ser negativo.");
+        var currency = NormalizeNullable(request.CurrencyId)?.ToUpperInvariant();
+        if (request.UnitCostCents.HasValue && (currency == null || currency.Length != 3))
+            return ServiceResult<MarketplaceExternalSupplierResult>.Failure(ServiceErrorCodes.ValidationError, "currencyId", "Informe a moeda de tres letras ao definir o custo externo.");
+
+        var connection = await ResolveConnectionAsync(tenantId, clientId, request.Provider, sellerId, request.IntegrationId, cancellationToken);
+        if (!connection.Succeeded || connection.Data == null)
+            return ServiceResult<MarketplaceExternalSupplierResult>.Failure(connection.ErrorCode ?? ServiceErrorCodes.ValidationError, connection.Errors);
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var current = await _dbContext.MarketplaceListingClassificationVersions
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == request.Provider
+                && x.SellerId == connection.Data.SellerId && x.ExternalItemId == itemId
+                && x.ExternalVariationKey == variationKey && x.IsCurrent)
+            .OrderByDescending(x => x.Version).FirstOrDefaultAsync(cancellationToken);
+        var nextVersion = (current?.Version ?? 0) + 1;
+        if (current != null) current.IsCurrent = false;
+        var now = DateTimeOffset.UtcNow;
+        var version = new MarketplaceListingClassificationVersion
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = request.Provider,
+            IntegrationId = connection.Data.Id, SellerId = connection.Data.SellerId,
+            ExternalItemId = itemId, ExternalVariationKey = variationKey,
+            Classification = MarketplaceListingClassifications.ExternalSupplier,
+            SupplierName = supplier, Reason = NormalizeNullable(request.Reason),
+            ExternalUnitCostCents = request.UnitCostCents, CurrencyId = currency,
+            EffectiveAt = now, Version = nextVersion, IsCurrent = true,
+            ActorId = actorUserId == Guid.Empty ? null : actorUserId, CreatedAt = now
+        };
+        _dbContext.MarketplaceListingClassificationVersions.Add(version);
+
+        // Only unresolved/pending rows receive their first external snapshot. A later cost
+        // change never rewrites sales which already captured an earlier cost version.
+        var affectedItems = await _dbContext.MarketplaceOrderItems
+            .Include(x => x.MarketplaceOrder)
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == request.Provider
+                && x.SellerId == connection.Data.SellerId && x.MlItemId == itemId
+                && (x.MlVariationId ?? "") == variationKey
+                && (x.MappingState == MarketplaceMappingStates.Unmapped
+                    || x.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
+                    || x.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
+                    || x.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
+                    || x.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
+                    || x.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized
+                    || x.MappingState == MarketplaceMappingStates.ExternalCostPending))
+            .ToListAsync(cancellationToken);
+        foreach (var item in affectedItems)
+        {
+            var economicAt = item.MarketplaceOrder?.PaidAt
+                ?? item.MarketplaceOrder?.ChannelCreatedAt
+                ?? item.MarketplaceOrder?.ImportedAt
+                ?? item.CreatedAt;
+            // A normal cost change is never retroactive. Existing historical sales are
+            // classified as external, but remain cost-pending unless a version was
+            // already effective on their economic date.
+            var costApplies = request.UnitCostCents.HasValue && economicAt >= version.EffectiveAt;
+            item.SabrVariantSku = null;
+            item.MappingSnapshotId = null;
+            item.MappingSnapshotVersion = null;
+            item.MappingResolvedAt = now;
+            item.MappingState = costApplies
+                ? MarketplaceMappingStates.ExternalSupplier
+                : MarketplaceMappingStates.ExternalCostPending;
+            item.MappingResolutionReason = costApplies
+                ? MarketplaceMappingReasonCodes.ExternalSupplierClassification
+                : MarketplaceMappingReasonCodes.ExternalSupplierCostPending;
+            item.ExternalSupplierName = supplier;
+            item.ExternalUnitCostCentsSnapshot = costApplies ? request.UnitCostCents : null;
+            item.ExternalCostCurrencyId = costApplies ? currency : null;
+            item.ExternalCostVersionId = costApplies ? version.Id : null;
+            item.UpdatedAt = now;
+        }
+        AddClassificationAudit(tenantId, actorUserId, "MarketplaceListing.ClassifyExternalSupplier", version, affectedItems.Count);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return ServiceResult<MarketplaceExternalSupplierResult>.Success(ToExternalResult(version, affectedItems.Count));
+    }
+
+    public async Task<ServiceResult<MarketplaceExternalSupplierResult>> RevertExternalSupplierAsync(
+        string tenantId, Guid clientId, MarketplaceProvider provider, string? sellerId,
+        string externalItemId, string? externalVariationId, Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var itemId = NormalizeKey(externalItemId);
+        var variationKey = NormalizeNullable(externalVariationId) ?? string.Empty;
+        var normalizedSeller = NormalizeSellerId(provider, sellerId);
+        if (string.IsNullOrWhiteSpace(itemId) || normalizedSeller == null)
+            return ServiceResult<MarketplaceExternalSupplierResult>.Failure(ServiceErrorCodes.ValidationError, "classification", "Item e seller sao obrigatorios.");
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var current = await _dbContext.MarketplaceListingClassificationVersions
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == provider
+                && x.SellerId == normalizedSeller && x.ExternalItemId == itemId
+                && x.ExternalVariationKey == variationKey && x.IsCurrent)
+            .OrderByDescending(x => x.Version).FirstOrDefaultAsync(cancellationToken);
+        if (current == null || current.Classification != MarketplaceListingClassifications.ExternalSupplier)
+            return ServiceResult<MarketplaceExternalSupplierResult>.Failure(ServiceErrorCodes.NotFound, "classification", "Classificacao externa ativa nao encontrada.");
+        current.IsCurrent = false;
+        var now = DateTimeOffset.UtcNow;
+        var version = new MarketplaceListingClassificationVersion
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = provider, IntegrationId = current.IntegrationId,
+            SellerId = normalizedSeller.Value, ExternalItemId = itemId, ExternalVariationKey = variationKey,
+            Classification = MarketplaceListingClassifications.Pending, Reason = "external_supplier_classification_reverted",
+            EffectiveAt = now, Version = current.Version + 1, IsCurrent = true,
+            ActorId = actorUserId == Guid.Empty ? null : actorUserId, CreatedAt = now
+        };
+        _dbContext.MarketplaceListingClassificationVersions.Add(version);
+        var pendingItems = await _dbContext.MarketplaceOrderItems
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == provider
+                && x.SellerId == normalizedSeller && x.MlItemId == itemId && (x.MlVariationId ?? "") == variationKey
+                && (x.MappingState == MarketplaceMappingStates.ExternalSupplier || x.MappingState == MarketplaceMappingStates.ExternalCostPending)
+                && _dbContext.MarketplaceOrders.Any(o => o.Id == x.MarketplaceOrderId && o.SabrPaymentConfirmedAt == null))
+            .ToListAsync(cancellationToken);
+        foreach (var item in pendingItems)
+        {
+            item.MappingState = string.IsNullOrWhiteSpace(item.ChannelSku)
+                ? MarketplaceMappingStates.UnmappedMissingChannelSku : MarketplaceMappingStates.UnmappedUnknownChannelSku;
+            item.MappingResolutionReason = string.IsNullOrWhiteSpace(item.ChannelSku)
+                ? MarketplaceMappingReasonCodes.UnmappedMissingChannelSku : MarketplaceMappingReasonCodes.UnmappedUnknownChannelSku;
+            item.MappingResolvedAt = null;
+            item.ExternalSupplierName = null;
+            item.ExternalUnitCostCentsSnapshot = null;
+            item.ExternalCostCurrencyId = null;
+            item.ExternalCostVersionId = null;
+            item.UpdatedAt = now;
+        }
+        AddClassificationAudit(tenantId, actorUserId, "MarketplaceListing.RevertExternalSupplier", version, pendingItems.Count);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return ServiceResult<MarketplaceExternalSupplierResult>.Success(ToExternalResult(version, pendingItems.Count));
     }
 
     public async Task<int> ApplyMappingToPendingItemsAsync(
@@ -688,11 +841,38 @@ public sealed class MarketplaceOrderMappingService
         string? externalVariationId,
         string? channelSku,
         CancellationToken cancellationToken = default,
-        Guid? ignoredMappingId = null)
+        Guid? ignoredMappingId = null,
+        DateTimeOffset? economicAt = null)
     {
         var normalizedItemId = NormalizeKey(externalItemId);
         var normalizedVariationId = NormalizeNullable(externalVariationId);
         var normalizedChannelSku = NormalizeSku(channelSku);
+
+        var classificationAt = economicAt ?? DateTimeOffset.UtcNow;
+        var externalClassification = await _dbContext.MarketplaceListingClassificationVersions
+            .AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == provider
+                && x.SellerId == sellerId && x.ExternalItemId == normalizedItemId
+                && x.ExternalVariationKey == (normalizedVariationId ?? string.Empty)
+                && x.EffectiveAt <= classificationAt)
+            .OrderByDescending(x => x.EffectiveAt).ThenByDescending(x => x.Version)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (externalClassification?.Classification == MarketplaceListingClassifications.ExternalSupplier)
+        {
+            var hasCost = externalClassification.ExternalUnitCostCents.HasValue;
+            return new MarketplaceItemResolutionResult(
+                null,
+                hasCost ? MarketplaceMappingStates.ExternalSupplier : MarketplaceMappingStates.ExternalCostPending,
+                hasCost ? MarketplaceMappingReasonCodes.ExternalSupplierClassification : MarketplaceMappingReasonCodes.ExternalSupplierCostPending,
+                normalizedChannelSku,
+                "external_supplier_classification",
+                null,
+                externalClassification.Version,
+                externalClassification.SupplierName,
+                externalClassification.ExternalUnitCostCents,
+                externalClassification.CurrencyId,
+                externalClassification.Id);
+        }
 
         if (provider == MarketplaceProvider.MercadoLivre
             && InternalCatalogSkuPolicy.IsMarketplaceExternalIdentifier(normalizedChannelSku))
@@ -921,7 +1101,47 @@ public sealed class MarketplaceOrderMappingService
         item.MappingSnapshotVersion = resolution.MappingVersion;
         item.MappingResolutionReason = resolution.MappingReason;
         item.MappingResolvedAt = resolvedAt;
+        item.ExternalSupplierName = resolution.ExternalSupplierName;
+        item.ExternalUnitCostCentsSnapshot = resolution.ExternalUnitCostCents;
+        item.ExternalCostCurrencyId = resolution.ExternalCostCurrencyId;
+        item.ExternalCostVersionId = resolution.ExternalCostVersionId;
     }
+
+    private void AddClassificationAudit(string tenantId, Guid actorUserId, string action,
+        MarketplaceListingClassificationVersion version, int itemsAffected)
+    {
+        _dbContext.AuditEvents.Add(new AuditEvent
+        {
+            TenantId = tenantId,
+            ActorType = "TenantUser",
+            ActorId = actorUserId == Guid.Empty ? null : actorUserId,
+            Action = action,
+            Entity = nameof(MarketplaceListingClassificationVersion),
+            EntityId = version.Id,
+            RequestId = Guid.NewGuid(),
+            MetadataJson = JsonSerializer.Serialize(new
+            {
+                version.Provider, version.SellerId, version.ExternalItemId, version.ExternalVariationKey,
+                version.Classification, version.SupplierName, version.Reason,
+                version.ExternalUnitCostCents, version.CurrencyId, version.EffectiveAt,
+                version.Version, itemsAffected
+            })
+        });
+    }
+
+    private static MarketplaceExternalSupplierResult ToExternalResult(
+        MarketplaceListingClassificationVersion version, int itemsAffected) => new()
+    {
+        ClassificationId = version.Id,
+        Version = version.Version,
+        Classification = version.Classification,
+        SupplierName = version.SupplierName,
+        Reason = version.Reason,
+        UnitCostCents = version.ExternalUnitCostCents,
+        CurrencyId = version.CurrencyId,
+        EffectiveAt = version.EffectiveAt,
+        ItemsAffected = itemsAffected
+    };
 
     public static string FindMappingReason(MarketplaceProvider provider, string? rawJson, string? mappingState, bool hasResolvedSku)
     {

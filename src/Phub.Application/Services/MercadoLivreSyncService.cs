@@ -618,7 +618,8 @@ public sealed class MercadoLivreSyncService
                 incomingItem.MlItemId,
                 incomingItem.MlVariationId,
                 channelSku: incomingItem.ChannelSku,
-                cancellationToken);
+                cancellationToken,
+                economicAt: details.PaidAt ?? details.ChannelCreatedAt ?? nowUtc);
             orderItem.Quantity = incomingItem.Quantity;
             orderItem.ChannelSku = incomingItem.ChannelSku;
             if (!orderItem.MappingResolvedAt.HasValue)

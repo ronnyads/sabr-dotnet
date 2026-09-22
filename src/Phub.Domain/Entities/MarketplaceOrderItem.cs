@@ -35,6 +35,10 @@ public sealed class MarketplaceOrderItem
     public long? MappingSnapshotVersion { get; set; }
     public string? MappingResolutionReason { get; set; }
     public DateTimeOffset? MappingResolvedAt { get; set; }
+    public string? ExternalSupplierName { get; set; }
+    public long? ExternalUnitCostCentsSnapshot { get; set; }
+    public string? ExternalCostCurrencyId { get; set; }
+    public Guid? ExternalCostVersionId { get; set; }
     public string? RawJson { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
