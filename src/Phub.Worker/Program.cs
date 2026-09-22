@@ -140,6 +140,9 @@ try
     builder.Services.AddScoped<MarketplaceOrderMappingService>();
     builder.Services.AddScoped<MarketplaceOrderNumberService>();
     builder.Services.AddScoped<MarketplaceOrderInventoryService>();
+    builder.Services.AddScoped<StockReservationAllocationService>();
+    builder.Services.AddScoped<HistoricalProductCostService>();
+    builder.Services.AddScoped<SellerOwnedStockLotService>();
     builder.Services.AddScoped<MarketplaceOrderPaymentService>();
     builder.Services.AddScoped<MarketplaceOrderCheckoutService>();
     builder.Services.AddScoped<MarketplaceShipmentLabelService>();
