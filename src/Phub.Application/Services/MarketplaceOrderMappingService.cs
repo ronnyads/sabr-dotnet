@@ -447,11 +447,15 @@ public sealed class MarketplaceOrderMappingService
                 && x.ExternalVariationKey == variationKey && x.IsCurrent)
             .OrderByDescending(x => x.Version).FirstOrDefaultAsync(cancellationToken);
         var nextVersion = (current?.Version ?? 0) + 1;
-        // Supplying a cost for the first time resolves historical sales that were
-        // deliberately kept pending. This is not a price change because there was no
-        // previous cost fact. Subsequent changes remain prospective.
-        var isFirstCostResolution = request.UnitCostCents.HasValue
-            && (current == null || !current.ExternalUnitCostCents.HasValue);
+        // A legacy classification version may already contain a cost even though no
+        // order item ever received its snapshot. Treat the first effectively applied
+        // cost as the initial resolution so those historical pending sales are fixed.
+        var hasAppliedCost = await _dbContext.MarketplaceOrderItems.AnyAsync(x =>
+            x.TenantId == tenantId && x.ClientId == clientId && x.Provider == request.Provider
+            && x.SellerId == connection.Data.SellerId && x.MlItemId == itemId
+            && (x.MlVariationId ?? "") == variationKey
+            && x.ExternalUnitCostCentsSnapshot.HasValue, cancellationToken);
+        var isFirstCostResolution = request.UnitCostCents.HasValue && !hasAppliedCost;
         if (current != null) current.IsCurrent = false;
         var now = DateTimeOffset.UtcNow;
         var version = new MarketplaceListingClassificationVersion
@@ -474,7 +478,9 @@ public sealed class MarketplaceOrderMappingService
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == request.Provider
                 && x.SellerId == connection.Data.SellerId && x.MlItemId == itemId
                 && (x.MlVariationId ?? "") == variationKey
-                && (x.MappingState == MarketplaceMappingStates.Unmapped
+                && (string.IsNullOrWhiteSpace(x.SabrVariantSku)
+                    || x.SabrVariantSku.StartsWith("MLB")
+                    || x.MappingState == MarketplaceMappingStates.Unmapped
                     || x.MappingState == MarketplaceMappingStates.UnmappedMissingChannelSku
                     || x.MappingState == MarketplaceMappingStates.UnmappedUnknownChannelSku
                     || x.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku

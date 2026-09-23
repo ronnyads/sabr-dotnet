@@ -2256,7 +2256,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             MarketplaceOrderId = order.Id, TenantId = tenantId, ClientId = clientId,
             Provider = MarketplaceProvider.MercadoLivre, SellerId = ParseSellerId(sellerId),
             MlItemId = "MLB-EXT-FIRST-COST", ChannelSku = "SUPPLIER-SKU", ProductName = "Produto externo",
-            Quantity = 2, UnitPrice = 30m, MappingState = MarketplaceMappingStates.ExternalCostPending,
+            Quantity = 2, UnitPrice = 30m, MappingState = "LEGACY_UNRESOLVED",
             ExternalSupplierName = "Fornecedor", RawJson = "{}"
         };
         db.MarketplaceOrders.Add(order);
@@ -2266,7 +2266,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
             IntegrationId = integrationId, SellerId = ParseSellerId(sellerId), ExternalItemId = item.MlItemId,
             ExternalVariationKey = string.Empty, Classification = MarketplaceListingClassifications.ExternalSupplier,
-            SupplierName = "Fornecedor", EffectiveAt = paidAt.AddDays(10), Version = 1, IsCurrent = true,
+            SupplierName = "Fornecedor", ExternalUnitCostCents = 999,
+            EffectiveAt = paidAt.AddDays(10), Version = 1, IsCurrent = true,
             CreatedAt = paidAt.AddDays(10)
         });
         await db.SaveChangesAsync();
