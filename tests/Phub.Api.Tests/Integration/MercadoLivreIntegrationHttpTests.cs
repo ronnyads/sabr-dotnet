@@ -2294,6 +2294,10 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(-2_500, activeCost.AmountCents);
         var state = await db.MarketplaceOrderFinancialStates.SingleAsync(x => x.MarketplaceOrderId == order.Id);
         Assert.DoesNotContain("EXTERNAL_COST_PENDING", state.IncompleteReasonsJson);
+        var pending = await service.ListUnmappedItemsAsync(
+            tenantId, clientId, MarketplaceProvider.MercadoLivre, sellerId);
+        Assert.True(pending.Succeeded);
+        Assert.DoesNotContain(pending.Data!, candidate => candidate.ExternalItemId == item.MlItemId);
     }
 
     [Fact]

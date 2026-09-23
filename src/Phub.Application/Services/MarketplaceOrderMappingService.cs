@@ -159,7 +159,9 @@ public sealed class MarketplaceOrderMappingService
                                || item.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
                                || item.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized
                                || item.MappingState == MarketplaceMappingStates.ExternalSupplier
-                               || item.MappingState == MarketplaceMappingStates.ExternalCostPending));
+                               || item.MappingState == MarketplaceMappingStates.ExternalCostPending)
+                           && !(item.MappingState == MarketplaceMappingStates.ExternalSupplier
+                               && item.ExternalUnitCostCentsSnapshot.HasValue));
 
         if (normalizedSellerId.HasValue)
         {
