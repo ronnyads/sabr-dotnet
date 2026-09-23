@@ -486,6 +486,8 @@ public sealed class MarketplaceOrderMappingService
                     || x.MappingState == MarketplaceMappingStates.UnmappedAmbiguousChannelSku
                     || x.MappingState == MarketplaceMappingStates.UnmappedSkuNotAuthorized
                     || x.MappingState == MarketplaceMappingStates.UnmappedMappingNotAuthorized
+                    || (x.MappingState == MarketplaceMappingStates.ExternalSupplier
+                        && !x.ExternalUnitCostCentsSnapshot.HasValue)
                     || x.MappingState == MarketplaceMappingStates.ExternalCostPending))
             .ToListAsync(cancellationToken);
         foreach (var item in affectedItems)

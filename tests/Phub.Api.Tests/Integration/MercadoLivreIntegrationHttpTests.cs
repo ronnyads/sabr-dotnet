@@ -2256,7 +2256,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             MarketplaceOrderId = order.Id, TenantId = tenantId, ClientId = clientId,
             Provider = MarketplaceProvider.MercadoLivre, SellerId = ParseSellerId(sellerId),
             MlItemId = "MLB-EXT-FIRST-COST", ChannelSku = "SUPPLIER-SKU", ProductName = "Produto externo",
-            Quantity = 2, UnitPrice = 30m, MappingState = "LEGACY_UNRESOLVED",
+            Quantity = 2, UnitPrice = 30m, MappingState = MarketplaceMappingStates.ExternalSupplier,
+            SabrVariantSku = "SUPPLIER-SKU",
             ExternalSupplierName = "Fornecedor", RawJson = "{}"
         };
         db.MarketplaceOrders.Add(order);
