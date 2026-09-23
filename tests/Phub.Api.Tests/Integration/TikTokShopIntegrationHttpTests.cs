@@ -878,7 +878,7 @@ public sealed class TikTokShopIntegrationHttpTests : IClassFixture<TikTokShopTes
             .ToListAsync();
         Assert.Equal(2, reservations.Count);
         Assert.Equal(StockReservationStatus.Released, reservations[0].Status);
-        Assert.Equal(0, reservations[0].Quantity);
+        Assert.Equal(2, reservations[0].Quantity);
         Assert.Equal("VAR-ONE", reservations[0].SabrVariantSku);
         Assert.Equal(StockReservationStatus.Reserved, reservations[1].Status);
         Assert.Equal(2, reservations[1].Quantity);

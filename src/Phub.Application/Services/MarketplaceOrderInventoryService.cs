@@ -243,7 +243,10 @@ public sealed class MarketplaceOrderInventoryService
                         }
 
                         reservation.Status = StockReservationStatus.Released;
-                        reservation.Quantity = 0;
+                        // Quantity is the immutable historical quantity that was reserved.
+                        // Availability calculations already filter by Reserved status, so
+                        // zeroing it destroys the audit trail and violates the database's
+                        // positive-quantity constraint.
                         reservation.UpdatedAt = nowUtc;
                     }
 
@@ -299,7 +302,6 @@ public sealed class MarketplaceOrderInventoryService
                 {
                     if (variants.TryGetValue(reservation.SabrVariantSku, out var variantToRelease))
                         await _allocations.ReleaseAsync(reservation, variantToRelease, cancellationToken);
-                    reservation.Quantity = 0;
                     reservation.Status = StockReservationStatus.Released;
                     reservation.UpdatedAt = nowUtc;
                 }

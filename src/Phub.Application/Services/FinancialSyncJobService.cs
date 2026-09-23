@@ -162,14 +162,17 @@ public sealed class FinancialSyncJobService
                     || x.JobType == FinancialSyncJobTypes.BillingReconciliation)
                 && (x.Status == "PENDING" || x.Status == "RETRY" || x.Status == "RUNNING")
                 && (!x.NextAttemptAt.HasValue || x.NextAttemptAt <= now)
-                && (!x.LeaseUntil.HasValue || x.LeaseUntil < now)).OrderBy(x => x.CreatedAt);
+                && (!x.LeaseUntil.HasValue || x.LeaseUntil < now))
+                .OrderBy(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk ? 0 : 1)
+                .ThenByDescending(x => x.RangeFrom)
+                .ThenBy(x => x.CreatedAt);
             job = _db.Database.IsRelational()
-                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type IN ('OPERATIONAL_SYNC_CHUNK','BILLING_RECONCILIATION') AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
+                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type IN ('OPERATIONAL_SYNC_CHUNK','BILLING_RECONCILIATION') AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY CASE WHEN job_type = 'OPERATIONAL_SYNC_CHUNK' THEN 0 ELSE 1 END, range_from DESC, created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
                 : await query.FirstOrDefaultAsync(cancellationToken);
             if (job == null) return false;
             job.Status = "RUNNING";
             job.LockedBy = workerId;
-            // Each claim processes at most six hours. A bounded segment keeps
+            // Each claim processes at most one day. A bounded segment keeps
             // the lease meaningful even for a seller with hundreds of daily
             // orders, while a crashed worker can be reclaimed after expiry.
             job.LeaseUntil = now.AddMinutes(30);
@@ -194,7 +197,7 @@ public sealed class FinancialSyncJobService
                 DateTimeStyles.RoundtripKind, out var checkpoint)
             && checkpoint > job.RangeFrom && checkpoint < job.RangeTo)
             segmentFrom = checkpoint;
-        var segmentTo = segmentFrom.AddHours(6) < job.RangeTo ? segmentFrom.AddHours(6) : job.RangeTo;
+        var segmentTo = segmentFrom.AddDays(1) < job.RangeTo ? segmentFrom.AddDays(1) : job.RangeTo;
         _logger.LogInformation("Financial sync chunk claimed job={JobId} seller={SellerId} attempt={Attempt} from={RangeFrom} to={RangeTo}",
             job.Id, job.SellerId, job.Attempts, segmentFrom, segmentTo);
         try
@@ -228,7 +231,7 @@ public sealed class FinancialSyncJobService
             }
             else
             {
-                // Persist a bounded six-hour segment at a time. A restart repeats at
+                // Persist a bounded one-day segment at a time. A restart repeats at
                 // most the unfinished segment, never the full 30-day chunk.
                 job.Status = "PENDING";
                 job.Attempts = 0;

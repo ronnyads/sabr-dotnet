@@ -65,16 +65,22 @@ public sealed class BillingFinancialReconciliationService
                 var shippingHead = !string.IsNullOrWhiteSpace(charge.ShipmentId)
                     ? heads.SingleOrDefault(x => x.EntryType == FinancialEntryTypes.SellerShippingCost
                         && x.ExternalShipmentId == charge.ShipmentId) : null;
-                if (shippingHead != null)
+                if (shippingHead != null && signed < 0)
                 {
                     await ConfirmExistingAsync(shippingHead, signed, charge.RawJson,
                         $"BILLING:DETAIL:{charge.DetailId}", ct);
                     continue;
                 }
+                // A shipping credit is a new compensating economic fact. It must not
+                // supersede SELLER_SHIPPING_COST with a positive amount because that
+                // entry type is negative-only and the original cost remains auditable.
+                var entryType = shippingHead != null && signed > 0
+                    ? FinancialEntryTypes.ShippingDiscountOrCompensation
+                    : FinancialEntryTypes.PlatformAdjustment;
                 await _ledger.AppendAsync(new AppendFinancialEntryRequest
                 {
                     TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
-                    SellerId = sellerId, EntryType = FinancialEntryTypes.PlatformAdjustment,
+                    SellerId = sellerId, EntryType = entryType,
                     Layer = FinancialLayers.Reconciled, Status = FinancialEntryStatuses.Confirmed,
                     AmountCents = signed, CurrencyId = billing.CurrencyId,
                     EconomicKey = $"ML:{sellerId}:ADJUSTMENT:{charge.DetailId}",

@@ -838,6 +838,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var variant = await verifyDb.ProductVariants.SingleAsync(item => item.VariantSku == variantSku);
 
         Assert.Equal(StockReservationStatus.Released, reservation.Status);
+        Assert.Equal(2, reservation.Quantity);
         Assert.Equal(0, orderItem.ReservedQuantity);
         Assert.Equal(0, variant.ReservedStock);
         Assert.Equal(3, variant.AvailableStock);
@@ -1394,7 +1395,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
-    public async Task FinancialSync_CheckpointsLongChunkSixHoursAtATime()
+    public async Task FinancialSync_CheckpointsLongChunkOneDayAtATime()
     {
         await _factory.ResetDatabaseAsync();
         const string tenantId = "tenant-ml-checkpoint";
@@ -1406,7 +1407,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         var jobId = Guid.NewGuid();
         var rangeTo = DateTimeOffset.UtcNow.AddDays(-1);
-        var rangeFrom = rangeTo.AddHours(-18);
+        var rangeFrom = rangeTo.AddDays(-3);
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -1429,7 +1430,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             Assert.True(await service.ProcessNextAsync("checkpoint-worker", CancellationToken.None));
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var job = await db.FinancialSyncJobs.AsNoTracking().SingleAsync(x => x.Id == jobId);
-            Assert.Equal(rangeFrom.AddHours(segment * 6), DateTimeOffset.Parse(job.Checkpoint!));
+            Assert.Equal(rangeFrom.AddDays(segment), DateTimeOffset.Parse(job.Checkpoint!));
             Assert.Equal(segment == 3 ? "COMPLETED" : "PENDING", job.Status);
             Assert.Null(job.LeaseUntil);
         }
