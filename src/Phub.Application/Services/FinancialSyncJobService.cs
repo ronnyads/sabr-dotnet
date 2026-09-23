@@ -69,7 +69,11 @@ public sealed class FinancialSyncJobService
                     Provider = MarketplaceProvider.MercadoLivre, SellerId = sellerGroup.Key,
                     JobType = FinancialSyncJobTypes.BillingReconciliation, RangeFrom = from,
                     RangeTo = parent.RangeTo, Status = "PENDING",
-                    DedupeKey = $"BILLING:ORDERS:{sellerGroup.Key}:{orderHash}",
+                    // The same orders can legitimately be reconciled again in a later
+                    // batch when Mercado Pago publishes a late adjustment. Keep the
+                    // child idempotent inside this batch without colliding with a
+                    // previous batch that contained the same set of orders.
+                    DedupeKey = $"BILLING:ORDERS:{sellerGroup.Key}:{parent.Id:N}:{orderHash}",
                     PayloadJson = orderPayload
                 });
                 parent.Total++;
