@@ -14,6 +14,17 @@ namespace Phub.Application.Services;
 /// </summary>
 public sealed class OperationalFinancialProjectionService
 {
+    private static readonly HashSet<string> CancelledSaleComponents = new(StringComparer.Ordinal)
+    {
+        FinancialEntryTypes.GrossSale,
+        FinancialEntryTypes.BuyerDiscount,
+        FinancialEntryTypes.SaleFee,
+        FinancialEntryTypes.FinancingOrFixedFee,
+        FinancialEntryTypes.Refund,
+        FinancialEntryTypes.ProductCost,
+        FinancialEntryTypes.ProductCostRecovery
+    };
+
     private readonly IAppDbContext _db;
     private readonly FinancialLedgerService _ledger;
 
@@ -29,6 +40,12 @@ public sealed class OperationalFinancialProjectionService
             .FirstOrDefaultAsync(x => x.Id == orderId, cancellationToken);
         if (order == null) return;
         var refunds = ReadRefunds(order.RawJson);
+        if (IsCancelledOrder(order.Status))
+        {
+            await VoidCancelledSaleAsync(order, cancellationToken);
+            await RebuildOrderStateAsync(order, cancellationToken);
+            return;
+        }
         if (!IsFinancialOrder(order.Status) && refunds.Count == 0) return;
 
         var occurredAt = order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt;
@@ -80,7 +97,8 @@ public sealed class OperationalFinancialProjectionService
                 if (catalogPrice.HasValue && catalogPrice.Value > 0)
                 {
                     var expectedCost = -checked(catalogPrice.Value * item.Quantity);
-                    if (currentCost != null && (currentCost.AmountCents == expectedCost
+                    if (currentCost != null && currentCost.Status != FinancialEntryStatuses.Voided
+                        && (currentCost.AmountCents == expectedCost
                         || currentCost.Status == FinancialEntryStatuses.Confirmed)) continue;
                     var snapshot = JsonSerializer.Serialize(new
                     {
@@ -114,7 +132,7 @@ public sealed class OperationalFinancialProjectionService
     {
         var order = await _db.MarketplaceOrders.AsNoTracking().Include(x => x.Items)
             .FirstOrDefaultAsync(x => x.Id == orderId, cancellationToken);
-        if (order == null || !IsFinancialOrder(order.Status)) return;
+        if (order == null || (!IsFinancialOrder(order.Status) && !IsCancelledOrder(order.Status))) return;
         var occurredAt = order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt;
         var currency = string.IsNullOrWhiteSpace(order.CurrencyId) ? "BRL" : order.CurrencyId!;
 
@@ -132,7 +150,10 @@ public sealed class OperationalFinancialProjectionService
                 $"SHIPMENT:{shipping.ShipmentId}:COMPENSATION:{Hash(shipping.RawJson)}", occurredAt, shipping.CurrencyId,
                 $"/shipments/{shipping.ShipmentId}/costs", shipping.ShipmentId, shipping.RawJson, cancellationToken);
         }
-        foreach (var discount in discounts.Where(x => x.SellerAmount != 0))
+        // A cancelled sale is excluded from revenue and item-level commercial
+        // discounts. Real shipment charges/credits remain, so a cancellation
+        // can still have a negative (or compensating) economic result.
+        foreach (var discount in discounts.Where(x => !IsCancelledOrder(order.Status) && x.SellerAmount != 0))
         {
             var candidates = order.Items.Where(x => string.Equals(x.MlItemId, discount.ItemId, StringComparison.Ordinal)).ToList();
             var item = candidates.Count == 1 ? candidates[0] : null; // Never invent allocation when the source is ambiguous.
@@ -154,7 +175,8 @@ public sealed class OperationalFinancialProjectionService
                            join entry in _db.MarketplaceFinancialEntries.AsNoTracking() on head.ActiveEntryId equals entry.Id
                            where entry.MarketplaceOrderId == orderId && entry.EntryType == FinancialEntryTypes.ProductCost
                            select entry).ToListAsync(cancellationToken);
-        foreach (var current in costs.Where(x => x.Status != FinancialEntryStatuses.Confirmed))
+        foreach (var current in costs.Where(x => x.Status is not FinancialEntryStatuses.Confirmed
+                                                  and not FinancialEntryStatuses.Voided))
         {
             itemById.TryGetValue(current.MarketplaceOrderItemId ?? Guid.Empty, out var item);
             var payload = JsonSerializer.Serialize(new { confirmedBy = "PROMETHEUSHUB_WALLET", confirmedAt, sourceEntryId = current.Id });
@@ -173,6 +195,60 @@ public sealed class OperationalFinancialProjectionService
         await RebuildOrderStateAsync(order, cancellationToken);
     }
 
+    private async Task VoidCancelledSaleAsync(MarketplaceOrder order, CancellationToken cancellationToken)
+    {
+        var active = await (from head in _db.FinancialEconomicHeads.AsNoTracking()
+                            join entry in _db.MarketplaceFinancialEntries.AsNoTracking() on head.ActiveEntryId equals entry.Id
+                            where head.TenantId == order.TenantId && head.ClientId == order.ClientId
+                                  && head.Provider == order.Provider && head.SellerId == order.SellerId
+                                  && entry.MarketplaceOrderId == order.Id
+                                  && CancelledSaleComponents.Contains(entry.EntryType)
+                                  && entry.Status != FinancialEntryStatuses.Voided
+                            select entry).ToListAsync(cancellationToken);
+
+        foreach (var current in active)
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                correction = "ORDER_CANCELLED",
+                orderStatus = order.Status,
+                voidedEntryId = current.Id,
+                preservedAmountCents = current.AmountCents,
+                providerUpdatedAt = order.UpdatedAt
+            });
+            await _ledger.AppendAsync(new AppendFinancialEntryRequest
+            {
+                TenantId = current.TenantId,
+                ClientId = current.ClientId,
+                Provider = current.Provider,
+                SellerId = current.SellerId,
+                EntryType = current.EntryType,
+                Layer = current.Layer,
+                Status = FinancialEntryStatuses.Voided,
+                // The amount is retained for audit. VOIDED heads are excluded
+                // from every aggregate and therefore have economic value zero.
+                AmountCents = current.AmountCents,
+                CurrencyId = current.CurrencyId,
+                EconomicKey = current.EconomicKey,
+                IdempotencyKey = $"ORDER:{order.MlOrderId}:CANCEL:VOID:{current.Id:N}",
+                MarketplaceOrderId = current.MarketplaceOrderId,
+                MarketplaceOrderItemId = current.MarketplaceOrderItemId,
+                ExternalOrderId = current.ExternalOrderId,
+                ExternalPaymentId = current.ExternalPaymentId,
+                ExternalShipmentId = current.ExternalShipmentId,
+                ExternalPackId = current.ExternalPackId,
+                ExternalClaimId = current.ExternalClaimId,
+                ExternalReturnId = current.ExternalReturnId,
+                EconomicOccurredAt = current.EconomicOccurredAt,
+                ProviderUpdatedAt = order.UpdatedAt,
+                SourceEndpoint = $"/orders/{order.MlOrderId}",
+                SourceRecordId = order.MlOrderId,
+                CanonicalPayloadHash = Hash(payload),
+                MetadataJson = payload
+            }, cancellationToken);
+        }
+    }
+
     public async Task RebuildOrderStateAsync(MarketplaceOrder order, CancellationToken cancellationToken = default)
     {
         var activeEntries = await (
@@ -181,6 +257,7 @@ public sealed class OperationalFinancialProjectionService
             where head.TenantId == order.TenantId && head.ClientId == order.ClientId && head.Provider == order.Provider
                   && head.SellerId == order.SellerId && entry.MarketplaceOrderId == order.Id
             select entry).ToListAsync(cancellationToken);
+        activeEntries = activeEntries.Where(x => x.Status != FinancialEntryStatuses.Voided).ToList();
 
         var itemIdsWithCost = activeEntries.Where(x => x.EntryType == FinancialEntryTypes.ProductCost && x.MarketplaceOrderItemId.HasValue)
             .Select(x => x.MarketplaceOrderItemId!.Value).ToHashSet();
@@ -267,6 +344,15 @@ public sealed class OperationalFinancialProjectionService
     {
         if (amount == 0) return;
         var hash = Hash(payload);
+        var activeStatus = await (from head in _db.FinancialEconomicHeads.AsNoTracking()
+                                  join entry in _db.MarketplaceFinancialEntries.AsNoTracking() on head.ActiveEntryId equals entry.Id
+                                  where head.TenantId == order.TenantId && head.ClientId == order.ClientId
+                                        && head.Provider == order.Provider && head.SellerId == order.SellerId
+                                        && head.EconomicKey == economicKey
+                                  select new { entry.Id, entry.Status }).FirstOrDefaultAsync(cancellationToken);
+        var idempotencyKey = $"ORDER:{order.MlOrderId}:{type}:{item.Id:N}:{hash}";
+        if (activeStatus?.Status == FinancialEntryStatuses.Voided)
+            idempotencyKey += $":REACTIVATE:{activeStatus.Id:N}";
         await _ledger.AppendAsync(new AppendFinancialEntryRequest
         {
             TenantId = order.TenantId,
@@ -279,7 +365,7 @@ public sealed class OperationalFinancialProjectionService
             AmountCents = amount,
             CurrencyId = currency,
             EconomicKey = economicKey,
-            IdempotencyKey = $"ORDER:{order.MlOrderId}:{type}:{item.Id:N}:{hash}",
+            IdempotencyKey = idempotencyKey,
             MarketplaceOrderId = order.Id,
             MarketplaceOrderItemId = item.Id,
             ExternalOrderId = order.MlOrderId,
@@ -312,6 +398,7 @@ public sealed class OperationalFinancialProjectionService
     private static bool IsFinancialOrder(string? status) => string.Equals(status, "paid", StringComparison.OrdinalIgnoreCase)
                                                             || string.Equals(status, "partially_refunded", StringComparison.OrdinalIgnoreCase)
                                                             || string.Equals(status, "refunded", StringComparison.OrdinalIgnoreCase);
+    private static bool IsCancelledOrder(string? status) => status?.Trim().ToLowerInvariant() is "cancelled" or "canceled";
     private static long ToCents(decimal value) => checked((long)Math.Round(value * 100m, MidpointRounding.AwayFromZero));
     private static long Sum(IEnumerable<MarketplaceFinancialEntry> entries, params string[] types)
         => entries.Where(x => types.Contains(x.EntryType, StringComparer.Ordinal)).Sum(x => x.AmountCents);

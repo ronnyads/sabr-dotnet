@@ -71,6 +71,9 @@ public sealed class ClientSalesDashboardService
         var includedPaid = currentPaid.Where(order => order.Items.Any(IsIncludedInSalesResult)).ToList();
         var previousIncludedPaid = previousPaid.Where(order => order.Items.Any(IsIncludedInSalesResult)).ToList();
         var grossRevenue = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue);
+        var totalSalesAmount = current.SelectMany(order => order.Items).Sum(ItemRevenue);
+        var cancelledSalesAmount = current.Where(order => IsCancelled(order.Status))
+            .SelectMany(order => order.Items).Sum(ItemRevenue);
         var previousRevenue = previousIncludedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue);
         var fees = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.SaleFee ?? 0m);
         var totalUnits = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.Quantity);
@@ -193,12 +196,15 @@ public sealed class ClientSalesDashboardService
             CurrencyId = currentPaid.Select(order => order.CurrencyId).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "BRL",
             TotalOrders = current.Count,
             PaidOrders = includedPaid.Count,
+            TotalSalesAmount = Math.Round(totalSalesAmount, 2),
+            CancelledSalesAmount = Math.Round(cancelledSalesAmount, 2),
             TotalUnits = totalUnits,
             GrossRevenue = Math.Round(grossRevenue, 2),
             MarketplaceFees = Math.Round(fees, 2),
             NetRevenue = Math.Round(grossRevenue - fees, 2),
             AverageTicket = includedPaid.Count == 0 ? 0 : Math.Round(grossRevenue / includedPaid.Count, 2),
             CancelledOrders = current.Count(order => NormalizeStatus(order.Status).Contains("cancel", StringComparison.Ordinal)),
+            RefundedOrders = current.Count(order => NormalizeStatus(order.Status) is "refunded" or "partially_refunded"),
             UnmappedUnits = currentPaid.SelectMany(order => order.Items)
                 .Where(item => string.IsNullOrWhiteSpace(item.SabrVariantSku) && !IsExternalSupplier(item))
                 .Sum(item => item.Quantity),

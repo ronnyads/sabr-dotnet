@@ -68,6 +68,12 @@ public static class FinancialEntryStatuses
 {
     public const string Estimated = "ESTIMATED";
     public const string Confirmed = "CONFIRMED";
+    /// <summary>
+    /// The fact remains immutable and auditable, but no longer has economic
+    /// effect. The amount is preserved because the ledger forbids zero-value
+    /// rows; aggregators must ignore a VOIDED active head.
+    /// </summary>
+    public const string Voided = "VOIDED";
 }
 
 public static class FinancialMaturity

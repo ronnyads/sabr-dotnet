@@ -421,12 +421,15 @@ public sealed class ClientSalesDashboardResult
     public string CurrencyId { get; set; } = "BRL";
     public int TotalOrders { get; set; }
     public int PaidOrders { get; set; }
+    public decimal TotalSalesAmount { get; set; }
+    public decimal CancelledSalesAmount { get; set; }
     public int TotalUnits { get; set; }
     public decimal GrossRevenue { get; set; }
     public decimal MarketplaceFees { get; set; }
     public decimal NetRevenue { get; set; }
     public decimal AverageTicket { get; set; }
     public int CancelledOrders { get; set; }
+    public int RefundedOrders { get; set; }
     public int UnmappedUnits { get; set; }
     public decimal OrdersChangePercent { get; set; }
     public decimal RevenueChangePercent { get; set; }

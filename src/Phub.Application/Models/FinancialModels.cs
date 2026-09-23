@@ -101,6 +101,7 @@ public class ClientProfitabilityOrderResult
     public string ExternalOrderId { get; set; } = string.Empty;
     public long SellerId { get; set; }
     public string Provider { get; set; } = string.Empty;
+    public string OrderStatus { get; set; } = string.Empty;
     public DateTimeOffset EconomicDate { get; set; }
     public string Maturity { get; set; } = string.Empty;
     public long GrossRevenueCents { get; set; }

@@ -35,9 +35,16 @@ public sealed class ClientSalesDashboardServiceTests
             RawJson = "{}"
         });
 
+        var cancelled = CreateOrder(tenantId, clientId, "ORDER-CANCELLED", "cancelled", now, 50m);
+        cancelled.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = cancelled.SellerId, MlItemId = "MLB-CANCELLED", Quantity = 1,
+            UnitPrice = 50m, CurrencyId = "BRL", RawJson = "{}"
+        });
         db.MarketplaceOrders.AddRange(
             paid,
-            CreateOrder(tenantId, clientId, "ORDER-CANCELLED", "cancelled", now, null),
+            cancelled,
             CreateOrder(tenantId, Guid.NewGuid(), "ORDER-OTHER-CLIENT", "paid", now, 9999m));
         await db.SaveChangesAsync();
 
@@ -50,6 +57,8 @@ public sealed class ClientSalesDashboardServiceTests
 
         Assert.Equal(2, result.TotalOrders);
         Assert.Equal(1, result.PaidOrders);
+        Assert.Equal(249.80m, result.TotalSalesAmount);
+        Assert.Equal(50m, result.CancelledSalesAmount);
         Assert.Equal(2, result.TotalUnits);
         Assert.Equal(199.80m, result.GrossRevenue);
         Assert.Equal(20m, result.MarketplaceFees);

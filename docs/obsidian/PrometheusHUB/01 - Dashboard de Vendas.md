@@ -59,6 +59,7 @@ Regras:
 - período máximo por consulta: 366 dias;
 - comparação automática com período anterior de mesma duração;
 - receita considera somente pedidos `paid`; pedidos parcialmente reembolsados permanecem visíveis no detalhamento de status sem inflar o faturamento confirmado;
+- O cabeçalho separa **vendas totais recebidas** (todos os pedidos que entraram no canal), **vendas válidas/pagas** e **vendas canceladas**. O valor cancelado é informativo e não compõe faturamento nem lucro.
 - valor após taxas = valor total confirmado menos comissões identificadas;
 - agrupamento prefere `sabr_variant_sku`, usa `channel_sku` como fallback e sinaliza `SEM-SKU`.
 

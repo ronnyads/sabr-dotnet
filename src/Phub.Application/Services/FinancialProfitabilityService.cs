@@ -56,7 +56,13 @@ public sealed class FinancialProfitabilityService
             .Select(x => x.ActiveEntryId)
             .ToListAsync(cancellationToken);
         var activeSet = activeIds.ToHashSet();
-        var activeEntries = allEntries.Where(x => activeSet.Contains(x.Id)).ToList();
+        // VOIDED is an auditable correction head: its original amount is kept
+        // in the append-only ledger, but it has no economic effect.
+        var activeEntries = allEntries.Where(x => activeSet.Contains(x.Id)
+                                                  && x.Status != FinancialEntryStatuses.Voided).ToList();
+        var economicallyActiveOrderIds = activeEntries.Where(x => x.MarketplaceOrderId.HasValue)
+            .Select(x => x.MarketplaceOrderId!.Value).ToHashSet();
+        states = states.Where(x => economicallyActiveOrderIds.Contains(x.MarketplaceOrderId)).ToList();
 
         var externalItems = await _db.MarketplaceOrderItems.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId
@@ -225,7 +231,10 @@ public sealed class FinancialProfitabilityService
                     select new { order, state };
 
         var rows = await query.Take(500).ToListAsync(cancellationToken);
-        return rows.Select(x => MapOrder(x.order, x.state)).ToList();
+        return rows.Where(x => !IsCancelledOrder(x.order.Status)
+                               || x.state.OperationalProfitCents != 0
+                               || x.state.UnallocatedCents != 0)
+            .Select(x => MapOrder(x.order, x.state)).ToList();
     }
 
     public async Task<ClientProfitabilityOrderDetailResult?> GetOrderAsync(
@@ -319,7 +328,8 @@ public sealed class FinancialProfitabilityService
     private static ClientProfitabilityOrderResult MapOrder(MarketplaceOrder order, MarketplaceOrderFinancialState state) => new()
     {
         OrderId = order.Id, ExternalOrderId = order.MlOrderId, SellerId = order.SellerId,
-        Provider = order.Provider.ToString(), EconomicDate = order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt,
+        Provider = order.Provider.ToString(), OrderStatus = order.Status ?? string.Empty,
+        EconomicDate = order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt,
         Maturity = state.Maturity, GrossRevenueCents = state.GrossRevenueCents,
         EstimatedEconomicNetCents = state.EstimatedEconomicNetCents, ConfirmedValueCents = state.ConfirmedValueCents,
         OperationalProfitCents = state.OperationalProfitCents, UnallocatedCents = state.UnallocatedCents,
@@ -341,6 +351,8 @@ public sealed class FinancialProfitabilityService
         if (states.Any(x => x.Maturity == FinancialMaturity.Estimated)) return FinancialMaturity.Estimated;
         return FinancialMaturity.Confirmed;
     }
+    private static bool IsCancelledOrder(string? status)
+        => status?.Trim().ToLowerInvariant() is "cancelled" or "canceled";
     private static string ToComponent(string type) => type switch
     {
         FinancialEntryTypes.SaleFee => "commission",

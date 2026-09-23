@@ -10,6 +10,112 @@ namespace Phub.Api.Tests;
 public sealed class FinancialLedgerServiceTests
 {
     [Fact]
+    public async Task CancelledOrder_VoidsSaleAndProductCost_ButKeepsRealReturnExpense()
+    {
+        await using var db = CreateDb();
+        var clientId = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = "tenant-cancel", ClientId = clientId, SellerId = 20,
+            Provider = MarketplaceProvider.MercadoLivre, MlOrderId = "ORDER-CANCEL",
+            Status = "paid", PaidAt = DateTimeOffset.UtcNow.AddDays(-1), RawJson = "{}"
+        };
+        var item = new MarketplaceOrderItem
+        {
+            TenantId = order.TenantId, ClientId = clientId, SellerId = order.SellerId,
+            MarketplaceOrderId = order.Id, Provider = order.Provider, MlItemId = "MLB-CANCEL",
+            SabrVariantSku = "PH-CANCEL", MappingState = MarketplaceMappingStates.Mapped,
+            Quantity = 1, UnitPrice = 100m, SaleFee = 10m, RawJson = "{}"
+        };
+        db.MarketplaceOrders.Add(order);
+        db.MarketplaceOrderItems.Add(item);
+        db.ProductVariants.Add(new ProductVariant
+        {
+            BaseSku = "PH-CANCEL", VariantSku = "PH-CANCEL", Name = "Produto cancelado",
+            CatalogPriceCents = 3_000, PhysicalStock = 10, AvailableStock = 10
+        });
+        await db.SaveChangesAsync();
+        var ledger = new FinancialLedgerService(db);
+        var projection = new OperationalFinancialProjectionService(db, ledger);
+
+        await projection.ProjectOrderAsync(order.Id);
+        await ledger.AppendAsync(new AppendFinancialEntryRequest
+        {
+            TenantId = order.TenantId, ClientId = clientId, Provider = order.Provider, SellerId = order.SellerId,
+            EntryType = FinancialEntryTypes.ReturnShippingCost, Layer = FinancialLayers.Operational,
+            Status = FinancialEntryStatuses.Estimated, AmountCents = -1_500, CurrencyId = "BRL",
+            EconomicKey = $"ML:{order.SellerId}:ORDER:{order.MlOrderId}:RETURN_SHIPPING",
+            IdempotencyKey = "cancel-return-shipping", MarketplaceOrderId = order.Id,
+            ExternalOrderId = order.MlOrderId, EconomicOccurredAt = DateTimeOffset.UtcNow,
+            SourceEndpoint = "/claims/return", SourceRecordId = "return-1",
+            CanonicalPayloadHash = new string('a', 64), MetadataJson = "{}"
+        });
+
+        order.Status = "cancelled";
+        order.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+        await projection.ProjectOrderAsync(order.Id);
+        // A retry must not create another void version.
+        await projection.ProjectOrderAsync(order.Id);
+
+        var heads = await (from head in db.FinancialEconomicHeads
+                           join entry in db.MarketplaceFinancialEntries on head.ActiveEntryId equals entry.Id
+                           where entry.MarketplaceOrderId == order.Id
+                           select entry).ToListAsync();
+        Assert.All(heads.Where(x => x.EntryType is FinancialEntryTypes.GrossSale
+            or FinancialEntryTypes.SaleFee or FinancialEntryTypes.ProductCost),
+            entry => Assert.Equal(FinancialEntryStatuses.Voided, entry.Status));
+        Assert.Equal(FinancialEntryStatuses.Estimated,
+            Assert.Single(heads.Where(x => x.EntryType == FinancialEntryTypes.ReturnShippingCost)).Status);
+        Assert.Equal(3, heads.Count(x => x.Status == FinancialEntryStatuses.Voided));
+
+        var result = await new FinancialProfitabilityService(db).GetAsync(
+            order.TenantId, clientId, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(1),
+            MarketplaceProvider.MercadoLivre, order.SellerId);
+        Assert.Equal(0, result.GrossRevenueCents);
+        Assert.Equal(0, result.ProductCostCents);
+        Assert.Equal(-1_500, result.OperationalProfitCents);
+    }
+
+    [Fact]
+    public async Task RefundedOrder_KeepsOriginalSaleAndCost_AndAddsRefundAsReverseFact()
+    {
+        await using var db = CreateDb();
+        var clientId = Guid.NewGuid();
+        var order = new MarketplaceOrder
+        {
+            TenantId = "tenant-refund", ClientId = clientId, SellerId = 21,
+            Provider = MarketplaceProvider.MercadoLivre, MlOrderId = "ORDER-REFUND",
+            Status = "refunded", PaidAt = DateTimeOffset.UtcNow.AddDays(-1),
+            RawJson = "{\"payments\":[{\"id\":123,\"refunds\":[{\"id\":456,\"amount\":100.0}]}]}"
+        };
+        db.MarketplaceOrders.Add(order);
+        db.MarketplaceOrderItems.Add(new MarketplaceOrderItem
+        {
+            TenantId = order.TenantId, ClientId = clientId, SellerId = order.SellerId,
+            MarketplaceOrderId = order.Id, Provider = order.Provider, MlItemId = "MLB-REFUND",
+            SabrVariantSku = "PH-REFUND", MappingState = MarketplaceMappingStates.Mapped,
+            Quantity = 1, UnitPrice = 100m, SaleFee = 0m, RawJson = "{}"
+        });
+        db.ProductVariants.Add(new ProductVariant
+        {
+            BaseSku = "PH-REFUND", VariantSku = "PH-REFUND", Name = "Produto reembolsado",
+            CatalogPriceCents = 3_000, PhysicalStock = 10, AvailableStock = 10
+        });
+        await db.SaveChangesAsync();
+
+        await new OperationalFinancialProjectionService(db, new FinancialLedgerService(db)).ProjectOrderAsync(order.Id);
+        var result = await new FinancialProfitabilityService(db).GetAsync(
+            order.TenantId, clientId, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(1),
+            MarketplaceProvider.MercadoLivre, order.SellerId);
+
+        Assert.Equal(10_000, result.GrossRevenueCents);
+        Assert.Equal(10_000, result.RefundsCents);
+        Assert.Equal(-3_000, result.ProductCostCents);
+        Assert.Equal(-3_000, result.OperationalProfitCents);
+    }
+
+    [Fact]
     public async Task ProductCost_UsesInternalPaidSnapshotAndConfirmsWithoutRewritingEstimate()
     {
         await using var db = CreateDb();

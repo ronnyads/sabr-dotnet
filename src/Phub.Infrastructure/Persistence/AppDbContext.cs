@@ -1780,7 +1780,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             {
                 table.HasCheckConstraint("ck_financial_entry_amount_non_zero", "amount_cents <> 0");
                 table.HasCheckConstraint("ck_financial_entry_layer", "layer IN ('OPERATIONAL','RECONCILED','INTERNAL_CONFIRMED')");
-                table.HasCheckConstraint("ck_financial_entry_status", "status IN ('ESTIMATED','CONFIRMED')");
+                table.HasCheckConstraint("ck_financial_entry_status", "status IN ('ESTIMATED','CONFIRMED','VOIDED')");
             });
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id");
