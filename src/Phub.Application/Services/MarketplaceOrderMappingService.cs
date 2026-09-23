@@ -438,13 +438,20 @@ public sealed class MarketplaceOrderMappingService
         if (!connection.Succeeded || connection.Data == null)
             return ServiceResult<MarketplaceExternalSupplierResult>.Failure(connection.ErrorCode ?? ServiceErrorCodes.ValidationError, connection.Errors);
 
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = _dbContext.Database.IsRelational()
+            ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
         var current = await _dbContext.MarketplaceListingClassificationVersions
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == request.Provider
                 && x.SellerId == connection.Data.SellerId && x.ExternalItemId == itemId
                 && x.ExternalVariationKey == variationKey && x.IsCurrent)
             .OrderByDescending(x => x.Version).FirstOrDefaultAsync(cancellationToken);
         var nextVersion = (current?.Version ?? 0) + 1;
+        // Supplying a cost for the first time resolves historical sales that were
+        // deliberately kept pending. This is not a price change because there was no
+        // previous cost fact. Subsequent changes remain prospective.
+        var isFirstCostResolution = request.UnitCostCents.HasValue
+            && (current == null || !current.ExternalUnitCostCents.HasValue);
         if (current != null) current.IsCurrent = false;
         var now = DateTimeOffset.UtcNow;
         var version = new MarketplaceListingClassificationVersion
@@ -484,7 +491,8 @@ public sealed class MarketplaceOrderMappingService
             // A normal cost change is never retroactive. Existing historical sales are
             // classified as external, but remain cost-pending unless a version was
             // already effective on their economic date.
-            var costApplies = request.UnitCostCents.HasValue && economicAt >= version.EffectiveAt;
+            var costApplies = request.UnitCostCents.HasValue
+                && (isFirstCostResolution || economicAt >= version.EffectiveAt);
             item.SabrVariantSku = null;
             item.MappingSnapshotId = null;
             item.MappingSnapshotVersion = null;
@@ -502,8 +510,30 @@ public sealed class MarketplaceOrderMappingService
             item.UpdatedAt = now;
         }
         AddClassificationAudit(tenantId, actorUserId, "MarketplaceListing.ClassifyExternalSupplier", version, affectedItems.Count);
+        var affectedOrderIds = affectedItems.Select(x => x.MarketplaceOrderId).Distinct().ToList();
         await _dbContext.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        if (transaction != null)
+            await transaction.CommitAsync(cancellationToken);
+
+        // Persist the classification before rebuilding derived financial facts. The
+        // projection is idempotent and can also be retried by regular synchronization.
+        foreach (var orderId in affectedOrderIds)
+        {
+            try
+            {
+                await _financialProjection.ProjectOrderAsync(orderId, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(exception,
+                    "External supplier cost was saved but financial projection was deferred for order {OrderId}.",
+                    orderId);
+            }
+        }
         return ServiceResult<MarketplaceExternalSupplierResult>.Success(ToExternalResult(version, affectedItems.Count));
     }
 

@@ -2228,6 +2228,73 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task ExternalSupplier_FirstCost_ResolvesHistoricalPendingItemsAndReprojectsFinance()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-external-first-cost";
+        const string tenantSlug = "externalfirstcost";
+        const string sellerId = "2496573592";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var service = scope.ServiceProvider.GetRequiredService<MarketplaceOrderMappingService>();
+        var integrationId = await db.TenantMarketplaceConnections
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
+            .Select(x => x.Id).SingleAsync();
+        var paidAt = DateTimeOffset.UtcNow.AddDays(-20);
+        var order = new MarketplaceOrder
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = ParseSellerId(sellerId), MlOrderId = "ORDER-EXT-FIRST-COST", Status = "paid",
+            PaidAt = paidAt, ChannelCreatedAt = paidAt, RawJson = "{}"
+        };
+        var item = new MarketplaceOrderItem
+        {
+            MarketplaceOrderId = order.Id, TenantId = tenantId, ClientId = clientId,
+            Provider = MarketplaceProvider.MercadoLivre, SellerId = ParseSellerId(sellerId),
+            MlItemId = "MLB-EXT-FIRST-COST", ChannelSku = "SUPPLIER-SKU", ProductName = "Produto externo",
+            Quantity = 2, UnitPrice = 30m, MappingState = MarketplaceMappingStates.ExternalCostPending,
+            ExternalSupplierName = "Fornecedor", RawJson = "{}"
+        };
+        db.MarketplaceOrders.Add(order);
+        db.MarketplaceOrderItems.Add(item);
+        db.MarketplaceListingClassificationVersions.Add(new MarketplaceListingClassificationVersion
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            IntegrationId = integrationId, SellerId = ParseSellerId(sellerId), ExternalItemId = item.MlItemId,
+            ExternalVariationKey = string.Empty, Classification = MarketplaceListingClassifications.ExternalSupplier,
+            SupplierName = "Fornecedor", EffectiveAt = paidAt.AddDays(10), Version = 1, IsCurrent = true,
+            CreatedAt = paidAt.AddDays(10)
+        });
+        await db.SaveChangesAsync();
+
+        var result = await service.ClassifyExternalSupplierAsync(tenantId, clientId,
+            new MarketplaceExternalSupplierRequest
+            {
+                Provider = MarketplaceProvider.MercadoLivre, IntegrationId = integrationId, SellerId = sellerId,
+                ExternalItemId = item.MlItemId, SupplierName = "Fornecedor", UnitCostCents = 1_250,
+                CurrencyId = "BRL", Reason = "primeiro custo informado"
+            }, Guid.NewGuid());
+
+        Assert.True(result.Succeeded);
+        var persisted = await db.MarketplaceOrderItems.SingleAsync(x => x.Id == item.Id);
+        Assert.Equal(MarketplaceMappingStates.ExternalSupplier, persisted.MappingState);
+        Assert.Equal(1_250, persisted.ExternalUnitCostCentsSnapshot);
+        Assert.NotNull(persisted.ExternalCostVersionId);
+        var activeCost = await (from entry in db.MarketplaceFinancialEntries
+                                join head in db.FinancialEconomicHeads on entry.Id equals head.ActiveEntryId
+                                where entry.MarketplaceOrderItemId == item.Id
+                                      && entry.EntryType == FinancialEntryTypes.ProductCost
+                                select entry).SingleAsync();
+        Assert.Equal(-2_500, activeCost.AmountCents);
+        var state = await db.MarketplaceOrderFinancialStates.SingleAsync(x => x.MarketplaceOrderId == order.Id);
+        Assert.DoesNotContain("EXTERNAL_COST_PENDING", state.IncompleteReasonsJson);
+    }
+
+    [Fact]
     public async Task BaseSkuWithMultipleAuthorizedVariants_RemainsPendingForManualChoice()
     {
         await _factory.ResetDatabaseAsync();
