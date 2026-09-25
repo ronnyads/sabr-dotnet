@@ -30,8 +30,8 @@ public sealed class FinancialProfitabilityService
 
         var orderQuery = _db.MarketplaceOrders.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
-            .Where(x => (x.PaidAt ?? x.ChannelCreatedAt ?? x.ImportedAt) >= rangeFrom
-                        && (x.PaidAt ?? x.ChannelCreatedAt ?? x.ImportedAt) <= rangeTo);
+            .Where(x => (x.PaidAt ?? x.ChannelCreatedAt) >= rangeFrom
+                        && (x.PaidAt ?? x.ChannelCreatedAt) < rangeTo);
         if (provider.HasValue) orderQuery = orderQuery.Where(x => x.Provider == provider.Value);
         if (sellerId.HasValue) orderQuery = orderQuery.Where(x => x.SellerId == sellerId.Value);
         var orderIds = await orderQuery.Select(x => x.Id).ToListAsync(cancellationToken);
@@ -71,6 +71,9 @@ public sealed class FinancialProfitabilityService
                             || x.MappingState == MarketplaceMappingStates.ExternalCostPending))
             .ToListAsync(cancellationToken);
         var externalItemIds = externalItems.Select(x => x.Id).ToHashSet();
+        var periodItems = await _db.MarketplaceOrderItems.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && orderIds.Contains(x.MarketplaceOrderId))
+            .ToListAsync(cancellationToken);
 
         var estimatedByKey = allEntries.Where(x => x.Status == FinancialEntryStatuses.Estimated)
             .GroupBy(x => x.EconomicKey).ToDictionary(x => x.Key, x => x.OrderByDescending(e => e.ObservedAt).First());
@@ -151,6 +154,33 @@ public sealed class FinancialProfitabilityService
             or FinancialEntryTypes.ProductCostRecovery).Sum(x => x.AmountCents);
         var externalPendingCost = externalItems.Count(x => !x.ExternalUnitCostCentsSnapshot.HasValue);
 
+        var activeCostItemIds = sameCurrencyEntries.Where(x => x.EntryType == FinancialEntryTypes.ProductCost
+                && x.MarketplaceOrderItemId.HasValue)
+            .Select(x => x.MarketplaceOrderItemId!.Value).ToHashSet();
+        var totalCostUnits = periodItems.Sum(x => Math.Max(0, x.Quantity));
+        var resolvedCostUnits = periodItems.Where(x => x.Quantity > 0 &&
+            (activeCostItemIds.Contains(x.Id)
+             || MarketplaceMappingStates.IsExternal(x.MappingState) && x.ExternalUnitCostCentsSnapshot.HasValue))
+            .Sum(x => x.Quantity);
+        var costCoverage = AuditCoverage(resolvedCostUnits, totalCostUnits);
+
+        var relevantFinancialEntries = sameCurrencyEntries.Where(x => x.EntryType is
+            FinancialEntryTypes.GrossSale or FinancialEntryTypes.SaleFee or FinancialEntryTypes.FinancingOrFixedFee
+            or FinancialEntryTypes.SellerShippingCost or FinancialEntryTypes.Refund or FinancialEntryTypes.PlatformAdjustment
+            or FinancialEntryTypes.ChargebackOrClaim or FinancialEntryTypes.ReturnShippingCost).ToList();
+        var totalFinancialAmount = relevantFinancialEntries.Sum(x => Math.Abs(x.AmountCents));
+        var resolvedFinancialAmount = relevantFinancialEntries.Where(x => x.Status == FinancialEntryStatuses.Confirmed
+            && (x.MarketplaceOrderItemId.HasValue || x.EntryType == FinancialEntryTypes.SellerShippingCost))
+            .Sum(x => Math.Abs(x.AmountCents));
+        var financialCoverage = AuditCoverage(resolvedFinancialAmount, totalFinancialAmount);
+
+        var pendingPlan = await _db.FinancialCorrectionPlans.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && (!sellerId.HasValue || x.SellerId == sellerId.Value)
+                        && x.Status != FinancialCorrectionPlanStatuses.Completed)
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new PendingCorrectionPlanResult { PlanId = x.Id, Status = x.Status })
+            .FirstOrDefaultAsync(cancellationToken);
+
         var lastOperational = await _db.TenantMarketplaceConnections.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
             .Where(x => !provider.HasValue || x.Provider == provider.Value)
@@ -158,6 +188,12 @@ public sealed class FinancialProfitabilityService
             .MaxAsync(x => (DateTimeOffset?)x.LastSyncAt, cancellationToken);
         var lastBilling = allEntries.Where(x => x.Layer == FinancialLayers.Reconciled)
             .MaxBy(x => x.ObservedAt)?.ObservedAt;
+
+        var incompleteReasons = states.SelectMany(ReadReasons).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToList();
+        var isAuditComplete = costCoverage.Percent == 100m && financialCoverage.Percent == 100m
+                              && states.All(x => x.OperationalComponentsResolved && x.ConfirmedComponentsResolved && x.ItemAllocationResolved)
+                              && states.Sum(x => x.UnallocatedCents) == 0 && incompleteReasons.Count == 0 && pendingPlan == null;
+        var auditStatus = !isAuditComplete ? "PARTIAL" : profit >= 0 ? "PROFIT" : "LOSS";
 
         return new ClientProfitabilityResult
         {
@@ -196,7 +232,13 @@ public sealed class FinancialProfitabilityService
                 Percentage = estimatedTotal == 0 ? null : Math.Round(delta * 100m / Math.Abs(estimatedTotal), 2),
                 ComponentsCents = componentDeltas
             },
-            IncompleteReasons = states.SelectMany(ReadReasons).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToList(),
+            IncompleteReasons = incompleteReasons,
+            AuditResultStatus = auditStatus,
+            AuditResultLabel = auditStatus == "PROFIT" ? "Lucro operacional auditado"
+                : auditStatus == "LOSS" ? "Prejuízo operacional auditado" : "Resultado auditado parcial",
+            CostCoverage = costCoverage,
+            FinancialCoverage = financialCoverage,
+            PendingCorrectionPlan = pendingPlan,
             ExternalSupplier = new ExternalSupplierProfitabilityResult
             {
                 Products = externalItems.Select(x => new { x.SellerId, x.MlItemId, x.MlVariationId }).Distinct().Count(),
@@ -225,9 +267,9 @@ public sealed class FinancialProfitabilityService
                         on order.Id equals state.MarketplaceOrderId
                     where order.TenantId == tenantId && order.ClientId == clientId
                        && (!sellerId.HasValue || order.SellerId == sellerId.Value)
-                       && (order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt) >= rangeFrom
-                       && (order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt) <= rangeTo
-                    orderby (order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt) descending
+                       && (order.PaidAt ?? order.ChannelCreatedAt) >= rangeFrom
+                       && (order.PaidAt ?? order.ChannelCreatedAt) < rangeTo
+                    orderby (order.PaidAt ?? order.ChannelCreatedAt) descending
                     select new { order, state };
 
         var rows = await query.Take(500).ToListAsync(cancellationToken);
@@ -338,6 +380,12 @@ public sealed class FinancialProfitabilityService
 
     private static decimal Percent(IReadOnlyCollection<MarketplaceOrderFinancialState> states, Func<MarketplaceOrderFinancialState, bool> predicate)
         => states.Count == 0 ? 0 : Math.Round(states.Count(predicate) * 100m / states.Count, 1);
+    private static FinancialAuditCoverageResult AuditCoverage(long resolved, long total) => new()
+    {
+        Resolved = resolved,
+        Total = total,
+        Percent = total == 0 ? 0 : Math.Round(resolved * 100m / total, 2, MidpointRounding.AwayFromZero)
+    };
     private static IEnumerable<string> ReadReasons(MarketplaceOrderFinancialState state)
     {
         try { return JsonSerializer.Deserialize<List<string>>(state.IncompleteReasonsJson) ?? []; }

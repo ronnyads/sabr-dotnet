@@ -182,6 +182,15 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 entry.Entity.Sku = Sku.Normalize(entry.Entity.Sku);
                 entry.Entity.UpdatedAt = now;
             }
+
+            if (entry.State is EntityState.Added or EntityState.Modified)
+            {
+                var state = NormalizeCatalogCostState(entry.Entity.CatalogPriceCents,
+                    entry.Entity.CatalogCostStatus, entry.Entity.CatalogPriceOrigin, ProductPricingModes.Inherited);
+                entry.Entity.CatalogCostStatus = state.Status;
+                entry.Entity.CatalogPriceOrigin = state.Origin;
+                CatalogCostPolicy.EnsureValid(entry.Entity.CatalogPriceCents, state.Status, state.Origin);
+            }
         }
 
         foreach (var entry in ChangeTracker.Entries<ProductImage>())
@@ -226,6 +235,26 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 }
                 entry.Entity.UpdatedAt = now;
             }
+
+
+            if (entry.State is EntityState.Added or EntityState.Modified)
+            {
+                var state = NormalizeCatalogCostState(entry.Entity.CatalogPriceCents,
+                    entry.Entity.CatalogCostStatus, entry.Entity.CatalogPriceOrigin, entry.Entity.PricingMode);
+                entry.Entity.CatalogCostStatus = state.Status;
+                entry.Entity.CatalogPriceOrigin = state.Origin;
+                CatalogCostPolicy.EnsureValid(entry.Entity.CatalogPriceCents, state.Status, state.Origin);
+            }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<ProductPriceVersion>())
+        {
+            if (entry.State is not (EntityState.Added or EntityState.Modified)) continue;
+            var state = NormalizeCatalogCostState(entry.Entity.CatalogPriceCents,
+                entry.Entity.CatalogCostStatus, entry.Entity.CatalogPriceOrigin, entry.Entity.PricingMode);
+            entry.Entity.CatalogCostStatus = state.Status;
+            entry.Entity.CatalogPriceOrigin = state.Origin;
+            CatalogCostPolicy.EnsureValid(entry.Entity.CatalogPriceCents, state.Status, state.Origin);
         }
 
         foreach (var entry in ChangeTracker.Entries<Category>())
@@ -607,6 +636,21 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
         return value.Trim().ToLowerInvariant();
     }
 
+    private static (string Status, string Origin) NormalizeCatalogCostState(
+        long catalogPriceCents, string? status, string? origin, string pricingMode)
+    {
+        if (catalogPriceCents <= 0)
+            return (CatalogCostStatuses.Pending, CatalogPriceOrigins.None);
+
+        var normalizedStatus = CatalogCostStatuses.Resolved;
+        var normalizedOrigin = string.IsNullOrWhiteSpace(origin) || origin == CatalogPriceOrigins.None
+            ? pricingMode == ProductPricingModes.Override
+                ? CatalogPriceOrigins.VariantOverride
+                : CatalogPriceOrigins.MasterProduct
+            : origin.Trim().ToUpperInvariant();
+        return (normalizedStatus, normalizedOrigin);
+    }
+
     private static void EnsureProtheusTag(EntityBase entity)
     {
         // User entities are tenant-scoped and do not require SIGA/sector mapping.
@@ -898,12 +942,15 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.AnatelDocumentId).HasColumnName("anatel_document_id");
             entity.Property(e => e.CostPriceCents).HasColumnName("cost_price_cents").IsRequired();
             entity.Property(e => e.CatalogPriceCents).HasColumnName("catalog_price_cents").IsRequired();
+            entity.Property(e => e.CatalogCostStatus).HasColumnName("catalog_cost_status").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.CatalogPriceOrigin).HasColumnName("catalog_price_origin").HasMaxLength(40).IsRequired();
             entity.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
             entity.HasCheckConstraint("ck_products_sku_format", "\"sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");
             entity.HasCheckConstraint("ck_products_cost_non_negative", "\"cost_price_cents\" >= 0");
             entity.HasCheckConstraint("ck_products_catalog_non_negative", "\"catalog_price_cents\" >= 0");
+            entity.HasCheckConstraint("ck_products_catalog_cost_state", "(\"catalog_cost_status\" = 'CATALOG_COST_PENDING' AND \"catalog_price_cents\" = 0 AND \"catalog_price_origin\" = 'NONE') OR (\"catalog_cost_status\" = 'RESOLVED' AND \"catalog_price_cents\" > 0 AND \"catalog_price_origin\" IN ('MASTER_PRODUCT','VARIANT_OVERRIDE','EXTERNAL_SUPPLIER','PREPURCHASED_LOT'))");
             entity.HasCheckConstraint("ck_products_width_non_negative", "\"width_cm\" IS NULL OR \"width_cm\" >= 0");
             entity.HasCheckConstraint("ck_products_height_non_negative", "\"height_cm\" IS NULL OR \"height_cm\" >= 0");
             entity.HasCheckConstraint("ck_products_length_non_negative", "\"length_cm\" IS NULL OR \"length_cm\" >= 0");
@@ -963,6 +1010,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.CostPriceCents).HasColumnName("cost_price_cents").IsRequired();
             entity.Property(e => e.CatalogPriceCents).HasColumnName("catalog_price_cents").IsRequired();
             entity.Property(e => e.PricingMode).HasColumnName("pricing_mode").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.CatalogCostStatus).HasColumnName("catalog_cost_status").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.CatalogPriceOrigin).HasColumnName("catalog_price_origin").HasMaxLength(40).IsRequired();
             entity.Property(e => e.PhysicalStock).HasColumnName("physical_stock").IsRequired();
             entity.Property(e => e.ReservedStock).HasColumnName("reserved_stock").IsRequired();
             entity.Property(e => e.AvailableStock).HasColumnName("available_stock").IsRequired();
@@ -976,6 +1025,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasCheckConstraint("ck_product_variants_base_sku_format", "\"base_sku\" ~ '^[A-Z0-9][A-Z0-9_/-]{0,63}$'");
             entity.HasCheckConstraint("ck_product_variants_cost_non_negative", "\"cost_price_cents\" >= 0");
             entity.HasCheckConstraint("ck_product_variants_catalog_non_negative", "\"catalog_price_cents\" >= 0");
+            entity.HasCheckConstraint("ck_product_variants_catalog_cost_state", "(\"catalog_cost_status\" = 'CATALOG_COST_PENDING' AND \"catalog_price_cents\" = 0 AND \"catalog_price_origin\" = 'NONE') OR (\"catalog_cost_status\" = 'RESOLVED' AND \"catalog_price_cents\" > 0 AND \"catalog_price_origin\" IN ('MASTER_PRODUCT','VARIANT_OVERRIDE','EXTERNAL_SUPPLIER','PREPURCHASED_LOT'))");
             entity.HasCheckConstraint("ck_product_variants_physical_non_negative", "\"physical_stock\" >= 0");
             entity.HasCheckConstraint("ck_product_variants_reserved_non_negative", "\"reserved_stock\" >= 0");
             entity.HasCheckConstraint("ck_product_variants_available_non_negative", "\"available_stock\" >= 0");
@@ -1355,6 +1405,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 table.HasCheckConstraint("ck_product_price_version_change", "change_type IN ('CHANGE','CORRECTION')");
                 table.HasCheckConstraint("ck_product_price_version_range", "valid_to IS NULL OR valid_to > valid_from");
                 table.HasCheckConstraint("ck_product_price_version_amounts", "cost_price_cents >= 0 AND catalog_price_cents >= 0");
+                table.HasCheckConstraint("ck_product_price_version_catalog_cost_state", "(catalog_cost_status = 'CATALOG_COST_PENDING' AND catalog_price_cents = 0 AND catalog_price_origin = 'NONE') OR (catalog_cost_status = 'RESOLVED' AND catalog_price_cents > 0 AND catalog_price_origin IN ('MASTER_PRODUCT','VARIANT_OVERRIDE','EXTERNAL_SUPPLIER','PREPURCHASED_LOT'))");
             });
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id");
@@ -1363,6 +1414,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.PricingMode).HasColumnName("pricing_mode").HasMaxLength(20).IsRequired();
             entity.Property(e => e.CostPriceCents).HasColumnName("cost_price_cents").IsRequired();
             entity.Property(e => e.CatalogPriceCents).HasColumnName("catalog_price_cents").IsRequired();
+            entity.Property(e => e.CatalogCostStatus).HasColumnName("catalog_cost_status").HasMaxLength(40).IsRequired();
+            entity.Property(e => e.CatalogPriceOrigin).HasColumnName("catalog_price_origin").HasMaxLength(40).IsRequired();
             entity.Property(e => e.ValidFrom).HasColumnName("valid_from").IsRequired();
             entity.Property(e => e.ValidTo).HasColumnName("valid_to");
             entity.Property(e => e.Version).HasColumnName("version").IsRequired();
@@ -1450,6 +1503,11 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.CostSource).HasColumnName("cost_source").HasMaxLength(30);
             entity.Property(e => e.CatalogPriceVersionId).HasColumnName("catalog_price_version_id");
             entity.Property(e => e.CostReferencesJson).HasColumnName("cost_references_json").HasColumnType("jsonb").IsRequired();
+            entity.Property(e => e.InternalCostStatus).HasColumnName("internal_cost_status").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.ProductCostEntryId).HasColumnName("product_cost_entry_id");
+            entity.Property(e => e.InternalWalletEntryId).HasColumnName("internal_wallet_entry_id");
+            entity.Property(e => e.CostAccruedAt).HasColumnName("cost_accrued_at");
+            entity.Property(e => e.CostSettledAt).HasColumnName("cost_settled_at");
             entity.Property(e => e.ChargeLineTotalCentsAtPayment).HasColumnName("charge_line_total_cents_at_payment");
             entity.Property(e => e.ReservedQuantity).HasColumnName("reserved_quantity").IsRequired();
             entity.Property(e => e.MappingState).HasColumnName("mapping_state").HasMaxLength(40).IsRequired();
@@ -1861,12 +1919,23 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.PlanId).HasColumnName("plan_id").IsRequired();
             entity.Property(e => e.OriginalEntryId).HasColumnName("original_entry_id").IsRequired();
-            entity.Property(e => e.ReplacementEntryId).HasColumnName("replacement_entry_id").IsRequired();
+            entity.Property(e => e.ReplacementEntryId).HasColumnName("replacement_entry_id");
             entity.Property(e => e.MarketplaceOrderId).HasColumnName("marketplace_order_id");
             entity.Property(e => e.EconomicKey).HasColumnName("economic_key").HasMaxLength(500).IsRequired();
+            entity.Property(e => e.State).HasColumnName("state").HasMaxLength(30).IsRequired();
+            entity.Property(e => e.ExpectedHeadId).HasColumnName("expected_head_id").IsRequired();
+            entity.Property(e => e.ExpectedActiveEntryId).HasColumnName("expected_active_entry_id").IsRequired();
+            entity.Property(e => e.ExpectedHeadVersion).HasColumnName("expected_head_version").IsRequired();
+            entity.Property(e => e.ExpectedActiveEntryHash).HasColumnName("expected_active_entry_hash").HasMaxLength(64).IsRequired();
+            entity.Property(e => e.ExpectedPriceVersionId).HasColumnName("expected_price_version_id");
+            entity.Property(e => e.ExpectedCostReferencesHash).HasColumnName("expected_cost_references_hash").HasMaxLength(64).IsRequired();
+            entity.Property(e => e.CurrentAmountCents).HasColumnName("current_amount_cents").IsRequired();
+            entity.Property(e => e.ReplacementAmountCents).HasColumnName("replacement_amount_cents").IsRequired();
+            entity.Property(e => e.ReplacementBreakdownJson).HasColumnName("replacement_breakdown_json").HasColumnType("jsonb").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.HasIndex(e => new { e.PlanId, e.OriginalEntryId }).IsUnique().HasDatabaseName("ux_financial_correction_plan_entries_original");
-            entity.HasIndex(e => e.ReplacementEntryId).IsUnique().HasDatabaseName("ux_financial_correction_plan_entries_replacement");
+            entity.HasIndex(e => e.ReplacementEntryId).IsUnique().HasFilter("\"replacement_entry_id\" IS NOT NULL")
+                .HasDatabaseName("ux_financial_correction_plan_entries_replacement");
             entity.HasOne<FinancialCorrectionPlan>().WithMany().HasForeignKey(e => e.PlanId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<MarketplaceFinancialEntry>().WithMany().HasForeignKey(e => e.OriginalEntryId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<MarketplaceFinancialEntry>().WithMany().HasForeignKey(e => e.ReplacementEntryId).OnDelete(DeleteBehavior.Restrict);

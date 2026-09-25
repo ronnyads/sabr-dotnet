@@ -112,7 +112,12 @@ public sealed class MercadoLivreCatalogImportService
                 var itemResult = ToResult(listing, channelSku, variationId, assignedSku, request.PreviewOnly ? "preview" : "mapped");
                 var chosenCatalogPriceCents = assignment.CatalogPriceCents ?? request.CatalogPriceCents;
                 if (chosenCatalogPriceCents.HasValue)
+                {
                     itemResult.CatalogPriceCents = chosenCatalogPriceCents.Value;
+                    itemResult.CatalogCostStatus = chosenCatalogPriceCents.Value > 0
+                        ? CatalogCostStatuses.Resolved
+                        : CatalogCostStatuses.Pending;
+                }
                 result.Items.Add(itemResult);
                 if (request.PreviewOnly) continue;
 
@@ -167,12 +172,6 @@ public sealed class MercadoLivreCatalogImportService
                     result.Warnings.Add($"{listing.ItemId}: SKU interno {sku} já existe. Se deseja vinculá-lo, selecione Vincular existente.");
                     continue;
                 }
-                if (existingProduct == null && chosenCatalogPriceCents is null or <= 0)
-                {
-                    itemResult.Action = "skipped_missing_catalog_cost";
-                    result.Warnings.Add($"{listing.ItemId}: informe o Preço Catálogo (custo do seller) para criar o SKU interno {sku}.");
-                    continue;
-                }
                 result.ProductsMatched++;
                 itemResult.InternalSku = sku;
 
@@ -181,6 +180,7 @@ public sealed class MercadoLivreCatalogImportService
                     var product = await _dbContext.Products.FirstOrDefaultAsync(x => x.Sku == productSku, cancellationToken);
                     if (product == null)
                     {
+                        var hasCatalogCost = chosenCatalogPriceCents is > 0;
                         product = new Product
                         {
                             Sku = productSku,
@@ -191,12 +191,17 @@ public sealed class MercadoLivreCatalogImportService
                             CategoryId = ProductAdminService.UncategorizedSlug,
                             ThumbnailUrl = listing.ThumbnailUrl,
                             CostPriceCents = 0,
-                            CatalogPriceCents = itemResult.CatalogPriceCents,
+                            CatalogPriceCents = hasCatalogCost ? chosenCatalogPriceCents!.Value : 0,
+                            CatalogCostStatus = hasCatalogCost ? CatalogCostStatuses.Resolved : CatalogCostStatuses.Pending,
+                            CatalogPriceOrigin = hasCatalogCost ? CatalogPriceOrigins.MasterProduct : CatalogPriceOrigins.None,
                             IsActive = true
                         };
                         _dbContext.Products.Add(product);
                         result.ProductsCreated++;
-                        itemResult.Action = "created";
+                        itemResult.Action = hasCatalogCost ? "created" : "created_catalog_cost_pending";
+                        itemResult.CatalogCostStatus = product.CatalogCostStatus;
+                        if (!hasCatalogCost)
+                            result.Warnings.Add($"{listing.ItemId}: SKU interno {sku} criado com custo pendente; o preço do anúncio não foi usado como Preço Catálogo.");
                     }
                     else
                     {
@@ -216,6 +221,8 @@ public sealed class MercadoLivreCatalogImportService
                             Name = product.Name,
                             CostPriceCents = product.CostPriceCents,
                             CatalogPriceCents = product.CatalogPriceCents,
+                            CatalogCostStatus = product.CatalogCostStatus,
+                            CatalogPriceOrigin = product.CatalogPriceOrigin,
                             PhysicalStock = request.PhysicalStock,
                             ReservedStock = 0,
                             SafetyBuffer = 2,
@@ -224,6 +231,23 @@ public sealed class MercadoLivreCatalogImportService
                             IsActive = true
                         };
                         _dbContext.ProductVariants.Add(variant);
+                        if (variant.CatalogCostStatus == CatalogCostStatuses.Resolved)
+                        {
+                            _dbContext.ProductPriceVersions.Add(new ProductPriceVersion
+                            {
+                                ProductSku = product.Sku,
+                                VariantSku = variant.VariantSku,
+                                PricingMode = ProductPricingModes.Inherited,
+                                CostPriceCents = variant.CostPriceCents,
+                                CatalogPriceCents = variant.CatalogPriceCents,
+                                CatalogCostStatus = CatalogCostStatuses.Resolved,
+                                CatalogPriceOrigin = CatalogPriceOrigins.MasterProduct,
+                                ValidFrom = variant.CreatedAt,
+                                Version = 1,
+                                ChangedByUserId = actorId,
+                                Reason = "Criação de SKU interno a partir de anúncio, com custo informado pelo administrador"
+                            });
+                        }
                     }
                     else
                     {
@@ -328,7 +352,9 @@ public sealed class MercadoLivreCatalogImportService
         InternalSku = internalSku,
         Brand = ResolveBrand(item),
         ThumbnailUrl = item.ThumbnailUrl,
-        CatalogPriceCents = checked((long)Math.Round(item.Price * 100m, MidpointRounding.AwayFromZero)),
+        ListingPriceCents = checked((long)Math.Round(item.Price * 100m, MidpointRounding.AwayFromZero)),
+        CatalogPriceCents = 0,
+        CatalogCostStatus = CatalogCostStatuses.Pending,
         Action = action
     };
 

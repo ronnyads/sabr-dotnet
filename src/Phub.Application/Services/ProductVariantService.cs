@@ -115,6 +115,10 @@ public sealed class ProductVariantService
             CostPriceCents = costPriceCents,
             CatalogPriceCents = catalogPriceCents,
             PricingMode = pricingMode,
+            CatalogCostStatus = catalogPriceCents > 0 ? CatalogCostStatuses.Resolved : CatalogCostStatuses.Pending,
+            CatalogPriceOrigin = catalogPriceCents > 0
+                ? pricingMode == ProductPricingModes.Inherited ? CatalogPriceOrigins.MasterProduct : CatalogPriceOrigins.VariantOverride
+                : CatalogPriceOrigins.None,
             PhysicalStock = physicalStock,
             ReservedStock = reservedStock,
             AvailableStock = Math.Max(0, physicalStock - reservedStock - safetyBuffer),
@@ -130,6 +134,10 @@ public sealed class ProductVariantService
         {
             ProductSku = normalizedBaseSku, VariantSku = normalizedVariantSku, PricingMode = pricingMode,
             CostPriceCents = costPriceCents, CatalogPriceCents = catalogPriceCents,
+            CatalogCostStatus = catalogPriceCents > 0 ? CatalogCostStatuses.Resolved : CatalogCostStatuses.Pending,
+            CatalogPriceOrigin = catalogPriceCents > 0
+                ? pricingMode == ProductPricingModes.Inherited ? CatalogPriceOrigins.MasterProduct : CatalogPriceOrigins.VariantOverride
+                : CatalogPriceOrigins.None,
             ValidFrom = variant.CreatedAt, Version = 1, ChangedByUserId = actorUserId,
             Reason = "Criação da variação"
         });
@@ -211,6 +219,10 @@ public sealed class ProductVariantService
         variant.CostPriceCents = costPriceCents;
         variant.CatalogPriceCents = catalogPriceCents;
         variant.PricingMode = pricingMode;
+        variant.CatalogCostStatus = catalogPriceCents > 0 ? CatalogCostStatuses.Resolved : CatalogCostStatuses.Pending;
+        variant.CatalogPriceOrigin = catalogPriceCents > 0
+            ? pricingMode == ProductPricingModes.Inherited ? CatalogPriceOrigins.MasterProduct : CatalogPriceOrigins.VariantOverride
+            : CatalogPriceOrigins.None;
         variant.PhysicalStock = physicalStock;
         variant.ReservedStock = reservedStock;
         variant.SafetyBuffer = safetyBuffer;
@@ -220,14 +232,27 @@ public sealed class ProductVariantService
 
         if (priceChanged)
         {
-            var current = await _dbContext.ProductPriceVersions
+            var currentVersions = await _dbContext.ProductPriceVersions
                 .Where(x => x.ProductSku == normalizedBaseSku && x.VariantSku == normalizedVariantSku && x.ValidTo == null)
-                .OrderByDescending(x => x.Version).FirstOrDefaultAsync(cancellationToken);
+                .OrderByDescending(x => x.Version).Take(2).ToListAsync(cancellationToken);
+            if (currentVersions.Count > 1)
+                return ServiceResult<AdminProductVariantResult>.Failure(new[]
+                {
+                    new ValidationError("priceVersions", "Overlapping active price versions must be corrected before changing the price.")
+                });
+            var current = currentVersions.SingleOrDefault();
+            if (current != null && variant.UpdatedAt <= current.ValidFrom)
+                return ServiceResult<AdminProductVariantResult>.Failure(new[]
+                {
+                    new ValidationError("priceVersions", "The new price validity must start after the current version.")
+                });
             if (current != null) current.ValidTo = variant.UpdatedAt;
             _dbContext.ProductPriceVersions.Add(new ProductPriceVersion
             {
                 ProductSku = normalizedBaseSku, VariantSku = normalizedVariantSku, PricingMode = pricingMode,
                 CostPriceCents = costPriceCents, CatalogPriceCents = catalogPriceCents,
+                CatalogCostStatus = variant.CatalogCostStatus,
+                CatalogPriceOrigin = variant.CatalogPriceOrigin,
                 ValidFrom = variant.UpdatedAt, Version = (current?.Version ?? 0) + 1,
                 ChangeType = ProductPriceChangeTypes.Change, ChangedByUserId = actorUserId,
                 Reason = string.IsNullOrWhiteSpace(request.PriceChangeReason) ? "Alteração de preço" : request.PriceChangeReason.Trim()
@@ -431,6 +456,8 @@ public sealed class ProductVariantService
             CostPriceCents = item.CostPriceCents,
             CatalogPriceCents = item.CatalogPriceCents,
             PricingMode = item.PricingMode,
+            CatalogCostStatus = item.CatalogCostStatus,
+            CatalogPriceOrigin = item.CatalogPriceOrigin,
             PhysicalStock = item.PhysicalStock,
             ReservedStock = item.ReservedStock,
             AvailableStock = item.AvailableStock,

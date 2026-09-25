@@ -24,6 +24,8 @@ public sealed class Product
     public Guid? AnatelDocumentId { get; set; }
     public long CostPriceCents { get; set; }
     public long CatalogPriceCents { get; set; }
+    public string CatalogCostStatus { get; set; } = CatalogCostStatuses.Resolved;
+    public string CatalogPriceOrigin { get; set; } = CatalogPriceOrigins.MasterProduct;
     public bool IsActive { get; set; } = true;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

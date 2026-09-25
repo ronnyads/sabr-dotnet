@@ -52,6 +52,19 @@ public sealed class FinancialDivergenceResult
     public Dictionary<string, long> ComponentsCents { get; set; } = new();
 }
 
+public sealed class FinancialAuditCoverageResult
+{
+    public long Resolved { get; set; }
+    public long Total { get; set; }
+    public decimal Percent { get; set; }
+}
+
+public sealed class PendingCorrectionPlanResult
+{
+    public Guid PlanId { get; set; }
+    public string Status { get; set; } = string.Empty;
+}
+
 public sealed class ClientProfitabilityResult
 {
     public DateTimeOffset From { get; set; }
@@ -80,6 +93,11 @@ public sealed class ClientProfitabilityResult
     public FinancialDivergenceResult Divergence { get; set; } = new();
     public List<string> IncompleteReasons { get; set; } = new();
     public ExternalSupplierProfitabilityResult ExternalSupplier { get; set; } = new();
+    public string AuditResultStatus { get; set; } = "PARTIAL";
+    public string AuditResultLabel { get; set; } = "Resultado auditado parcial";
+    public FinancialAuditCoverageResult CostCoverage { get; set; } = new();
+    public FinancialAuditCoverageResult FinancialCoverage { get; set; } = new();
+    public PendingCorrectionPlanResult? PendingCorrectionPlan { get; set; }
 }
 
 public sealed class ExternalSupplierProfitabilityResult

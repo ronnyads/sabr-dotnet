@@ -8,6 +8,8 @@ public sealed class ProductPriceVersion
     public string PricingMode { get; set; } = ProductPricingModes.Inherited;
     public long CostPriceCents { get; set; }
     public long CatalogPriceCents { get; set; }
+    public string CatalogCostStatus { get; set; } = CatalogCostStatuses.Resolved;
+    public string CatalogPriceOrigin { get; set; } = CatalogPriceOrigins.MasterProduct;
     public DateTimeOffset ValidFrom { get; set; }
     public DateTimeOffset? ValidTo { get; set; }
     public long Version { get; set; }

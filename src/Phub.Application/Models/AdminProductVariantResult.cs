@@ -8,6 +8,8 @@ public sealed class AdminProductVariantResult
     public long CostPriceCents { get; set; }
     public long CatalogPriceCents { get; set; }
     public string PricingMode { get; set; } = string.Empty;
+    public string CatalogCostStatus { get; set; } = string.Empty;
+    public string CatalogPriceOrigin { get; set; } = string.Empty;
     public int PhysicalStock { get; set; }
     public int ReservedStock { get; set; }
     public int AvailableStock { get; set; }

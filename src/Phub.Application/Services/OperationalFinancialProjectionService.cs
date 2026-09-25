@@ -21,22 +21,29 @@ public sealed class OperationalFinancialProjectionService
         FinancialEntryTypes.SaleFee,
         FinancialEntryTypes.FinancingOrFixedFee,
         FinancialEntryTypes.Refund,
-        FinancialEntryTypes.ProductCost,
-        FinancialEntryTypes.ProductCostRecovery
+        FinancialEntryTypes.ProductCost
     };
 
     private readonly IAppDbContext _db;
     private readonly FinancialLedgerService _ledger;
+    private readonly HistoricalProductCostService _historicalCosts;
 
     public OperationalFinancialProjectionService(IAppDbContext db, FinancialLedgerService ledger)
+        : this(db, ledger, new HistoricalProductCostService(db))
+    {
+    }
+
+    public OperationalFinancialProjectionService(IAppDbContext db, FinancialLedgerService ledger,
+        HistoricalProductCostService historicalCosts)
     {
         _db = db;
         _ledger = ledger;
+        _historicalCosts = historicalCosts;
     }
 
     public async Task ProjectOrderAsync(Guid orderId, CancellationToken cancellationToken = default)
     {
-        var order = await _db.MarketplaceOrders.AsNoTracking().Include(x => x.Items)
+        var order = await _db.MarketplaceOrders.Include(x => x.Items)
             .FirstOrDefaultAsync(x => x.Id == orderId, cancellationToken);
         if (order == null) return;
         var refunds = ReadRefunds(order.RawJson);
@@ -73,9 +80,10 @@ public sealed class OperationalFinancialProjectionService
                     item.Quantity,
                     source = "EXTERNAL_SUPPLIER"
                 });
-                await AppendIfNonZeroAsync(order, item, FinancialEntryTypes.ProductCost,
+                var costEntry = await AppendIfNonZeroAsync(order, item, FinancialEntryTypes.ProductCost,
                     -checked(item.ExternalUnitCostCentsSnapshot.Value * item.Quantity),
                     productCostKey, occurredAt, currency, snapshot, cancellationToken);
+                MarkAccrued(item, costEntry, occurredAt);
             }
             else if (!string.IsNullOrWhiteSpace(item.SabrVariantSku))
             {
@@ -89,13 +97,34 @@ public sealed class OperationalFinancialProjectionService
                 // The paid item snapshot is authoritative. A current catalog price is used
                 // only for the first estimate; the marketplace sale price is never a cost.
                 if (currentCost != null && !item.CatalogUnitPriceCentsAtPayment.HasValue) continue;
-                var currentCatalogPrice = await _db.ProductVariants.AsNoTracking()
-                    .Where(x => x.VariantSku == item.SabrVariantSku)
-                    .Select(x => (long?)x.CatalogPriceCents)
-                    .FirstOrDefaultAsync(cancellationToken);
-                var catalogPrice = item.CatalogUnitPriceCentsAtPayment ?? currentCatalogPrice;
+                var historicalCost = item.CatalogUnitPriceCentsAtPayment.HasValue
+                    ? null
+                    : await _historicalCosts.ResolveAsync(order, item, cancellationToken);
+                var catalogPrice = item.CatalogUnitPriceCentsAtPayment ?? historicalCost?.CatalogPriceCents;
                 if (catalogPrice.HasValue && catalogPrice.Value > 0)
                 {
+                    if (!item.CatalogUnitPriceCentsAtPayment.HasValue && historicalCost != null)
+                    {
+                        item.CatalogUnitPriceCentsAtPayment = historicalCost.CatalogPriceCents;
+                        item.CostUnitPriceCentsAtPayment = historicalCost.CatalogPriceCents;
+                        item.ChargeLineTotalCentsAtPayment = checked(historicalCost.CatalogPriceCents * item.Quantity);
+                        item.EconomicAt = historicalCost.EconomicAt;
+                        item.EconomicAtSource = historicalCost.EconomicAtSource;
+                        item.CostSource = "CATALOG_PRICE";
+                        item.CatalogPriceVersionId = historicalCost.VersionId;
+                        item.CostReferencesJson = JsonSerializer.Serialize(new[]
+                        {
+                            new
+                            {
+                                source = "GENERAL_STOCK",
+                                lotId = (Guid?)null,
+                                quantity = item.Quantity,
+                                unitCostCents = historicalCost.CatalogPriceCents,
+                                catalogPriceVersionId = historicalCost.VersionId,
+                                priceOrigin = historicalCost.Origin
+                            }
+                        });
+                    }
                     var expectedCost = -checked(catalogPrice.Value * item.Quantity);
                     if (currentCost != null && currentCost.Status != FinancialEntryStatuses.Voided
                         && (currentCost.AmountCents == expectedCost
@@ -105,12 +134,16 @@ public sealed class OperationalFinancialProjectionService
                         item.SabrVariantSku,
                         catalogUnitPriceCents = catalogPrice.Value,
                         item.Quantity,
-                        source = item.CatalogUnitPriceCentsAtPayment.HasValue ? "PAID_ITEM_SNAPSHOT" : "INTERNAL_CATALOG"
+                        source = "HISTORICAL_INTERNAL_CATALOG",
+                        item.CatalogPriceVersionId,
+                        item.EconomicAt,
+                        item.EconomicAtSource
                     });
-                    await AppendIfNonZeroAsync(order, item, FinancialEntryTypes.ProductCost,
+                    var costEntry = await AppendIfNonZeroAsync(order, item, FinancialEntryTypes.ProductCost,
                         expectedCost,
                         productCostKey,
                         occurredAt, currency, snapshot, cancellationToken);
+                    MarkAccrued(item, costEntry ?? currentCost, occurredAt);
                 }
             }
         }
@@ -124,13 +157,14 @@ public sealed class OperationalFinancialProjectionService
                 refund.RawJson, cancellationToken);
         }
 
+        await _db.SaveChangesAsync(cancellationToken);
         await RebuildOrderStateAsync(order, cancellationToken);
     }
 
     public async Task ProjectExternalFactsAsync(Guid orderId, MercadoLivreShipmentCostDetails? shipping,
         IReadOnlyList<MercadoLivreOrderDiscountDetails> discounts, CancellationToken cancellationToken = default)
     {
-        var order = await _db.MarketplaceOrders.AsNoTracking().Include(x => x.Items)
+        var order = await _db.MarketplaceOrders.Include(x => x.Items)
             .FirstOrDefaultAsync(x => x.Id == orderId, cancellationToken);
         if (order == null || (!IsFinancialOrder(order.Status) && !IsCancelledOrder(order.Status))) return;
         var occurredAt = order.PaidAt ?? order.ChannelCreatedAt ?? order.ImportedAt;
@@ -167,7 +201,7 @@ public sealed class OperationalFinancialProjectionService
 
     public async Task ConfirmProductCostsAsync(Guid orderId, DateTimeOffset confirmedAt, CancellationToken cancellationToken = default)
     {
-        var order = await _db.MarketplaceOrders.AsNoTracking().Include(x => x.Items)
+        var order = await _db.MarketplaceOrders.Include(x => x.Items)
             .FirstOrDefaultAsync(x => x.Id == orderId, cancellationToken);
         if (order == null) return;
         var itemById = order.Items.ToDictionary(x => x.Id);
@@ -180,7 +214,7 @@ public sealed class OperationalFinancialProjectionService
         {
             itemById.TryGetValue(current.MarketplaceOrderItemId ?? Guid.Empty, out var item);
             var payload = JsonSerializer.Serialize(new { confirmedBy = "PROMETHEUSHUB_WALLET", confirmedAt, sourceEntryId = current.Id });
-            await _ledger.AppendAsync(new AppendFinancialEntryRequest
+            var confirmed = await _ledger.AppendAsync(new AppendFinancialEntryRequest
             {
                 TenantId = current.TenantId, ClientId = current.ClientId, Provider = current.Provider, SellerId = current.SellerId,
                 EntryType = current.EntryType, Layer = FinancialLayers.InternalConfirmed, Status = FinancialEntryStatuses.Confirmed,
@@ -191,7 +225,16 @@ public sealed class OperationalFinancialProjectionService
                 SourceEndpoint = "/api/v1/client/orders/{orderId}/pay", SourceRecordId = order.Id.ToString("N"),
                 CanonicalPayloadHash = Hash(payload), MetadataJson = payload
             }, cancellationToken);
+            if (item != null)
+            {
+                item.InternalCostStatus = InternalCostStatuses.Settled;
+                item.ProductCostEntryId = confirmed.Id;
+                item.InternalWalletEntryId = order.WalletLedgerEntryId;
+                item.CostAccruedAt ??= current.EconomicOccurredAt;
+                item.CostSettledAt = confirmedAt;
+            }
         }
+        await _db.SaveChangesAsync(cancellationToken);
         await RebuildOrderStateAsync(order, cancellationToken);
     }
 
@@ -208,6 +251,13 @@ public sealed class OperationalFinancialProjectionService
 
         foreach (var current in active)
         {
+            // A settled internal obligation remains an historical fact. A
+            // later cancellation is handled by refund/return/recovery facts.
+            if (current.EntryType == FinancialEntryTypes.ProductCost
+                && (current.Status == FinancialEntryStatuses.Confirmed
+                    || order.Items.Any(x => x.Id == current.MarketplaceOrderItemId
+                        && x.InternalCostStatus == InternalCostStatuses.Settled)))
+                continue;
             var payload = JsonSerializer.Serialize(new
             {
                 correction = "ORDER_CANCELLED",
@@ -216,7 +266,7 @@ public sealed class OperationalFinancialProjectionService
                 preservedAmountCents = current.AmountCents,
                 providerUpdatedAt = order.UpdatedAt
             });
-            await _ledger.AppendAsync(new AppendFinancialEntryRequest
+            var voided = await _ledger.AppendAsync(new AppendFinancialEntryRequest
             {
                 TenantId = current.TenantId,
                 ClientId = current.ClientId,
@@ -246,7 +296,14 @@ public sealed class OperationalFinancialProjectionService
                 CanonicalPayloadHash = Hash(payload),
                 MetadataJson = payload
             }, cancellationToken);
+            var item = order.Items.FirstOrDefault(x => x.Id == current.MarketplaceOrderItemId);
+            if (item != null && current.EntryType == FinancialEntryTypes.ProductCost)
+            {
+                item.InternalCostStatus = InternalCostStatuses.Voided;
+                item.ProductCostEntryId = voided.Id;
+            }
         }
+        await _db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task RebuildOrderStateAsync(MarketplaceOrder order, CancellationToken cancellationToken = default)
@@ -339,10 +396,10 @@ public sealed class OperationalFinancialProjectionService
         await _db.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task AppendIfNonZeroAsync(MarketplaceOrder order, MarketplaceOrderItem item, string type, long amount,
+    private async Task<MarketplaceFinancialEntry?> AppendIfNonZeroAsync(MarketplaceOrder order, MarketplaceOrderItem item, string type, long amount,
         string economicKey, DateTimeOffset occurredAt, string currency, string payload, CancellationToken cancellationToken)
     {
-        if (amount == 0) return;
+        if (amount == 0) return null;
         var hash = Hash(payload);
         var activeStatus = await (from head in _db.FinancialEconomicHeads.AsNoTracking()
                                   join entry in _db.MarketplaceFinancialEntries.AsNoTracking() on head.ActiveEntryId equals entry.Id
@@ -353,7 +410,7 @@ public sealed class OperationalFinancialProjectionService
         var idempotencyKey = $"ORDER:{order.MlOrderId}:{type}:{item.Id:N}:{hash}";
         if (activeStatus?.Status == FinancialEntryStatuses.Voided)
             idempotencyKey += $":REACTIVATE:{activeStatus.Id:N}";
-        await _ledger.AppendAsync(new AppendFinancialEntryRequest
+        return await _ledger.AppendAsync(new AppendFinancialEntryRequest
         {
             TenantId = order.TenantId,
             ClientId = order.ClientId,
@@ -377,6 +434,18 @@ public sealed class OperationalFinancialProjectionService
             CanonicalPayloadHash = hash,
             MetadataJson = payload
         }, cancellationToken);
+    }
+
+    private static void MarkAccrued(MarketplaceOrderItem item, MarketplaceFinancialEntry? entry, DateTimeOffset occurredAt)
+    {
+        if (entry == null || entry.Status == FinancialEntryStatuses.Voided) return;
+        item.InternalCostStatus = entry.Status == FinancialEntryStatuses.Confirmed
+            ? InternalCostStatuses.Settled
+            : InternalCostStatuses.Accrued;
+        item.ProductCostEntryId = entry.Id;
+        item.CostAccruedAt ??= occurredAt;
+        if (entry.Status == FinancialEntryStatuses.Confirmed)
+            item.CostSettledAt ??= entry.FinancialConfirmedAt;
     }
 
     private async Task AppendFactAsync(MarketplaceOrder order, MarketplaceOrderItem? item, string type, long amount,

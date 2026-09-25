@@ -23,6 +23,8 @@ public sealed class AdminProductResult
     public Guid? AnatelDocumentId { get; set; }
     public long CostPriceCents { get; set; }
     public long CatalogPriceCents { get; set; }
+    public string CatalogCostStatus { get; set; } = string.Empty;
+    public string CatalogPriceOrigin { get; set; } = string.Empty;
     public bool IsActive { get; set; }
     public IReadOnlyCollection<ProductImageResult> Images { get; set; } = Array.Empty<ProductImageResult>();
     public IReadOnlyCollection<AdminProductListingLinkResult> ListingLinks { get; set; } = Array.Empty<AdminProductListingLinkResult>();

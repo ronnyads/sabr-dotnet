@@ -1,3 +1,5 @@
+using Phub.Domain.Entities;
+
 namespace Phub.Application.Models;
 
 public sealed class MercadoLivreCatalogImportRequest
@@ -43,5 +45,7 @@ public sealed class MercadoLivreCatalogImportItemResult
     public string Brand { get; set; } = string.Empty;
     public string? ThumbnailUrl { get; set; }
     public long CatalogPriceCents { get; set; }
+    public long ListingPriceCents { get; set; }
+    public string CatalogCostStatus { get; set; } = CatalogCostStatuses.Pending;
     public string Action { get; set; } = string.Empty;
 }

@@ -29,6 +29,11 @@ public sealed class MarketplaceOrderItem
     public string? CostSource { get; set; }
     public Guid? CatalogPriceVersionId { get; set; }
     public string CostReferencesJson { get; set; } = "{}";
+    public string InternalCostStatus { get; set; } = InternalCostStatuses.None;
+    public Guid? ProductCostEntryId { get; set; }
+    public Guid? InternalWalletEntryId { get; set; }
+    public DateTimeOffset? CostAccruedAt { get; set; }
+    public DateTimeOffset? CostSettledAt { get; set; }
     public int ReservedQuantity { get; set; }
     public string MappingState { get; set; } = "UNMAPPED";
     public Guid? MappingSnapshotId { get; set; }
@@ -44,4 +49,16 @@ public sealed class MarketplaceOrderItem
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public MarketplaceOrder? MarketplaceOrder { get; set; }
+}
+
+public static class InternalCostStatuses
+{
+    public const string None = "NONE";
+    public const string Reserved = "RESERVED";
+    public const string Accrued = "ACCRUED";
+    public const string Settled = "SETTLED";
+    public const string Voided = "VOIDED";
+    public const string Reversed = "REVERSED";
+
+    public static bool IsValidObligation(string status) => status is Accrued or Settled;
 }

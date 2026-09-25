@@ -12,7 +12,7 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 - `seller_custom_field`/`SELLER_SKU`, `itemId`, `variationId` e `userProductId` são identificadores externos. O Item ID `MLB...` nunca é criado automaticamente como SKU mestre.
 - Cada anúncio/variação selecionado exige um SKU interno explícito, salvo quando o SKU do canal já corresponde a uma variante interna ativa e inequívoca. Sem ponte válida, o anúncio é ignorado com aviso; pedidos sem vínculo continuam bloqueados para pagamento.
 - O produto e a variante usam o mesmo SKU quando o anúncio não possui variações.
-- Cada atribuição declara `createNewProduct`: vincular SKU existente é o padrão seguro; criar SKU novo exige intenção explícita e Preço Catálogo positivo, global ou por linha, que representa o custo cobrado ao seller. Um erro de digitação não cria produto automaticamente. O preço de venda do ML é apenas informativo.
+- Cada atribuição declara `createNewProduct`: vincular SKU existente é o padrão seguro. Criar SKU novo exige intenção explícita; se o custo interno não for informado, o produto nasce `CATALOG_COST_PENDING`, com preço de catálogo zero e sem versão histórica de custo. Um erro de digitação não cria produto automaticamente. O preço de venda do ML é apenas informativo e nunca é copiado para o custo.
 - Cada variação do anúncio pode apontar a uma variação interna distinta. Um SKU base que já possui variações não pode receber vínculo direto sem a escolha da variante.
 - Produtos legados cujo SKU mestre já é `MLB...` não são renomeados automaticamente. O admin atribui um novo SKU interno na importação; o vínculo passa a usá-lo apenas para pedidos futuros, enquanto o cadastro legado permanece para preservar referências históricas. A desativação do legado exige revisão de reservas/publicações.
 - Todo produto ativo é vinculado ao **Catálogo Público** por padrão. Catálogos `PlanRestricted` continuam dependentes de uma assinatura ativa; clientes aprovados enxergam o catálogo público mesmo sem plano.
@@ -25,6 +25,7 @@ O admin pode importar produtos a partir da integração Mercado Livre de um clie
 - `POST /api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import`.
 - O request aceita busca, marcas, estoque, modo de prévia e `skuAssignments` (`itemId`, `variationId`, `internalSku`, `createNewProduct`, `catalogPriceCents` opcional). A interface envia as atribuições de SKU por anúncio/variação e permite custo individual com fallback para o custo padrão.
 - `ItemIds` limita a gravação aos anúncios selecionados. A prévia pode consultar tudo, mas nenhuma gravação acontece antes da seleção explícita.
+- O retorno separa `listingPriceCents` (receita anunciada no canal) de `catalogPriceCents` e `catalogCostStatus`; não existe fallback entre esses campos.
 - Corrigido em 20/09/2026 (achado 2.7 da auditoria `mercado-livre-360-auditoria.md`): o backend não impunha essa regra sozinho — `ItemIds` vazio fora do `PreviewOnly` deixava o filtro de `Brands` selecionar e gravar todos os anúncios correspondentes, mesmo sem seleção explícita na tela. `MercadoLivreCatalogImportService.ImportAsync` agora rejeita (`ValidationError "itemIds"`) qualquer importação real com `ItemIds` vazio; o modo de prévia continua livre para listar tudo, já que não grava nada.
 
 ## Inteligência de seller

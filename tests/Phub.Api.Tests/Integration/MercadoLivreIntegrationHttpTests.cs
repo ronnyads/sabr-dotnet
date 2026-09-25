@@ -488,6 +488,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         {
             MlOrderId = "ORDER-ML-04",
             Status = "paid",
+            ChannelCreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            PaidAt = DateTimeOffset.UtcNow.AddMinutes(-5),
             Items = new List<MercadoLivreOrderItemDetails>
             {
                 new()
@@ -643,7 +645,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(0, variant.ReservedStock);
         Assert.Equal(6, variant.AvailableStock);
         Assert.Equal(3_000, paidOrder.TotalChargeCentsAtPayment);
-        Assert.Null(paidOrder.PaidAt); // internal checkout cannot invent an external payment timestamp
+        Assert.NotNull(paidOrder.PaidAt); // preserved from the channel; checkout does not invent or replace it
+        Assert.Equal("PAID_AT", paidItem.EconomicAtSource);
         Assert.Equal(1_500, paidItem.CatalogUnitPriceCentsAtPayment);
         Assert.Equal(3_000, paidItem.ChargeLineTotalCentsAtPayment);
         Assert.Equal(997_000, wallet.BalanceCents);
@@ -682,6 +685,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 SellerId = ParseSellerId(sellerId),
                 MlOrderId = "ORDER-ML-05",
                 Status = "paid",
+                PaidAt = nowUtc.AddHours(-1),
                 ShipByDeadlineAt = nowUtc.AddMinutes(-10),
                 ImportedAt = nowUtc.AddHours(-1),
                 RawJson = "{}"
@@ -1815,6 +1819,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 SellerId = ParseSellerId(sellerId),
                 MlOrderId = "ORDER-SLA-01",
                 Status = "paid",
+                PaidAt = nowUtc.AddHours(-1),
                 ShippingMode = "me2",
                 LogisticType = "flex",
                 ShipByDeadlineAt = nowUtc.AddMinutes(-5),
@@ -2654,6 +2659,54 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             });
         Assert.Equal(HttpStatusCode.OK, typoResponse.StatusCode);
         Assert.False(await db.Products.AnyAsync(product => product.Sku == "PH-TYPO"));
+    }
+
+    [Fact]
+    public async Task AdminCatalogImport_NewSkuWithoutInternalCost_IsCreatedPendingAndDoesNotUseListingPrice()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-pending-cost";
+        const string tenantSlug = "mlpendingcost";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, "1001199");
+        _factory.FakeMercadoLivreApiClient.SellerItems.Add(new MercadoLivreSellerItemDetails
+        {
+            ItemId = "MLB-PENDING-COST",
+            Title = "Produto sem custo interno",
+            Price = 499.90m
+        });
+
+        using var client = _factory.CreateAdminClient();
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/admin/tenants/{tenantSlug}/clients/{clientId}/integrations/mercadolivre/catalog/import",
+            new MercadoLivreCatalogImportRequest
+            {
+                Brands = [],
+                ItemIds = ["MLB-PENDING-COST"],
+                SkuAssignments =
+                [
+                    new()
+                    {
+                        ItemId = "MLB-PENDING-COST",
+                        InternalSku = "PH-PENDING-COST",
+                        CreateNewProduct = true
+                    }
+                ]
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var product = await db.Products.SingleAsync(x => x.Sku == "PH-PENDING-COST");
+        var variant = await db.ProductVariants.SingleAsync(x => x.VariantSku == "PH-PENDING-COST");
+        Assert.Equal(0, product.CatalogPriceCents);
+        Assert.Equal(CatalogCostStatuses.Pending, product.CatalogCostStatus);
+        Assert.Equal(CatalogPriceOrigins.None, product.CatalogPriceOrigin);
+        Assert.Equal(0, variant.CatalogPriceCents);
+        Assert.Equal(CatalogCostStatuses.Pending, variant.CatalogCostStatus);
+        Assert.Empty(await db.ProductPriceVersions.Where(x => x.VariantSku == "PH-PENDING-COST").ToListAsync());
+        Assert.True(await db.TenantMarketplaceListingMaps.AnyAsync(x => x.MlItemId == "MLB-PENDING-COST"));
     }
 
     [Fact]

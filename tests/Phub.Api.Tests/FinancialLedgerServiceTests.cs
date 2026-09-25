@@ -124,7 +124,7 @@ public sealed class FinancialLedgerServiceTests
         {
             TenantId = "tenant", ClientId = clientId, SellerId = 10,
             Provider = MarketplaceProvider.MercadoLivre, MlOrderId = "ORDER-COST-SNAPSHOT",
-            Status = "paid", RawJson = "{}"
+            Status = "paid", PaidAt = new DateTimeOffset(2026, 9, 10, 12, 0, 0, TimeSpan.Zero), RawJson = "{}"
         };
         var item = new MarketplaceOrderItem
         {
@@ -139,6 +139,15 @@ public sealed class FinancialLedgerServiceTests
         {
             BaseSku = "PH-COST", VariantSku = "PH-COST", Name = "Produto interno",
             CatalogPriceCents = 800, PhysicalStock = 10, AvailableStock = 8
+        });
+        db.ProductPriceVersions.Add(new ProductPriceVersion
+        {
+            ProductSku = "PH-COST", VariantSku = "PH-COST", PricingMode = ProductPricingModes.Inherited,
+            CatalogPriceCents = 800, CostPriceCents = 0,
+            CatalogCostStatus = CatalogCostStatuses.Resolved,
+            CatalogPriceOrigin = CatalogPriceOrigins.MasterProduct,
+            ValidFrom = order.PaidAt.Value.AddDays(-1), Version = 1,
+            ChangedByUserId = Guid.NewGuid(), Reason = "Preço interno histórico"
         });
         await db.SaveChangesAsync();
         var projection = new OperationalFinancialProjectionService(db, new FinancialLedgerService(db));

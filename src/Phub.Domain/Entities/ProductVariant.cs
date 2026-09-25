@@ -20,6 +20,8 @@ public sealed class ProductVariant
     public long CostPriceCents { get; set; }
     public long CatalogPriceCents { get; set; }
     public string PricingMode { get; set; } = ProductPricingModes.Inherited;
+    public string CatalogCostStatus { get; set; } = CatalogCostStatuses.Resolved;
+    public string CatalogPriceOrigin { get; set; } = CatalogPriceOrigins.MasterProduct;
     public int PhysicalStock { get; set; }
     public int ReservedStock { get; set; }
     public int AvailableStock { get; set; }
