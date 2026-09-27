@@ -56,11 +56,11 @@ public sealed class ClientSalesDashboardService
 
         var orders = await baseQuery
             .Where(order => (order.ChannelCreatedAt ?? order.ImportedAt) >= previousFrom
-                            && (order.ChannelCreatedAt ?? order.ImportedAt) <= rangeTo)
+                            && (order.ChannelCreatedAt ?? order.ImportedAt) < rangeTo)
             .ToListAsync(cancellationToken);
 
         var current = orders
-            .Where(order => EffectiveDate(order) >= rangeFrom && EffectiveDate(order) <= rangeTo)
+            .Where(order => EffectiveDate(order) >= rangeFrom && EffectiveDate(order) < rangeTo)
             .ToList();
         var previous = orders
             .Where(order => EffectiveDate(order) >= previousFrom && EffectiveDate(order) < rangeFrom)

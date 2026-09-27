@@ -368,11 +368,15 @@ public sealed class FinancialSyncJobService
                 && (!x.NextAttemptAt.HasValue || x.NextAttemptAt <= now)
                 && (!x.LeaseUntil.HasValue || x.LeaseUntil < now))
                 .OrderBy(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk ? 0 : 1)
+                // Process the newest missing day across every seller first. If one
+                // seller owns hundreds of older windows it can no longer starve a
+                // newly connected store whose current-period totals are incomplete.
+                .ThenByDescending(x => x.RangeTo)
                 .ThenBy(x => x.UpdatedAt)
                 .ThenBy(x => x.SellerId)
                 .ThenBy(x => x.CreatedAt);
             job = _db.Database.IsRelational()
-                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY','BILLING_RECONCILIATION') AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY CASE WHEN job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY') THEN 0 ELSE 1 END, updated_at, seller_id, created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
+                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY','BILLING_RECONCILIATION') AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY CASE WHEN job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY') THEN 0 ELSE 1 END, range_to DESC, updated_at, seller_id, created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
                 : await query.FirstOrDefaultAsync(cancellationToken);
             if (job == null) return false;
             job.Status = "RUNNING";

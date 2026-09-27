@@ -108,6 +108,40 @@ public sealed class ClientSalesDashboardServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_UsesSemiOpenPeriodAndExcludesOrderAtEndBoundary()
+    {
+        await using var db = CreateDb();
+        const string tenantId = "tenant-semi-open-dashboard";
+        var clientId = Guid.NewGuid();
+        var from = new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 9, 28, 3, 0, 0, TimeSpan.Zero);
+
+        var included = CreateOrder(tenantId, clientId, "ORDER-IN-RANGE", "paid", to.AddTicks(-1), 10m);
+        included.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = included.SellerId, MlItemId = "MLB-IN-RANGE", Quantity = 1,
+            UnitPrice = 10m, MappingState = "MAPPED", RawJson = "{}"
+        });
+        var excluded = CreateOrder(tenantId, clientId, "ORDER-AT-END", "paid", to, 20m);
+        excluded.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = excluded.SellerId, MlItemId = "MLB-AT-END", Quantity = 1,
+            UnitPrice = 20m, MappingState = "MAPPED", RawJson = "{}"
+        });
+        db.MarketplaceOrders.AddRange(included, excluded);
+        await db.SaveChangesAsync();
+
+        var result = await new ClientSalesDashboardService(db).GetAsync(
+            tenantId, clientId, from, to, MarketplaceProvider.MercadoLivre);
+
+        Assert.Equal(1, result.TotalOrders);
+        Assert.Equal(1, result.PaidOrders);
+        Assert.Equal(10m, result.GrossRevenue);
+    }
+
+    [Fact]
     public async Task GetAsync_ListsOnlyPendingShipmentsDueTodayBySku()
     {
         await using var db = CreateDb();

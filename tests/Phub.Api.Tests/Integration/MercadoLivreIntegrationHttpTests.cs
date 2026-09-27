@@ -1411,6 +1411,61 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task FinancialSync_PrioritizesNewestWindowAcrossSellers()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-fair-queue";
+        const string tenantSlug = "mlfairqueue";
+        var clientId = Guid.NewGuid();
+        const string olderSellerId = "1001026";
+        const string currentSellerId = "1001027";
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, olderSellerId);
+        await SeedConnectionAsync(tenantId, clientId, currentSellerId);
+
+        var olderJobId = Guid.NewGuid();
+        var currentJobId = Guid.NewGuid();
+        var currentTo = DateTimeOffset.UtcNow;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.FinancialSyncJobs.AddRange(
+                new FinancialSyncJob
+                {
+                    Id = olderJobId, TenantId = tenantId, ClientId = clientId,
+                    SellerId = ParseSellerId(olderSellerId),
+                    JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                    RangeFrom = currentTo.AddDays(-121), RangeTo = currentTo.AddDays(-120),
+                    DedupeKey = $"test-fair-older-{olderJobId:N}",
+                    CreatedAt = currentTo.AddHours(-2), UpdatedAt = currentTo.AddHours(-2)
+                },
+                new FinancialSyncJob
+                {
+                    Id = currentJobId, TenantId = tenantId, ClientId = clientId,
+                    SellerId = ParseSellerId(currentSellerId),
+                    JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                    RangeFrom = currentTo.AddDays(-1), RangeTo = currentTo,
+                    DedupeKey = $"test-fair-current-{currentJobId:N}",
+                    CreatedAt = currentTo.AddHours(-1), UpdatedAt = currentTo.AddHours(-1)
+                });
+            await db.SaveChangesAsync();
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            Assert.True(await service.ProcessNextAsync("fair-worker", CancellationToken.None));
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal("PENDING", (await db.FinancialSyncJobs.SingleAsync(x => x.Id == olderJobId)).Status);
+            Assert.Equal("COMPLETED", (await db.FinancialSyncJobs.SingleAsync(x => x.Id == currentJobId)).Status);
+        }
+    }
+
+    [Fact]
     public async Task FinancialSync_CheckpointsLongChunkOnePageAtATime()
     {
         await _factory.ResetDatabaseAsync();
