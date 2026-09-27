@@ -149,6 +149,8 @@ public sealed class FinancialSyncJobService
                 // A durable historical coverage repairs missing windows instead of
                 // starting a competing annual process. Recent manual syncs always
                 // create a fresh batch so late shipment/status changes are observed.
+                batch.PayloadJson = JsonSerializer.Serialize(new
+                    { algorithmVersion = OperationalHistoryAlgorithm, overlapHours = 1 });
                 if (from < batch.RangeFrom) batch.RangeFrom = from;
                 if (to > batch.RangeTo) batch.RangeTo = to;
             }
