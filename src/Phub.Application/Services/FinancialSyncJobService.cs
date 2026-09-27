@@ -139,7 +139,7 @@ public sealed class FinancialSyncJobService
                     TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre, SellerId = seller,
                     JobType = FinancialSyncJobTypes.OperationalSyncBatch, RangeFrom = from, RangeTo = to,
                     DedupeKey = stableDedupe, Status = "INITIAL_PENDING",
-                    PayloadJson = JsonSerializer.Serialize(new { algorithmVersion = OperationalHistoryAlgorithm, overlapSeconds = 1 })
+                    PayloadJson = JsonSerializer.Serialize(new { algorithmVersion = OperationalHistoryAlgorithm, overlapHours = 1 })
                 };
                 _db.FinancialSyncJobs.Add(batch);
                 needsWork = true;
