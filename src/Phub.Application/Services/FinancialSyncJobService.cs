@@ -112,25 +112,30 @@ public sealed class FinancialSyncJobService
         from = new DateTimeOffset(from.Year, from.Month, from.Day, from.Hour, 0, 0, TimeSpan.Zero);
         foreach (var seller in sellers)
         {
-            var stableDedupe = isHistoricalBackfill
-                ? $"OP:HISTORY:{OperationalHistoryAlgorithm}:{tenantId}:{clientId:N}:{seller}:{from:yyyyMMddHH}:{to:yyyyMMddHH}"
-                : $"OP:RECENT:{OperationalHistoryAlgorithm}:{tenantId}:{clientId:N}:{seller}:{from:yyyyMMddHH}:{to:yyyyMMddHH}:{now:yyyyMMddHHmmssfffffff}";
+            // One durable parent per seller and algorithm. The covered interval is
+            // mutable metadata; putting it in the key used to create a new annual
+            // process whenever the clock crossed a boundary.
+            var jobPrefix = isHistoricalBackfill ? "OP:HISTORY" : "OP:RECENT";
+            var stableDedupe = $"{jobPrefix}:{OperationalHistoryAlgorithm}:{tenantId}:{clientId:N}:{seller}";
             var batch = await _db.FinancialSyncJobs.FirstOrDefaultAsync(x =>
                 x.TenantId == tenantId && x.ClientId == clientId && x.Provider == MarketplaceProvider.MercadoLivre
                 && x.SellerId == seller && x.JobType == FinancialSyncJobTypes.OperationalSyncBatch
                 && x.DedupeKey == stableDedupe, cancellationToken);
             var needsWork = false;
-            if (batch == null && isHistoricalBackfill)
+
+            // Adopt the most recent parent created by the interval-key algorithm.
+            // This upgrades production in place and preserves its checkpoints.
+            if (batch == null)
             {
-                var active = await _db.FinancialSyncJobs.AsNoTracking().FirstOrDefaultAsync(x =>
+                batch = await _db.FinancialSyncJobs
+                    .Where(x =>
                     x.TenantId == tenantId && x.ClientId == clientId && x.Provider == MarketplaceProvider.MercadoLivre
                     && x.SellerId == seller && x.JobType == FinancialSyncJobTypes.OperationalSyncBatch
-                    && (x.Status == "INITIAL_PENDING" || x.Status == "BACKFILLING"), cancellationToken);
-                if (active != null)
-                {
-                    result.Jobs.Add(Map(active));
-                    continue;
-                }
+                    && x.DedupeKey.StartsWith($"{jobPrefix}:{OperationalHistoryAlgorithm}:"))
+                    .OrderByDescending(x => x.UpdatedAt)
+                    .ThenByDescending(x => x.CreatedAt)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (batch != null) batch.DedupeKey = stableDedupe;
             }
             if (batch == null)
             {
@@ -147,8 +152,8 @@ public sealed class FinancialSyncJobService
             else
             {
                 // A durable historical coverage repairs missing windows instead of
-                // starting a competing annual process. Recent manual syncs always
-                // create a fresh batch so late shipment/status changes are observed.
+                // starting a competing annual process. Recent refreshes reopen the
+                // durable rolling windows so late shipment/status changes are seen.
                 batch.PayloadJson = JsonSerializer.Serialize(new
                     { algorithmVersion = OperationalHistoryAlgorithm, overlapHours = 1 });
                 if (from < batch.RangeFrom) batch.RangeFrom = from;
@@ -163,7 +168,11 @@ public sealed class FinancialSyncJobService
                 var existingWindow = existingWindows.FirstOrDefault(x => x.RangeFrom == cursor && x.RangeTo == chunkTo);
                 if (existingWindow != null)
                 {
-                    if (existingWindow.Status is "FAILED" or "PARTIAL")
+                    // Historical windows are immutable once reconciled. A manual
+                    // recent refresh reuses the same durable window instead of
+                    // accumulating another job row on every click.
+                    if (existingWindow.Status is "FAILED" or "PARTIAL"
+                        || (!isHistoricalBackfill && existingWindow.Status == "COMPLETED"))
                     {
                         var tracked = await _db.FinancialSyncJobs.SingleAsync(x => x.ParentJobId == batch.Id
                             && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
@@ -194,6 +203,25 @@ public sealed class FinancialSyncJobService
         }
         await _db.SaveChangesAsync(cancellationToken);
         return result;
+    }
+
+    public async Task<FinancialSyncEnqueueResult> EnqueueCompleteOperationalSyncAsync(
+        string tenantId, Guid clientId, long? sellerId,
+        CancellationToken cancellationToken = default)
+    {
+        // One user command guarantees the durable 12-month coverage and also
+        // refreshes the recent/open window. Both paths are idempotent.
+        var history = await EnqueueOperationalBackfillAsync(
+            tenantId, clientId, sellerId, lookbackDays: 366, chunkDays: 1,
+            cancellationToken: cancellationToken);
+        var recent = await EnqueueOperationalBackfillAsync(
+            tenantId, clientId, sellerId, lookbackDays: 7, chunkDays: 1,
+            cancellationToken: cancellationToken);
+        foreach (var job in recent.Jobs)
+        {
+            if (history.Jobs.All(x => x.JobId != job.JobId)) history.Jobs.Add(job);
+        }
+        return history;
     }
 
     public async Task<int> EnsureExistingSellerHistoryAsync(CancellationToken cancellationToken = default)

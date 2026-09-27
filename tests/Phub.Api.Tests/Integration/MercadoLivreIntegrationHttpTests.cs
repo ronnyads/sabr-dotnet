@@ -287,6 +287,18 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
         Assert.Equal(HttpStatusCode.Accepted, second.StatusCode);
+
+        using (var jobsScope = _factory.Services.CreateScope())
+        {
+            var jobsDb = jobsScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var historyJob = await jobsDb.FinancialSyncJobs.SingleAsync(job =>
+                job.ParentJobId == null && job.DedupeKey.StartsWith("OP:HISTORY:"));
+            var recentJob = await jobsDb.FinancialSyncJobs.SingleAsync(job =>
+                job.ParentJobId == null && job.DedupeKey.StartsWith("OP:RECENT:"));
+            Assert.Equal($"OP:HISTORY:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}", historyJob.DedupeKey);
+            Assert.Equal($"OP:RECENT:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}", recentJob.DedupeKey);
+        }
+
         await DrainFinancialSyncJobsAsync();
 
         using var scope = _factory.Services.CreateScope();

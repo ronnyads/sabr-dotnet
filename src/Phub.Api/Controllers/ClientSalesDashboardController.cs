@@ -105,7 +105,8 @@ public sealed class ClientSalesDashboardController : ControllerBase
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
         try
         {
-            var result = await _financialSync.EnqueueOperationalBackfillAsync(tenantId!, clientId, sellerId, cancellationToken: cancellationToken);
+            var result = await _financialSync.EnqueueCompleteOperationalSyncAsync(
+                tenantId!, clientId, sellerId, cancellationToken);
             try
             {
                 var billing = await _financialSync.EnqueueBillingReconciliationAsync(
