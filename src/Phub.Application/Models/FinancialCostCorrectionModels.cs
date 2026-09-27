@@ -1,7 +1,10 @@
+using Phub.Domain.Entities;
+
 namespace Phub.Application.Models;
 
 public sealed class FinancialCostCorrectionDryRunRequest
 {
+    public string PlanType { get; set; } = FinancialCorrectionPlanTypes.PriceVersionCorrection;
     public long SellerId { get; set; }
     public List<FinancialCostCorrectionSkuRequest> Skus { get; set; } = [];
     public DateTimeOffset? RangeFrom { get; set; }
@@ -14,6 +17,7 @@ public sealed class FinancialCostCorrectionSkuRequest
     public string Sku { get; set; } = string.Empty;
     public long CorrectUnitCostCents { get; set; }
     public List<Guid> IncorrectCatalogPriceVersionIds { get; set; } = [];
+    public DateTimeOffset? BaselineCutAt { get; set; }
 }
 
 public sealed record FinancialCostCorrectionSkuReport(string Sku, int QuantityImpacted,
@@ -39,7 +43,27 @@ public sealed record FinancialCostCorrectionManifestEntry(
     long CurrentCostCents,
     long ReplacementCostCents,
     long ProfitImpactCents,
-    string ReplacementBreakdownJson);
+    string ReplacementBreakdownJson,
+    DateTimeOffset? BaselineCutAt = null,
+    Guid? BaselinePriceVersionId = null);
+
+public sealed record CatalogCostBaselineReport(
+    string ProductSku,
+    string VariantSku,
+    Guid BaselinePriceVersionId,
+    long BaselineUnitCostCents,
+    DateTimeOffset BaselineCutAt,
+    string Origin);
+
+public sealed record FinancialCorrectionHistoryCoverage(
+    Guid JobId,
+    string Status,
+    DateTimeOffset RangeFrom,
+    DateTimeOffset RangeTo,
+    int CompletedWindows,
+    int TotalWindows,
+    int UnresolvedGapOrderIds,
+    string SnapshotHash);
 
 public sealed record FinancialCostCorrectionPendingItem(
     string EconomicKey,
@@ -64,7 +88,10 @@ public sealed record FinancialCostCorrectionReport(
     FinancialCorrectionCoverage CostCoverageAfter,
     FinancialCorrectionCoverage FinancialCoverage,
     long TotalProfitImpactCents,
-    int TotalEntries);
+    int TotalEntries,
+    string PlanType = FinancialCorrectionPlanTypes.PriceVersionCorrection,
+    IReadOnlyCollection<CatalogCostBaselineReport>? Baselines = null,
+    FinancialCorrectionHistoryCoverage? HistoryCoverage = null);
 
 public sealed record FinancialCostCorrectionDryRunResult(Guid PlanId, string PlanHash,
     FinancialCostCorrectionReport Report, string Status);

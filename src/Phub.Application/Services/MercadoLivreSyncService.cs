@@ -175,7 +175,44 @@ public sealed class MercadoLivreSyncService
         // Use the same upsert/mapping/reservation/financial pipeline as range sync,
         // but do not search an entire seller window for one validated webhook.
         return ServiceResult<MercadoLivreSyncNowResult>.Success(await SyncConnectionAsync(
-            connection, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, cancellationToken, [orderId.Trim()]));
+            connection, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, cancellationToken, [orderId.Trim()],
+            enforceOrderSeller: true));
+    }
+
+    public async Task<ServiceResult<MercadoLivreOrderSearchPage>> SearchOrderPageAsync(
+        string tenantId, Guid clientId, long sellerId, DateTimeOffset from, DateTimeOffset to,
+        int offset, int limit, CancellationToken cancellationToken = default)
+    {
+        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(x =>
+            x.TenantId == tenantId && x.ClientId == clientId
+            && x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId,
+            cancellationToken);
+        if (connection == null)
+            return ServiceResult<MercadoLivreOrderSearchPage>.Failure(
+                [new ValidationError("sellerId", "No active Mercado Livre connection found")]);
+        var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
+        var page = await _mercadoLivreApiClient.SearchOrdersPageAsync(
+            MercadoLivreSellerIdParser.ToApiString(sellerId), from, to, offset, limit,
+            accessToken, cancellationToken);
+        return ServiceResult<MercadoLivreOrderSearchPage>.Success(page);
+    }
+
+    public async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncDiscoveredOrdersAsync(
+        string tenantId, Guid clientId, long sellerId, IReadOnlyList<string> orderIds,
+        CancellationToken cancellationToken = default)
+    {
+        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(x =>
+            x.TenantId == tenantId && x.ClientId == clientId
+            && x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId,
+            cancellationToken);
+        if (connection == null)
+            return ServiceResult<MercadoLivreSyncNowResult>.Failure(
+                [new ValidationError("sellerId", "No active Mercado Livre connection found")]);
+        var ids = orderIds.Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList();
+        return ServiceResult<MercadoLivreSyncNowResult>.Success(await SyncConnectionAsync(
+            connection, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, cancellationToken, ids,
+            enforceOrderSeller: false));
     }
 
     private async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncScopedAsync(
@@ -371,7 +408,8 @@ public sealed class MercadoLivreSyncService
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
         CancellationToken cancellationToken,
-        IReadOnlyList<string>? specificOrderIds = null)
+        IReadOnlyList<string>? specificOrderIds = null,
+        bool enforceOrderSeller = false)
     {
         var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
         var orderIds = specificOrderIds ?? await _mercadoLivreApiClient.SearchOrdersAsync(
@@ -403,6 +441,8 @@ public sealed class MercadoLivreSyncService
                 StringComparer.Ordinal);
 
         var result = new MercadoLivreSyncNowResult();
+        result.DiscoveredUnique = orderIds.Distinct(StringComparer.Ordinal).Count();
+        result.RemoteReportedTotal = result.DiscoveredUnique;
         var changedSkus = new HashSet<string>(StringComparer.Ordinal);
         // Fetch remote details in parallel, but keep EF writes sequential because
         // a DbContext is intentionally not thread-safe.
@@ -414,6 +454,8 @@ public sealed class MercadoLivreSyncService
                 await fetchGate.WaitAsync(cancellationToken);
                 try
                 {
+                    try
+                    {
                     var details = await _mercadoLivreApiClient.GetOrderAsync(orderId, accessToken, cancellationToken);
                     MercadoLivreShipmentDetails? shipment = null;
                     MercadoLivreShipmentCostDetails? shipmentCosts = null;
@@ -443,7 +485,18 @@ public sealed class MercadoLivreSyncService
                         }
                     }
 
-                    return (details, shipment, shipmentCosts, discounts);
+                    return (orderId, details, shipment, shipmentCosts, discounts, error: (Exception?)null);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                    {
+                        // A single deleted, restricted or transiently unavailable
+                        // order must not roll back the other orders in this hour.
+                        _logger.LogWarning(ex, "Order fetch isolated seller={SellerId} order={OrderId}", connection.SellerId, orderId);
+                        return (orderId, details: (MercadoLivreOrderDetails?)null,
+                            shipment: (MercadoLivreShipmentDetails?)null,
+                            shipmentCosts: (MercadoLivreShipmentCostDetails?)null,
+                            discounts: (IReadOnlyList<MercadoLivreOrderDiscountDetails>)[], error: ex);
+                    }
                 }
                 finally
                 {
@@ -454,14 +507,25 @@ public sealed class MercadoLivreSyncService
 
         foreach (var remoteOrder in remoteOrders)
         {
+            if (remoteOrder.error != null)
+            {
+                result.UnresolvedGaps.Add(new MercadoLivreSyncGapResult
+                {
+                    OrderId = remoteOrder.orderId,
+                    Message = remoteOrder.error.Message.Length > 500 ? remoteOrder.error.Message[..500] : remoteOrder.error.Message
+                });
+                continue;
+            }
             var details = remoteOrder.details;
             if (details == null)
             {
-                if (specificOrderIds != null)
-                    throw new InvalidOperationException("ML_WEBHOOK_ORDER_NOT_FOUND_DURING_SYNC");
+                result.ResolvedUnavailable++;
+                result.ResolvedUnavailableOrderIds.Add(remoteOrder.orderId);
                 continue;
             }
-            if (specificOrderIds != null &&
+            result.LocalImported++;
+            result.ImportedOrderIds.Add(remoteOrder.orderId);
+            if (enforceOrderSeller &&
                 (!MercadoLivreSellerIdParser.TryParseRequired(details.SellerId, out var remoteSellerId) ||
                  remoteSellerId != connection.SellerId))
                 throw new InvalidOperationException("ML_ORDER_SELLER_MISMATCH");

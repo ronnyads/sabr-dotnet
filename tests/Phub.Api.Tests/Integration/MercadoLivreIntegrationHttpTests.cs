@@ -1393,13 +1393,13 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var job = await db.FinancialSyncJobs.SingleAsync(x => x.Id == jobId);
             Assert.Equal("COMPLETED", job.Status);
-            Assert.Equal(1, job.Attempts);
+            Assert.Equal(0, job.Attempts);
             Assert.Null(job.LockedBy);
         }
     }
 
     [Fact]
-    public async Task FinancialSync_CheckpointsLongChunkOneDayAtATime()
+    public async Task FinancialSync_CheckpointsLongChunkOnePageAtATime()
     {
         await _factory.ResetDatabaseAsync();
         const string tenantId = "tenant-ml-checkpoint";
@@ -1411,7 +1411,22 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
 
         var jobId = Guid.NewGuid();
         var rangeTo = DateTimeOffset.UtcNow.AddDays(-1);
-        var rangeFrom = rangeTo.AddDays(-3);
+        var rangeFrom = rangeTo.AddDays(-1);
+        var orderIds = Enumerable.Range(1, 120).Select(x => $"page-{x:000}").ToList();
+        _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = orderIds;
+        foreach (var orderId in orderIds)
+        {
+            _factory.FakeMercadoLivreApiClient.OrdersById[orderId] = new MercadoLivreOrderDetails
+            {
+                MlOrderId = orderId,
+                Status = "paid",
+                SellerId = sellerId,
+                ChannelCreatedAt = rangeFrom.AddHours(1),
+                PaidAt = rangeFrom.AddHours(1),
+                TotalAmount = 10m,
+                CurrencyId = "BRL"
+            };
+        }
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -1427,15 +1442,19 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             await db.SaveChangesAsync();
         }
 
-        for (var segment = 1; segment <= 3; segment++)
+        var expectedOffsets = new[] { 50, 100, 0 };
+        for (var page = 0; page < expectedOffsets.Length; page++)
         {
             using var scope = _factory.Services.CreateScope();
             var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
             Assert.True(await service.ProcessNextAsync("checkpoint-worker", CancellationToken.None));
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var job = await db.FinancialSyncJobs.AsNoTracking().SingleAsync(x => x.Id == jobId);
-            Assert.Equal(rangeFrom.AddDays(segment), DateTimeOffset.Parse(job.Checkpoint!));
-            Assert.Equal(segment == 3 ? "COMPLETED" : "PENDING", job.Status);
+            using var checkpoint = JsonDocument.Parse(job.Checkpoint!);
+            Assert.Equal(rangeFrom,
+                checkpoint.RootElement.GetProperty("SegmentFrom").GetDateTimeOffset());
+            Assert.Equal(expectedOffsets[page], checkpoint.RootElement.GetProperty("Offset").GetInt32());
+            Assert.Equal(page == 2 ? "COMPLETED" : "PENDING", job.Status);
             Assert.Null(job.LeaseUntil);
         }
     }

@@ -34,6 +34,7 @@ public static class FinancialSyncJobTypes
 {
     public const string OperationalSyncBatch = "OPERATIONAL_SYNC_BATCH";
     public const string OperationalSyncChunk = "OPERATIONAL_SYNC_CHUNK";
+    public const string OperationalSyncGapRetry = "OPERATIONAL_SYNC_GAP_RETRY";
     public const string BillingReconciliation = "BILLING_RECONCILIATION";
     public const string BillingReconciliationBatch = "BILLING_RECONCILIATION_BATCH";
 }

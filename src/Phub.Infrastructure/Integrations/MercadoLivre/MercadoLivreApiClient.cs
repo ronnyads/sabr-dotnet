@@ -427,40 +427,19 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         return await ExecuteWithResilienceAsync(async ct =>
         {
             const int pageSize = 50;
-            const int maxOrdersPerCycle = 10_000;
             var orderIds = new List<string>();
-            for (var offset = 0; offset < maxOrdersPerCycle; offset += pageSize)
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (var offset = 0; ; offset += pageSize)
             {
-                var requestUri =
-                    $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
-                    $"&order.date_created.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
-                    $"&order.date_created.to={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
-                    $"&sort=date_asc&limit={pageSize}&offset={offset}";
-
-                using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-                using var response = await _httpClient.SendAsync(request, ct);
-                response.EnsureSuccessStatusCode();
-                var json = await response.Content.ReadAsStringAsync(ct);
-                using var doc = JsonDocument.Parse(json);
-
-                var received = 0;
-                if (doc.RootElement.TryGetProperty("results", out var resultsElement)
-                    && resultsElement.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var entry in resultsElement.EnumerateArray())
-                    {
-                        received++;
-                        var id = GetOptionalString(entry, "id");
-                        if (!string.IsNullOrWhiteSpace(id)) orderIds.Add(id);
-                    }
-                }
-
-                var total = doc.RootElement.TryGetProperty("paging", out var paging)
-                            && paging.TryGetProperty("total", out var totalElement)
-                    ? ParseInt(totalElement)
-                    : offset + received;
-                if (received < pageSize || offset + received >= total) break;
+                var page = await SearchOrdersPageCoreAsync(sellerId, from, to, offset, pageSize, accessToken, ct);
+                var received = page.OrderIds.Count;
+                var before = orderIds.Count;
+                foreach (var id in page.OrderIds)
+                    if (seen.Add(id)) orderIds.Add(id);
+                // Never impose a local result cap. Mercado Livre is the source of
+                // truth for pagination; the empty/repeated-page guards prevent an
+                // inconsistent paging response from producing an infinite loop.
+                if (received == 0 || orderIds.Count == before || !page.HasMore) break;
             }
 
             return (IReadOnlyList<string>)orderIds;
@@ -621,6 +600,54 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 RawJson = json
             };
         }, cancellationToken);
+    }
+
+    public Task<MercadoLivreOrderSearchPage> SearchOrdersPageAsync(
+        string sellerId, DateTimeOffset from, DateTimeOffset to, int offset, int limit,
+        string accessToken, CancellationToken cancellationToken = default)
+        => ExecuteWithResilienceAsync(
+            ct => SearchOrdersPageCoreAsync(sellerId, from, to, offset, limit, accessToken, ct),
+            cancellationToken);
+
+    private async Task<MercadoLivreOrderSearchPage> SearchOrdersPageCoreAsync(
+        string sellerId, DateTimeOffset from, DateTimeOffset to, int offset, int limit,
+        string accessToken, CancellationToken cancellationToken)
+    {
+        offset = Math.Max(0, offset);
+        limit = Math.Clamp(limit, 1, 50);
+        var requestUri =
+            $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
+            $"&order.date_created.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+            $"&order.date_created.to={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+            $"&sort=date_asc&limit={limit}&offset={offset}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(json);
+        var ids = new List<string>();
+        if (doc.RootElement.TryGetProperty("results", out var results)
+            && results.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in results.EnumerateArray())
+            {
+                var id = GetOptionalString(entry, "id");
+                if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+            }
+        }
+        var total = doc.RootElement.TryGetProperty("paging", out var paging)
+                    && paging.TryGetProperty("total", out var totalElement)
+            ? ParseInt(totalElement)
+            : offset + ids.Count;
+        return new MercadoLivreOrderSearchPage
+        {
+            OrderIds = ids.Distinct(StringComparer.Ordinal).ToList(),
+            Offset = offset,
+            Limit = limit,
+            RemoteReportedTotal = total,
+            HasMore = ids.Count > 0 && offset + ids.Count < total
+        };
     }
 
     public async Task<MercadoLivreShipmentSlaDetails?> GetShipmentSlaAsync(

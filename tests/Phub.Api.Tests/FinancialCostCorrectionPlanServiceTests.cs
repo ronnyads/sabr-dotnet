@@ -11,6 +11,74 @@ namespace Phub.Api.Tests;
 public sealed class FinancialCostCorrectionPlanServiceTests
 {
     [Fact]
+    public async Task BaselineDryRun_RequiresCompleteHistoryAndDerivesCurrentApprovedCost()
+    {
+        await using var db = CreateDb();
+        var economicAt = new DateTimeOffset(2026, 9, 10, 12, 0, 0, TimeSpan.Zero);
+        var fixture = SeedCandidate(db, economicAt, "CATALOG_PRICE", 2,
+            [new { source = "GENERAL_STOCK", lotId = (Guid?)null, quantity = 2, unitCostCents = 4200, catalogPriceVersionId = Guid.Empty, priceOrigin = "MASTER_PRODUCT" }],
+            8400);
+        ReplaceEmptyVersionReference(fixture.Item, fixture.PriceVersion.Id);
+        var cut = economicAt.AddDays(5);
+        fixture.PriceVersion.ValidTo = cut;
+        var current = new ProductPriceVersion
+        {
+            ProductSku = fixture.Item.SabrVariantSku!, VariantSku = fixture.Item.SabrVariantSku!,
+            PricingMode = ProductPricingModes.Inherited, CatalogPriceCents = 1500,
+            CatalogPriceOrigin = CatalogPriceOrigins.MasterProduct, CatalogCostStatus = CatalogCostStatuses.Resolved,
+            ValidFrom = cut, Version = 2, ChangedByUserId = Guid.NewGuid(), Reason = "Custo atual aprovado"
+        };
+        db.ProductVariants.Add(new ProductVariant
+        {
+            BaseSku = fixture.Item.SabrVariantSku!, VariantSku = fixture.Item.SabrVariantSku!, Name = "Sérum",
+            PricingMode = ProductPricingModes.Inherited, CatalogPriceCents = 1500,
+            CatalogPriceOrigin = CatalogPriceOrigins.MasterProduct, CatalogCostStatus = CatalogCostStatuses.Resolved
+        });
+        db.ProductPriceVersions.Add(current);
+        SeedCompleteHistory(db, fixture.TenantId, fixture.ClientId, fixture.SellerId);
+        await db.SaveChangesAsync();
+
+        var request = new FinancialCostCorrectionDryRunRequest
+        {
+            PlanType = FinancialCorrectionPlanTypes.CatalogBaselineCurrent,
+            SellerId = fixture.SellerId,
+            Reason = "Aplicar os custos internos revisados ao histórico",
+            Skus = [new FinancialCostCorrectionSkuRequest { Sku = fixture.Item.SabrVariantSku! }]
+        };
+        var result = await new FinancialCostCorrectionPlanService(db).DryRunAsync(
+            fixture.TenantId, fixture.ClientId, request, Guid.NewGuid());
+
+        Assert.Equal(FinancialCorrectionPlanTypes.CatalogBaselineCurrent, result.Report.PlanType);
+        var baseline = Assert.Single(result.Report.Baselines!);
+        Assert.Equal(1500, baseline.BaselineUnitCostCents);
+        Assert.Equal(current.Id, baseline.BaselinePriceVersionId);
+        Assert.Equal(cut, baseline.BaselineCutAt);
+        Assert.Equal(3000, Assert.Single(result.Report.Manifest).ReplacementCostCents);
+        var staged = Assert.Single(await db.CatalogCostBaselines.ToListAsync());
+        Assert.Equal(CatalogCostBaselineStatuses.Staged, staged.Status);
+        Assert.Equal(result.PlanHash, staged.PlanHash);
+        Assert.Equal(current.Id, staged.BaselinePriceVersionId);
+    }
+
+    [Fact]
+    public async Task BaselineDryRun_IsBlockedWhileHistoryHasGaps()
+    {
+        await using var db = CreateDb();
+        var request = new FinancialCostCorrectionDryRunRequest
+        {
+            PlanType = FinancialCorrectionPlanTypes.CatalogBaselineCurrent,
+            SellerId = 2496573592,
+            Reason = "baseline",
+            Skus = [new FinancialCostCorrectionSkuRequest { Sku = "PH-AM10" }]
+        };
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new FinancialCostCorrectionPlanService(db).DryRunAsync("tenant", Guid.NewGuid(), request, Guid.NewGuid()));
+        Assert.Contains("sincronização", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(await db.CatalogCostBaselines.ToListAsync());
+    }
+
+    [Fact]
     public async Task DryRun_MixedCost_PreservesLotAndCorrectsOnlyAuthorizedCatalogVersion()
     {
         await using var db = CreateDb();
@@ -158,6 +226,27 @@ public sealed class FinancialCostCorrectionPlanServiceTests
     {
         item.CatalogPriceVersionId = versionId;
         item.CostReferencesJson = item.CostReferencesJson.Replace(Guid.Empty.ToString(), versionId.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void SeedCompleteHistory(AppDbContext db, string tenantId, Guid clientId, long sellerId)
+    {
+        var to = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var parent = new FinancialSyncJob
+        {
+            TenantId = tenantId, ClientId = clientId, SellerId = sellerId,
+            Provider = MarketplaceProvider.MercadoLivre, JobType = FinancialSyncJobTypes.OperationalSyncBatch,
+            Status = "COMPLETED", RangeFrom = to.AddMonths(-12), RangeTo = to,
+            Total = 1, Processed = 1,
+            DedupeKey = $"OP:HISTORY:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}:{to.AddMonths(-12):yyyyMMddHH}:{to:yyyyMMddHH}"
+        };
+        db.FinancialSyncJobs.AddRange(parent, new FinancialSyncJob
+        {
+            ParentJobId = parent.Id, TenantId = tenantId, ClientId = clientId, SellerId = sellerId,
+            Provider = MarketplaceProvider.MercadoLivre, JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+            Status = "COMPLETED", RangeFrom = parent.RangeFrom, RangeTo = parent.RangeTo,
+            Total = 1, Processed = 1, DedupeKey = Guid.NewGuid().ToString("N"),
+            ResultJson = "{\"unresolvedGaps\":[]}"
+        });
     }
 
     private static Fixture SeedCandidate(AppDbContext db, DateTimeOffset economicAt, string costSource, int quantity,

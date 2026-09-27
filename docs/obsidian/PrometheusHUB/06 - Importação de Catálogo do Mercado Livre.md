@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, mercado-livre, catalogo, sku]
-updated: 2026-09-19
+updated: 2026-09-27
 ---
 
 # Importação de catálogo do Mercado Livre
@@ -44,3 +44,14 @@ Cada item de pedido grava um snapshot imutável do mapping (`mapping_snapshot_id
 Anúncios de fornecedor externo não recebem SKU interno artificial. O cliente registra fornecedor e custo unitário na classificação versionada do anúncio/variação. Cada pedido captura a versão vigente em sua data econômica; alteração normal de custo vale apenas dali em diante. Ao remover a classificação externa, novas ocorrências voltam a exigir vínculo com produto interno, preservando snapshots anteriores.
 
 Os mappings armazenam identidades Legacy (`itemId`/`variationId`) e `userProductId`, permitindo que os adaptadores do Mercado Livre evoluam sem vazar o formato bruto para o domínio.
+
+## Histórico de pedidos e cobertura
+
+- OAuth enfileira o backfill de 12 meses do seller. O worker também repara periodicamente sellers já conectados.
+- A idempotência do lote inclui seller, intervalo canônico e versão do algoritmo. Cliques repetidos e retries reutilizam o mesmo lote; somente janelas ausentes ou incompletas voltam à fila.
+- O `/orders/search` é percorrido sem teto interno de 10.000. As consultas usam horas alinhadas, pequena sobreposição e deduplicação por seller/pedido.
+- Cada janela diária persiste checkpoint de hora e página. Falha no detalhe de um pedido não descarta os demais; o pedido vira `GAP` e pode ser reprocessado isoladamente.
+- `remoteReportedTotal` é somente diagnóstico por janela e nunca é somado como total histórico. A cobertura canônica usa IDs únicos descobertos e as classificações `IMPORTED`, `UNAVAILABLE` e `GAP`.
+- Um seller só fica `CURRENT` quando todas as janelas concluíram e nenhum gap permanece. Caso contrário, usa `BACKFILLING`, `PARTIAL_WITH_GAPS` ou `FAILED`.
+- Cliente: `POST /api/v1/client/integrations/mercadolivre/history-sync` e `GET /api/v1/client/integrations/mercadolivre/history-sync/status`.
+- Admin: `POST /api/v1/admin/integrations/mercadolivre/history-sync/{jobId}/retry-gaps`.

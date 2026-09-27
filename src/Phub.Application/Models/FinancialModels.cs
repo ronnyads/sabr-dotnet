@@ -190,6 +190,32 @@ public sealed class FinancialSyncEnqueueResult
     public List<FinancialSyncJobResult> Jobs { get; set; } = new();
 }
 
+public sealed class MercadoLivreHistorySyncStatusResult
+{
+    public string OverallStatus { get; set; } = "INITIAL_PENDING";
+    public List<MercadoLivreHistorySellerStatusResult> Sellers { get; set; } = [];
+}
+
+public sealed class MercadoLivreHistorySellerStatusResult
+{
+    public Guid JobId { get; set; }
+    public long SellerId { get; set; }
+    public string? Nickname { get; set; }
+    public string Status { get; set; } = "INITIAL_PENDING";
+    public DateTimeOffset CoverageFrom { get; set; }
+    public DateTimeOffset CoverageTo { get; set; }
+    public long RemoteReportedTotal { get; set; }
+    public int DiscoveredUniqueOrderIds { get; set; }
+    public int LocalImportedOrderIds { get; set; }
+    public int ResolvedUnavailableOrderIds { get; set; }
+    public int UnresolvedGapOrderIds { get; set; }
+    public int CompletedWindows { get; set; }
+    public int TotalWindows { get; set; }
+    public DateTimeOffset? OldestOrderAt { get; set; }
+    public DateTimeOffset? NewestOrderAt { get; set; }
+    public string? LastError { get; set; }
+}
+
 public sealed class FinancialCapabilityResult
 {
     public long SellerId { get; set; }

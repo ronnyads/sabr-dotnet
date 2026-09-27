@@ -5,7 +5,8 @@ using Phub.Domain.Entities;
 namespace Phub.Application.Services;
 
 public sealed record HistoricalProductCost(Guid VersionId, long Version, long CatalogPriceCents,
-    long CostPriceCents, string Origin, DateTimeOffset EconomicAt, string EconomicAtSource);
+    long CostPriceCents, string Origin, DateTimeOffset EconomicAt, string EconomicAtSource,
+    Guid? BaselineId = null);
 
 public sealed class HistoricalProductCostService
 {
@@ -19,6 +20,21 @@ public sealed class HistoricalProductCostService
         var resolvedEconomicAt = ResolveEconomicAt(order);
         if (resolvedEconomicAt == null) return null;
         var (economicAt, source) = resolvedEconomicAt.Value;
+        var baselines = await _db.CatalogCostBaselines.AsNoTracking()
+            .Where(x => x.VariantSku == item.SabrVariantSku
+                        && x.Status == CatalogCostBaselineStatuses.Active
+                        && economicAt < x.BaselineCutAt)
+            .OrderByDescending(x => x.BaselineCutAt)
+            .Take(2)
+            .ToListAsync(cancellationToken);
+        if (baselines.Count > 1) return null;
+        var baseline = baselines.SingleOrDefault();
+        if (baseline != null)
+        {
+            CatalogCostBaselinePolicy.EnsureValid(baseline);
+            return new HistoricalProductCost(baseline.BaselinePriceVersionId, 0, baseline.BaselineUnitCostCents,
+                baseline.BaselineUnitCostCents, baseline.CostOrigin, economicAt, source, baseline.Id);
+        }
         var versions = await _db.ProductPriceVersions.AsNoTracking()
             .Where(x => x.VariantSku == item.SabrVariantSku && x.ValidFrom <= economicAt
                         && (x.ValidTo == null || economicAt < x.ValidTo))

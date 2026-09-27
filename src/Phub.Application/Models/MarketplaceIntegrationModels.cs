@@ -410,6 +410,29 @@ public sealed class MercadoLivreSyncNowResult
     public int OrdersUpserted { get; set; }
     public int ItemsUpserted { get; set; }
     public int ReservationsCreated { get; set; }
+    public long RemoteReportedTotal { get; set; }
+    public int DiscoveredUnique { get; set; }
+    public int LocalImported { get; set; }
+    public int ResolvedUnavailable { get; set; }
+    public List<string> ImportedOrderIds { get; set; } = [];
+    public List<string> ResolvedUnavailableOrderIds { get; set; } = [];
+    public List<MercadoLivreSyncGapResult> UnresolvedGaps { get; set; } = new();
+}
+
+public sealed class MercadoLivreOrderSearchPage
+{
+    public List<string> OrderIds { get; set; } = [];
+    public int Offset { get; set; }
+    public int Limit { get; set; }
+    public long RemoteReportedTotal { get; set; }
+    public bool HasMore { get; set; }
+}
+
+public sealed class MercadoLivreSyncGapResult
+{
+    public string OrderId { get; set; } = string.Empty;
+    public string Code { get; set; } = "REMOTE_FETCH_FAILED";
+    public string Message { get; set; } = string.Empty;
 }
 
 public sealed class ClientSalesDashboardResult

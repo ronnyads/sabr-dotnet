@@ -35,6 +35,7 @@ public interface IAppDbContext
     DbSet<ListingDraft> ListingDrafts { get; }
     DbSet<ProductPriceHistory> ProductPriceHistories { get; }
     DbSet<ProductPriceVersion> ProductPriceVersions { get; }
+    DbSet<CatalogCostBaseline> CatalogCostBaselines { get; }
     DbSet<TenantMarketplaceConnection> TenantMarketplaceConnections { get; }
     DbSet<TenantMarketplaceListingMap> TenantMarketplaceListingMaps { get; }
     DbSet<MarketplaceListingClassificationVersion> MarketplaceListingClassificationVersions { get; }

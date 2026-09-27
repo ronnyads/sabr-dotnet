@@ -130,6 +130,9 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
                 return Redirect(BuildClientRedirectTarget(AppendQuery(target, "ml", "oauth_error")));
             }
 
+            await TryEnqueueHistoryAfterOAuthAsync(
+                payload.TenantId, payload.ClientId, result.Data.SellerId, cancellationToken);
+
             return Redirect(BuildClientRedirectTarget(AppendQuery(target, "ml", "connected")));
         }
         catch (Exception ex)
@@ -179,6 +182,9 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
                     HttpContext.TraceIdentifier);
                 return BadRequest(new { error = "oauth_error" });
             }
+
+            await TryEnqueueHistoryAfterOAuthAsync(
+                payload.TenantId, payload.ClientId, result.Data.SellerId, cancellationToken);
 
             return Ok(new { status = "success" });
         }
@@ -373,6 +379,57 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         }
 
         return Ok(result.Data);
+    }
+
+    private async Task TryEnqueueHistoryAfterOAuthAsync(
+        string tenantId, Guid clientId, long sellerId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _financialSync.EnqueueOperationalBackfillAsync(
+                tenantId, clientId, sellerId, lookbackDays: 366, chunkDays: 1,
+                cancellationToken: cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // The OAuth grant is already durable. A queueing failure must not tell
+            // the seller that authorization failed; the repair worker will retry.
+            _logger.LogError(ex,
+                "MercadoLivre OAuth succeeded but history enqueue failed. tenantId={TenantId} clientId={ClientId} sellerId={SellerId}",
+                tenantId, clientId, sellerId);
+        }
+    }
+
+    [HttpPost("history-sync")]
+    public async Task<IActionResult> StartHistorySync(
+        [FromBody] MercadoLivreSyncNowRequest? request, CancellationToken cancellationToken)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        long? sellerId = null;
+        if (!string.IsNullOrWhiteSpace(request?.SellerId))
+        {
+            if (!long.TryParse(request.SellerId, out var parsed))
+                return BadRequest(CreateApiError("ML_SELLER_INVALID", "Seller Mercado Livre invalido"));
+            sellerId = parsed;
+        }
+        try
+        {
+            await _financialSync.EnqueueOperationalBackfillAsync(
+                tenantId!, clientId, sellerId, lookbackDays: 366, chunkDays: 1,
+                cancellationToken: cancellationToken);
+            return Accepted(await _financialSync.GetHistoryStatusAsync(tenantId!, clientId, cancellationToken));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(CreateApiError("ML_HISTORY_SYNC_NOT_AVAILABLE", ex.Message));
+        }
+    }
+
+    [HttpGet("history-sync/status")]
+    public async Task<IActionResult> GetHistorySyncStatus(CancellationToken cancellationToken)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
+        return Ok(await _financialSync.GetHistoryStatusAsync(tenantId!, clientId, cancellationToken));
     }
 
     [HttpGet("seller-listings")]

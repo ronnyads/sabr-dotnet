@@ -112,6 +112,7 @@ public sealed class OperationalFinancialProjectionService
                         item.EconomicAtSource = historicalCost.EconomicAtSource;
                         item.CostSource = "CATALOG_PRICE";
                         item.CatalogPriceVersionId = historicalCost.VersionId;
+                        item.CatalogCostBaselineId = historicalCost.BaselineId;
                         item.CostReferencesJson = JsonSerializer.Serialize(new[]
                         {
                             new
@@ -121,6 +122,7 @@ public sealed class OperationalFinancialProjectionService
                                 quantity = item.Quantity,
                                 unitCostCents = historicalCost.CatalogPriceCents,
                                 catalogPriceVersionId = historicalCost.VersionId,
+                                catalogCostBaselineId = historicalCost.BaselineId,
                                 priceOrigin = historicalCost.Origin
                             }
                         });

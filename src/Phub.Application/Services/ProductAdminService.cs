@@ -200,7 +200,7 @@ public sealed class ProductAdminService
             };
 
             _dbContext.Products.Add(product);
-            _dbContext.ProductVariants.Add(new ProductVariant
+            var defaultVariant = new ProductVariant
             {
                 VariantSku = normalizedSku,
                 BaseSku = normalizedSku,
@@ -212,8 +212,13 @@ public sealed class ProductAdminService
                 AvailableStock = 0,
                 SafetyBuffer = 2,
                 InventoryVersion = 1,
-                IsActive = true
-            });
+                IsActive = true,
+                CreatedAt = product.CreatedAt,
+                UpdatedAt = product.UpdatedAt
+            };
+            _dbContext.ProductVariants.Add(defaultVariant);
+            _dbContext.ProductPriceVersions.Add(CreateInitialPriceVersion(defaultVariant, actorUserId,
+                "Criação do produto e da variação padrão"));
             if (product.IsActive)
                 await EnsurePublicCatalogForUnlinkedActiveProductAsync(product.Sku, cancellationToken);
             AddAuditEvent("AdminProducts.Create", actorUserId, tenantId, product.Sku, new
@@ -244,6 +249,8 @@ public sealed class ProductAdminService
 
         if (oldCost != product.CostPriceCents || oldCatalog != product.CatalogPriceCents)
         {
+            await VersionInheritedVariantsAsync(product, actorUserId, "Admin product upsert", product.UpdatedAt,
+                cancellationToken);
             _dbContext.ProductPriceHistories.Add(new ProductPriceHistory
             {
                 TenantId = string.IsNullOrWhiteSpace(tenantId) ? null : tenantId,
@@ -344,6 +351,8 @@ public sealed class ProductAdminService
             });
         }
 
+        var efDbContext = (DbContext)_dbContext;
+        await using var transaction = await BeginTransactionIfSupportedAsync(efDbContext, cancellationToken);
         var product = await _dbContext.Products.FirstOrDefaultAsync(item => item.Sku == parsedSku.Value, cancellationToken);
         if (product == null)
         {
@@ -381,6 +390,9 @@ public sealed class ProductAdminService
 
         if (oldCost != product.CostPriceCents || oldCatalog != product.CatalogPriceCents)
         {
+            await VersionInheritedVariantsAsync(product, actorUserId,
+                string.IsNullOrWhiteSpace(request.Reason) ? "Admin product update" : request.Reason.Trim(),
+                product.UpdatedAt, cancellationToken);
             _dbContext.ProductPriceHistories.Add(new ProductPriceHistory
             {
                 TenantId = string.IsNullOrWhiteSpace(tenantId) ? null : tenantId,
@@ -403,7 +415,88 @@ public sealed class ProductAdminService
 
         await SyncListingDraftsFromAdminProductAsync(product, "AdminProducts.Update", cancellationToken);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        if (transaction != null)
+            await transaction.CommitAsync(cancellationToken);
         return await GetBySkuAsync(product.Sku, cancellationToken);
+    }
+
+    private static ProductPriceVersion CreateInitialPriceVersion(ProductVariant variant, Guid actorUserId, string reason)
+    {
+        var resolved = variant.CatalogPriceCents > 0;
+        return new ProductPriceVersion
+        {
+            ProductSku = variant.BaseSku,
+            VariantSku = variant.VariantSku,
+            PricingMode = variant.PricingMode,
+            CostPriceCents = variant.CostPriceCents,
+            CatalogPriceCents = variant.CatalogPriceCents,
+            CatalogCostStatus = resolved ? CatalogCostStatuses.Resolved : CatalogCostStatuses.Pending,
+            CatalogPriceOrigin = resolved
+                ? variant.PricingMode == ProductPricingModes.Override
+                    ? CatalogPriceOrigins.VariantOverride
+                    : CatalogPriceOrigins.MasterProduct
+                : CatalogPriceOrigins.None,
+            ValidFrom = variant.CreatedAt,
+            Version = 1,
+            ChangeType = ProductPriceChangeTypes.Change,
+            ChangedByUserId = actorUserId,
+            Reason = reason
+        };
+    }
+
+    private async Task VersionInheritedVariantsAsync(Product product, Guid actorUserId, string reason,
+        DateTimeOffset effectiveAt, CancellationToken cancellationToken)
+    {
+        var variants = await _dbContext.ProductVariants
+            .Where(x => x.BaseSku == product.Sku && x.PricingMode == ProductPricingModes.Inherited)
+            .OrderBy(x => x.VariantSku)
+            .ToListAsync(cancellationToken);
+        if (variants.Count == 0) return;
+
+        var variantSkus = variants.Select(x => x.VariantSku).ToArray();
+        var versions = await _dbContext.ProductPriceVersions
+            .Where(x => x.ProductSku == product.Sku && x.VariantSku != null && variantSkus.Contains(x.VariantSku))
+            .OrderBy(x => x.VariantSku).ThenBy(x => x.Version)
+            .ToListAsync(cancellationToken);
+
+        foreach (var variant in variants)
+        {
+            var variantVersions = versions.Where(x => x.VariantSku == variant.VariantSku).ToArray();
+            var open = variantVersions.Where(x => x.ValidTo == null).ToArray();
+            if (open.Length > 1)
+                throw new InvalidOperationException($"Variant {variant.VariantSku} has overlapping active price versions.");
+            var current = open.SingleOrDefault();
+            if (current != null && effectiveAt <= current.ValidFrom)
+                throw new InvalidOperationException($"The new price validity for {variant.VariantSku} must start after the current version.");
+            if (variantVersions.Any(x => x != current && (!x.ValidTo.HasValue || x.ValidTo.Value > effectiveAt)))
+                throw new InvalidOperationException($"The new price validity for {variant.VariantSku} would overlap an existing version.");
+
+            variant.CostPriceCents = product.CostPriceCents;
+            variant.CatalogPriceCents = product.CatalogPriceCents;
+            variant.CatalogCostStatus = product.CatalogPriceCents > 0
+                ? CatalogCostStatuses.Resolved
+                : CatalogCostStatuses.Pending;
+            variant.CatalogPriceOrigin = product.CatalogPriceCents > 0
+                ? CatalogPriceOrigins.MasterProduct
+                : CatalogPriceOrigins.None;
+            variant.UpdatedAt = effectiveAt;
+            if (current != null) current.ValidTo = effectiveAt;
+            _dbContext.ProductPriceVersions.Add(new ProductPriceVersion
+            {
+                ProductSku = product.Sku,
+                VariantSku = variant.VariantSku,
+                PricingMode = ProductPricingModes.Inherited,
+                CostPriceCents = product.CostPriceCents,
+                CatalogPriceCents = product.CatalogPriceCents,
+                CatalogCostStatus = variant.CatalogCostStatus,
+                CatalogPriceOrigin = variant.CatalogPriceOrigin,
+                ValidFrom = effectiveAt,
+                Version = variantVersions.Length == 0 ? 1 : variantVersions.Max(x => x.Version) + 1,
+                ChangeType = ProductPriceChangeTypes.Change,
+                ChangedByUserId = actorUserId,
+                Reason = reason
+            });
+        }
     }
 
     private async Task EnsurePublicCatalogForUnlinkedActiveProductAsync(string sku, CancellationToken cancellationToken)
@@ -498,6 +591,9 @@ public sealed class ProductAdminService
 
         if (oldCost != product.CostPriceCents || oldCatalog != product.CatalogPriceCents)
         {
+            await VersionInheritedVariantsAsync(product, actorUserId,
+                string.IsNullOrWhiteSpace(request.Reason) ? "Admin product price update" : request.Reason.Trim(),
+                product.UpdatedAt, cancellationToken);
             _dbContext.ProductPriceHistories.Add(new ProductPriceHistory
             {
                 TenantId = string.IsNullOrWhiteSpace(tenantId) ? null : tenantId,

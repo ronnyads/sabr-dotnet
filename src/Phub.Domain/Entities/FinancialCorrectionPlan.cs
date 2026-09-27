@@ -6,6 +6,7 @@ public sealed class FinancialCorrectionPlan
     public string TenantId { get; set; } = string.Empty;
     public Guid ClientId { get; set; }
     public long SellerId { get; set; }
+    public string PlanType { get; set; } = FinancialCorrectionPlanTypes.PriceVersionCorrection;
     public string Status { get; set; } = FinancialCorrectionPlanStatuses.DryRun;
     public string PlanHash { get; set; } = string.Empty;
     public string ScopeJson { get; set; } = "{}";
@@ -54,6 +55,12 @@ public static class FinancialCorrectionPlanStatuses
     public const string Completed = "COMPLETED";
     public const string Stale = "STALE";
     public const string Failed = "FAILED";
+}
+
+public static class FinancialCorrectionPlanTypes
+{
+    public const string PriceVersionCorrection = "PRICE_VERSION_CORRECTION";
+    public const string CatalogBaselineCurrent = "CATALOG_BASELINE_CURRENT";
 }
 
 public static class FinancialCorrectionEntryStates

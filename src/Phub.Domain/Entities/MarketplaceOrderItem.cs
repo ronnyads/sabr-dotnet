@@ -28,6 +28,7 @@ public sealed class MarketplaceOrderItem
     public string? EconomicAtSource { get; set; }
     public string? CostSource { get; set; }
     public Guid? CatalogPriceVersionId { get; set; }
+    public Guid? CatalogCostBaselineId { get; set; }
     public string CostReferencesJson { get; set; } = "{}";
     public string InternalCostStatus { get; set; } = InternalCostStatuses.None;
     public Guid? ProductCostEntryId { get; set; }

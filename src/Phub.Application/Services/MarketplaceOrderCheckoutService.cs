@@ -235,11 +235,13 @@ public sealed class MarketplaceOrderCheckoutService
                 item.EconomicAt = priceSnapshot?.EconomicAt ?? order.PaidAt ?? order.ChannelCreatedAt;
                 item.EconomicAtSource = priceSnapshot?.EconomicAtSource;
                 item.CatalogPriceVersionId = priceSnapshot?.VersionId;
+                item.CatalogCostBaselineId = priceSnapshot?.BaselineId;
                 item.CostReferencesJson = JsonSerializer.Serialize(itemAllocations.Select(x => new
                 {
                     source = x.Source, lotId = x.SellerOwnedStockLotId, quantity = x.Quantity,
                     unitCostCents = x.Source == StockReservationSources.PrePurchasedLot ? x.UnitCostCents : catalogCost,
                     catalogPriceVersionId = x.Source == StockReservationSources.GeneralStock ? priceSnapshot?.VersionId : null,
+                    catalogCostBaselineId = x.Source == StockReservationSources.GeneralStock ? priceSnapshot?.BaselineId : null,
                     priceOrigin = x.Source == StockReservationSources.GeneralStock ? priceSnapshot?.Origin : "PREPURCHASED_LOT"
                 }));
             }

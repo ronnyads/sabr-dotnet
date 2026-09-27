@@ -89,6 +89,42 @@ public sealed class CatalogCostDomainTests
         Assert.Null(result);
     }
 
+    [Fact]
+    public async Task HistoricalCost_UsesActiveBaselineForOrderImportedAfterApproval()
+    {
+        await using var db = CreateDb();
+        var oldVersion = Version(1, 4_200, new DateTimeOffset(2026, 1, 1, 3, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 9, 20, 3, 0, 0, TimeSpan.Zero));
+        var currentVersion = Version(2, 1_500, oldVersion.ValidTo!.Value, null);
+        var planId = Guid.NewGuid();
+        db.ProductPriceVersions.AddRange(oldVersion, currentVersion);
+        db.CatalogCostBaselines.Add(new CatalogCostBaseline
+        {
+            PlanId = planId,
+            ProductSku = "PH-SERUM",
+            VariantSku = "PH-SERUM",
+            BaselinePriceVersionId = currentVersion.Id,
+            BaselineUnitCostCents = 1_500,
+            BaselineCutAt = currentVersion.ValidFrom,
+            Status = CatalogCostBaselineStatuses.Active,
+            ApprovedByUserId = Guid.NewGuid(),
+            ApprovedAt = DateTimeOffset.UtcNow,
+            ActivatedAt = DateTimeOffset.UtcNow,
+            Reason = "Custo revisado",
+            PlanHash = new string('B', 64)
+        });
+        await db.SaveChangesAsync();
+        var order = Order(new DateTimeOffset(2026, 9, 5, 3, 0, 0, TimeSpan.Zero), null);
+
+        var result = await new HistoricalProductCostService(db).ResolveAsync(order, Item(order));
+
+        Assert.NotNull(result);
+        Assert.Equal(1_500, result!.CatalogPriceCents);
+        Assert.Equal(currentVersion.Id, result.VersionId);
+        Assert.Equal(CatalogCostBaselineOrigins.ApprovedRetroactiveBaseline, result.Origin);
+        Assert.NotNull(result.BaselineId);
+    }
+
     private static ProductPriceVersion Version(long version, long price, DateTimeOffset from, DateTimeOffset? to) => new()
     {
         ProductSku = "PH-SERUM",

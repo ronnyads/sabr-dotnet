@@ -44,14 +44,25 @@ public sealed class FinancialCostCorrectionPlanService
         FinancialCostCorrectionDryRunRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
     {
         ValidateRequest(tenantId, clientId, request, actorUserId);
-        var rangeFrom = (request.RangeFrom ?? DefaultRangeFrom).ToUniversalTime();
-        var rangeToExclusive = (request.RangeToExclusive ?? DefaultRangeToExclusive).ToUniversalTime();
+        var isBaselinePlan = request.PlanType == FinancialCorrectionPlanTypes.CatalogBaselineCurrent;
+        var historyCoverage = isBaselinePlan
+            ? await RequireCompleteHistoryAsync(tenantId, clientId, request.SellerId, cancellationToken)
+            : null;
+        var rangeFrom = (request.RangeFrom
+                         ?? historyCoverage?.RangeFrom
+                         ?? DefaultRangeFrom).ToUniversalTime();
+        var rangeToExclusive = (request.RangeToExclusive
+                                ?? historyCoverage?.RangeTo
+                                ?? DefaultRangeToExclusive).ToUniversalTime();
         if (rangeFrom >= rangeToExclusive) throw new ArgumentException("O início deve ser anterior ao fim exclusivo.");
 
-        var corrections = request.Skus.ToDictionary(
-            x => Sku.Normalize(x.Sku),
-            x => new CorrectionRule(x.CorrectUnitCostCents, x.IncorrectCatalogPriceVersionIds.Distinct().Order().ToArray()),
-            StringComparer.Ordinal);
+        var corrections = isBaselinePlan
+            ? await BuildBaselineRulesAsync(request, cancellationToken)
+            : request.Skus.ToDictionary(
+                x => Sku.Normalize(x.Sku),
+                x => new CorrectionRule(x.CorrectUnitCostCents,
+                    x.IncorrectCatalogPriceVersionIds.Distinct().Order().ToArray()),
+                StringComparer.Ordinal);
         var selectedSkus = corrections.Keys.Order(StringComparer.Ordinal).ToArray();
 
         var rows = await (from head in _db.FinancialEconomicHeads.AsNoTracking()
@@ -97,7 +108,7 @@ public sealed class FinancialCostCorrectionPlanService
         foreach (var row in rows.OrderBy(x => x.Head.EconomicKey, StringComparer.Ordinal))
         {
             var sku = row.Item.SabrVariantSku!;
-            var result = Evaluate(row, corrections[sku], priceVersions);
+            var result = Evaluate(row, corrections[sku], priceVersions, isBaselinePlan);
             if (result.Pending != null)
             {
                 pending.Add(result.Pending);
@@ -145,6 +156,12 @@ public sealed class FinancialCostCorrectionPlanService
         var financialTotal = financialEntries.Sum(x => Math.Abs(x.AmountCents));
         var financialResolved = financialEntries.Where(x => x.MarketplaceOrderItemId.HasValue)
             .Sum(x => Math.Abs(x.AmountCents));
+        var baselineReports = isBaselinePlan
+            ? corrections.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => new CatalogCostBaselineReport(
+                x.Value.ProductSku!, x.Key, x.Value.BaselinePriceVersionId!.Value,
+                x.Value.CorrectUnitCostCents, x.Value.BaselineCutAt!.Value,
+                CatalogCostBaselineOrigins.ApprovedRetroactiveBaseline)).ToArray()
+            : [];
         var report = new FinancialCostCorrectionReport(
             rangeFrom,
             rangeToExclusive,
@@ -155,10 +172,13 @@ public sealed class FinancialCostCorrectionPlanService
             Coverage(afterResolvedUnits, totalUnits),
             Coverage(financialResolved, financialTotal),
             manifest.Sum(x => x.ProfitImpactCents),
-            manifest.Count);
+            manifest.Count,
+            request.PlanType,
+            baselineReports,
+            historyCoverage);
 
         var canonicalScope = CanonicalScope(tenantId, clientId, request.SellerId, request.Reason.Trim(),
-            rangeFrom, rangeToExclusive, corrections, manifest, pending);
+            rangeFrom, rangeToExclusive, request.PlanType, corrections, manifest, pending, historyCoverage);
         var hash = Sha256(canonicalScope);
         var existing = await _db.FinancialCorrectionPlans.SingleOrDefaultAsync(x => x.TenantId == tenantId
             && x.ClientId == clientId && x.SellerId == request.SellerId && x.PlanHash == hash, cancellationToken);
@@ -169,6 +189,7 @@ public sealed class FinancialCostCorrectionPlanService
                 TenantId = tenantId,
                 ClientId = clientId,
                 SellerId = request.SellerId,
+                PlanType = request.PlanType,
                 Status = FinancialCorrectionPlanStatuses.DryRun,
                 PlanHash = hash,
                 ScopeJson = canonicalScope,
@@ -178,10 +199,156 @@ public sealed class FinancialCostCorrectionPlanService
                 CreatedByUserId = actorUserId
             };
             _db.FinancialCorrectionPlans.Add(existing);
+            if (isBaselinePlan)
+            {
+                foreach (var rule in corrections.OrderBy(x => x.Key, StringComparer.Ordinal))
+                {
+                    _db.CatalogCostBaselines.Add(new CatalogCostBaseline
+                    {
+                        PlanId = existing.Id,
+                        ProductSku = rule.Value.ProductSku!,
+                        VariantSku = rule.Key,
+                        BaselinePriceVersionId = rule.Value.BaselinePriceVersionId!.Value,
+                        BaselineUnitCostCents = rule.Value.CorrectUnitCostCents,
+                        BaselineCutAt = rule.Value.BaselineCutAt!.Value,
+                        Status = CatalogCostBaselineStatuses.Staged,
+                        ApprovedByUserId = actorUserId,
+                        Reason = request.Reason.Trim(),
+                        PlanHash = hash
+                    });
+                }
+            }
             await _db.SaveChangesAsync(cancellationToken);
         }
 
         return new FinancialCostCorrectionDryRunResult(existing.Id, hash, report, existing.Status);
+    }
+
+    private async Task<Dictionary<string, CorrectionRule>> BuildBaselineRulesAsync(
+        FinancialCostCorrectionDryRunRequest request, CancellationToken cancellationToken)
+    {
+        var requested = request.Skus.ToDictionary(x => Sku.Normalize(x.Sku), x => x, StringComparer.Ordinal);
+        var skus = requested.Keys.ToArray();
+        var variants = await _db.ProductVariants.AsNoTracking()
+            .Where(x => skus.Contains(x.VariantSku)).ToListAsync(cancellationToken);
+        var versions = await _db.ProductPriceVersions.AsNoTracking()
+            .Where(x => x.VariantSku != null && skus.Contains(x.VariantSku))
+            .OrderBy(x => x.VariantSku).ThenBy(x => x.Version).ToListAsync(cancellationToken);
+        var activeBaselines = await _db.CatalogCostBaselines.AsNoTracking()
+            .Where(x => skus.Contains(x.VariantSku) && x.Status == CatalogCostBaselineStatuses.Active)
+            .ToListAsync(cancellationToken);
+        var rules = new Dictionary<string, CorrectionRule>(StringComparer.Ordinal);
+
+        foreach (var pair in requested.OrderBy(x => x.Key, StringComparer.Ordinal))
+        {
+            var variant = variants.SingleOrDefault(x => x.VariantSku == pair.Key)
+                ?? throw new InvalidOperationException($"SKU interno {pair.Key} não possui variação cadastrada.");
+            if (!variant.IsActive || variant.CatalogCostStatus != CatalogCostStatuses.Resolved
+                                  || variant.CatalogPriceCents <= 0)
+                throw new InvalidOperationException($"SKU {pair.Key} não possui custo interno atual aprovado.");
+            if (variant.CatalogPriceOrigin is not (CatalogPriceOrigins.MasterProduct or CatalogPriceOrigins.VariantOverride))
+                throw new InvalidOperationException($"SKU {pair.Key} possui origem de custo incompatível com baseline de catálogo.");
+
+            var open = versions.Where(x => x.VariantSku == pair.Key && x.ValidTo == null).ToArray();
+            if (open.Length != 1)
+                throw new InvalidOperationException($"SKU {pair.Key} deve possuir exatamente uma versão de preço vigente.");
+            var current = open[0];
+            if (current.CatalogCostStatus != CatalogCostStatuses.Resolved
+                || current.CatalogPriceCents != variant.CatalogPriceCents
+                || current.CatalogPriceOrigin != variant.CatalogPriceOrigin
+                || current.ProductSku != variant.BaseSku)
+                throw new InvalidOperationException($"SKU {pair.Key} diverge da versão de preço vigente; revise o catálogo antes do baseline.");
+            if (pair.Value.CorrectUnitCostCents > 0 && pair.Value.CorrectUnitCostCents != current.CatalogPriceCents)
+                throw new InvalidOperationException($"O custo solicitado para {pair.Key} diverge do custo interno vigente aprovado.");
+
+            var cut = (pair.Value.BaselineCutAt ?? current.ValidFrom).ToUniversalTime();
+            if (cut == default || cut > DateTimeOffset.UtcNow)
+                throw new InvalidOperationException($"O corte do baseline de {pair.Key} deve ser uma data passada válida.");
+            var priorActive = activeBaselines.SingleOrDefault(x => x.VariantSku == pair.Key);
+            rules[pair.Key] = new CorrectionRule(current.CatalogPriceCents, [], variant.BaseSku,
+                current.Id, cut, priorActive?.Id, priorActive == null ? null : HashBaseline(priorActive));
+        }
+
+        return rules;
+    }
+
+    private async Task<FinancialCorrectionHistoryCoverage> RequireCompleteHistoryAsync(
+        string tenantId, Guid clientId, long sellerId, CancellationToken cancellationToken)
+    {
+        var parent = await _db.FinancialSyncJobs.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.SellerId == sellerId
+                        && x.JobType == FinancialSyncJobTypes.OperationalSyncBatch
+                        && x.DedupeKey.StartsWith("OP:HISTORY:"))
+            .OrderByDescending(x => x.RangeTo).ThenByDescending(x => x.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("O dry-run do baseline exige sincronização histórica reconciliada.");
+        var children = await _db.FinancialSyncJobs.AsNoTracking()
+            .Where(x => x.ParentJobId == parent.Id).OrderBy(x => x.RangeFrom).ThenBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+        var windows = children.Where(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk).ToArray();
+        var isCompleteStatus = parent.Status is "COMPLETED" or "CURRENT";
+        var coversTwelveMonths = parent.RangeFrom <= parent.RangeTo.AddMonths(-12);
+        // PARTIAL means the search window itself finished; any unavailable ID is
+        // represented explicitly and must be resolved by a gap-retry before the
+        // parent can become CURRENT.
+        var completedWindows = windows.Count(x => x.Status is "COMPLETED" or "CURRENT" or "PARTIAL");
+        var unresolvedGaps = CountUnresolvedHistoryGaps(children);
+        if (!isCompleteStatus || !coversTwelveMonths || windows.Length == 0
+            || completedWindows != windows.Length || unresolvedGaps != 0)
+            throw new InvalidOperationException(
+                "O dry-run do baseline foi bloqueado: o histórico do seller ainda está parcial ou possui gaps não resolvidos.");
+
+        var snapshot = JsonSerializer.Serialize(new
+        {
+            parent.Id,
+            parent.Status,
+            parent.RangeFrom,
+            parent.RangeTo,
+            parent.Total,
+            parent.Processed,
+            windows = children.Select(x => new { x.Id, x.RangeFrom, x.RangeTo, x.Status, x.Checkpoint, x.ResultJson })
+        });
+        return new FinancialCorrectionHistoryCoverage(parent.Id, parent.Status, parent.RangeFrom, parent.RangeTo,
+            completedWindows, windows.Length, unresolvedGaps, Sha256(snapshot));
+    }
+
+    private static int CountUnresolvedHistoryGaps(IEnumerable<FinancialSyncJob> jobs)
+    {
+        var states = new Dictionary<string, string>(StringComparer.Ordinal);
+        var anonymousGapCount = 0;
+        foreach (var job in jobs.OrderBy(x => x.UpdatedAt).ThenBy(x => x.Id))
+        {
+            if (string.IsNullOrWhiteSpace(job.ResultJson)) continue;
+            try
+            {
+                using var json = JsonDocument.Parse(job.ResultJson);
+                var root = json.RootElement;
+                if ((root.TryGetProperty("orders", out var orders) || root.TryGetProperty("Orders", out orders))
+                    && orders.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var order in orders.EnumerateObject())
+                        states[order.Name] = order.Value.GetString() ?? "GAP";
+                }
+                else if ((root.TryGetProperty("unresolvedGaps", out var gaps)
+                          || root.TryGetProperty("UnresolvedGaps", out gaps))
+                         && gaps.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var gap in gaps.EnumerateArray())
+                    {
+                        if (gap.ValueKind == JsonValueKind.Object
+                            && (gap.TryGetProperty("orderId", out var id) || gap.TryGetProperty("OrderId", out id))
+                            && !string.IsNullOrWhiteSpace(id.GetString()))
+                            states[id.GetString()!] = "GAP";
+                        else anonymousGapCount++;
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                anonymousGapCount++;
+            }
+        }
+        return anonymousGapCount + states.Count(x => string.Equals(x.Value, "GAP", StringComparison.Ordinal));
     }
 
     public async Task<FinancialCostCorrectionPlanResult?> GetAsync(string tenantId, Guid clientId, Guid planId,
@@ -306,6 +473,47 @@ public sealed class FinancialCostCorrectionPlanService
         try
         {
             plan.Status = FinancialCorrectionPlanStatuses.Activating;
+            if (plan.PlanType == FinancialCorrectionPlanTypes.CatalogBaselineCurrent)
+            {
+                var report = JsonSerializer.Deserialize<FinancialCostCorrectionReport>(plan.ReportJson)
+                    ?? throw new InvalidOperationException("Relatório de correção inválido.");
+                var currentCoverage = await RequireCompleteHistoryAsync(
+                    plan.TenantId, plan.ClientId, plan.SellerId, cancellationToken);
+                if (report.HistoryCoverage == null
+                    || report.HistoryCoverage.SnapshotHash != currentCoverage.SnapshotHash)
+                    throw new StaleCorrectionPlanException();
+            }
+            var stagedBaselines = plan.PlanType == FinancialCorrectionPlanTypes.CatalogBaselineCurrent
+                ? await _db.CatalogCostBaselines.Where(x => x.PlanId == plan.Id)
+                    .OrderBy(x => x.VariantSku).ToListAsync(cancellationToken)
+                : [];
+            var baselineExpectations = plan.PlanType == FinancialCorrectionPlanTypes.CatalogBaselineCurrent
+                ? ReadBaselineExpectations(plan.ScopeJson)
+                : new Dictionary<string, BaselineExpectation>(StringComparer.Ordinal);
+            if (plan.PlanType == FinancialCorrectionPlanTypes.CatalogBaselineCurrent
+                && (stagedBaselines.Count != baselineExpectations.Count
+                    || stagedBaselines.Any(x => x.Status != CatalogCostBaselineStatuses.Staged)))
+                throw new StaleCorrectionPlanException();
+
+            foreach (var baseline in stagedBaselines)
+            {
+                if (!baselineExpectations.TryGetValue(baseline.VariantSku, out var expected))
+                    throw new StaleCorrectionPlanException();
+                var version = await _db.ProductPriceVersions.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == baseline.BaselinePriceVersionId, cancellationToken);
+                var variant = await _db.ProductVariants.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.VariantSku == baseline.VariantSku, cancellationToken);
+                if (version == null || variant == null || version.ValidTo != null
+                    || version.CatalogPriceCents != baseline.BaselineUnitCostCents
+                    || variant.CatalogPriceCents != baseline.BaselineUnitCostCents
+                    || variant.CatalogCostStatus != CatalogCostStatuses.Resolved)
+                    throw new StaleCorrectionPlanException();
+                var current = await LoadActiveBaselineForUpdateAsync(baseline.VariantSku, cancellationToken);
+                if (current?.Id != expected.ExpectedActiveBaselineId
+                    || current != null && HashBaseline(current) != expected.ExpectedActiveBaselineHash)
+                    throw new StaleCorrectionPlanException();
+            }
+
             foreach (var row in rows)
             {
                 var head = await LockHeadAsync(row.ExpectedHeadId, cancellationToken);
@@ -318,6 +526,30 @@ public sealed class FinancialCostCorrectionPlanService
                     || item.CatalogPriceVersionId != row.ExpectedPriceVersionId
                     || Sha256(CanonicalReferences(ParseCostReferences(item.CostReferencesJson))) != row.ExpectedCostReferencesHash)
                     throw new StaleCorrectionPlanException();
+            }
+
+            var activationTime = DateTimeOffset.UtcNow;
+            var supersededAnyBaseline = false;
+            foreach (var baseline in stagedBaselines)
+            {
+                var current = await _db.CatalogCostBaselines.SingleOrDefaultAsync(x =>
+                    x.VariantSku == baseline.VariantSku && x.Status == CatalogCostBaselineStatuses.Active,
+                    cancellationToken);
+                if (current != null)
+                {
+                    current.Status = CatalogCostBaselineStatuses.Discarded;
+                    supersededAnyBaseline = true;
+                }
+            }
+            // The partial unique index is immediate in PostgreSQL. Flush the old
+            // ACTIVE rows first, still inside this transaction, before promoting
+            // the staged replacements.
+            if (supersededAnyBaseline) await _db.SaveChangesAsync(cancellationToken);
+            foreach (var baseline in stagedBaselines)
+            {
+                baseline.Status = CatalogCostBaselineStatuses.Active;
+                baseline.ApprovedAt = activationTime;
+                baseline.ActivatedAt = activationTime;
             }
 
             foreach (var row in rows)
@@ -372,6 +604,17 @@ public sealed class FinancialCostCorrectionPlanService
                 head.Version++;
                 head.UpdatedAt = DateTimeOffset.UtcNow;
                 row.State = FinancialCorrectionEntryStates.Active;
+                if (original.MarketplaceOrderItemId.HasValue)
+                {
+                    var item = await _db.MarketplaceOrderItems.SingleAsync(
+                        x => x.Id == original.MarketplaceOrderItemId.Value, cancellationToken);
+                    item.ProductCostEntryId = replacement.Id;
+                    if (plan.PlanType == FinancialCorrectionPlanTypes.CatalogBaselineCurrent)
+                    {
+                        var baseline = stagedBaselines.Single(x => x.VariantSku == item.SabrVariantSku);
+                        item.CatalogCostBaselineId = baseline.Id;
+                    }
+                }
             }
             plan.Status = FinancialCorrectionPlanStatuses.Reconciling;
             plan.UpdatedAt = DateTimeOffset.UtcNow;
@@ -388,6 +631,8 @@ public sealed class FinancialCostCorrectionPlanService
             stale.UpdatedAt = DateTimeOffset.UtcNow;
             var staged = await _db.FinancialCorrectionPlanEntries.Where(x => x.PlanId == plan.Id).ToListAsync(cancellationToken);
             foreach (var entry in staged) entry.State = FinancialCorrectionEntryStates.Discarded;
+            var baselines = await _db.CatalogCostBaselines.Where(x => x.PlanId == plan.Id).ToListAsync(cancellationToken);
+            foreach (var baseline in baselines) baseline.Status = CatalogCostBaselineStatuses.Discarded;
             await _db.SaveChangesAsync(cancellationToken);
             return;
         }
@@ -418,6 +663,38 @@ public sealed class FinancialCostCorrectionPlanService
             return await _db.FinancialEconomicHeads.FromSqlInterpolated(
                 $"SELECT * FROM financial_economic_heads WHERE id = {headId} FOR UPDATE").SingleAsync(cancellationToken);
         return await _db.FinancialEconomicHeads.SingleAsync(x => x.Id == headId, cancellationToken);
+    }
+
+    private async Task<CatalogCostBaseline?> LoadActiveBaselineForUpdateAsync(
+        string variantSku, CancellationToken cancellationToken)
+    {
+        if (_db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+            return await _db.CatalogCostBaselines.FromSqlInterpolated(
+                $"SELECT * FROM catalog_cost_baselines WHERE variant_sku = {variantSku} AND status = 'ACTIVE' FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken);
+        return await _db.CatalogCostBaselines.SingleOrDefaultAsync(x =>
+            x.VariantSku == variantSku && x.Status == CatalogCostBaselineStatuses.Active, cancellationToken);
+    }
+
+    private static Dictionary<string, BaselineExpectation> ReadBaselineExpectations(string scopeJson)
+    {
+        using var document = JsonDocument.Parse(scopeJson);
+        var result = new Dictionary<string, BaselineExpectation>(StringComparer.Ordinal);
+        foreach (var correction in document.RootElement.GetProperty("corrections").EnumerateArray())
+        {
+            var sku = correction.GetProperty("sku").GetString()
+                ?? throw new InvalidOperationException("Manifesto de baseline sem SKU.");
+            Guid? id = null;
+            if (correction.TryGetProperty("ExpectedActiveBaselineId", out var idElement)
+                && idElement.ValueKind == JsonValueKind.String)
+                id = idElement.GetGuid();
+            string? hash = null;
+            if (correction.TryGetProperty("ExpectedActiveBaselineHash", out var hashElement)
+                && hashElement.ValueKind == JsonValueKind.String)
+                hash = hashElement.GetString();
+            result.Add(sku, new BaselineExpectation(id, hash));
+        }
+        return result;
     }
 
     private static void ValidateCommand(FinancialCorrectionPlan plan, FinancialCorrectionPlanCommand command, Guid actorUserId)
@@ -453,7 +730,8 @@ public sealed class FinancialCostCorrectionPlanService
             x.Id == planId && x.TenantId == tenantId && x.ClientId == clientId, cancellationToken)
         ?? throw new KeyNotFoundException("Plano de correção não encontrado.");
 
-    private static Evaluation Evaluate(CandidateRow row, CorrectionRule rule, IReadOnlyCollection<ProductPriceVersion> versions)
+    private static Evaluation Evaluate(CandidateRow row, CorrectionRule rule,
+        IReadOnlyCollection<ProductPriceVersion> versions, bool isBaselinePlan)
     {
         FinancialCostCorrectionPendingItem Pending(string code, string detail) => new(
             row.Head.EconomicKey, row.Order.Id, row.Item.Id, row.Item.SabrVariantSku, code, detail,
@@ -468,6 +746,8 @@ public sealed class FinancialCostCorrectionPlanService
             return new(null, Pending("ECONOMIC_AT_AMBIGUOUS", "EconomicAt do item diverge da data econômica do pedido."));
         if (row.Entry.EconomicOccurredAt.ToUniversalTime() != economicAt.Value)
             return new(null, Pending("ECONOMIC_AT_AMBIGUOUS", "Data do fato financeiro diverge da data econômica do pedido."));
+        if (isBaselinePlan && economicAt.Value >= rule.BaselineCutAt!.Value)
+            return new(null, null);
 
         if (row.Item.CostSource is not ("CATALOG_PRICE" or "MIXED"))
             return new(null, Pending("COST_SOURCE_NOT_ELIGIBLE", $"Origem {row.Item.CostSource ?? "ausente"} não é corrigível por preço de catálogo."));
@@ -496,13 +776,19 @@ public sealed class FinancialCostCorrectionPlanService
         if (catalogVersionIds.Length != 1 || !catalogVersionIds[0].HasValue || row.Item.CatalogPriceVersionId != catalogVersionIds[0])
             return new(null, Pending("PRICE_VERSION_AMBIGUOUS", "Parcela de catálogo não referencia uma única versão coerente."));
         var versionId = catalogVersionIds[0]!.Value;
-        if (!rule.IncorrectVersionIds.Contains(versionId))
+        if (!isBaselinePlan && !rule.IncorrectVersionIds.Contains(versionId))
             return new(null, Pending("PRICE_VERSION_NOT_AUTHORIZED", "A versão de preço não pertence ao conjunto incorreto autorizado."));
 
-        var effectiveVersions = versions.Where(x => x.VariantSku == row.Item.SabrVariantSku
-            && x.ValidFrom <= economicAt.Value && (x.ValidTo == null || economicAt.Value < x.ValidTo.Value)).ToArray();
-        if (effectiveVersions.Length != 1 || effectiveVersions[0].Id != versionId)
-            return new(null, Pending("PRICE_VERSION_AMBIGUOUS", "A versão referenciada não é a única vigente em economicAt."));
+        var referencedVersions = versions.Where(x => x.VariantSku == row.Item.SabrVariantSku && x.Id == versionId).ToArray();
+        if (referencedVersions.Length != 1)
+            return new(null, Pending("PRICE_VERSION_AMBIGUOUS", "A versão histórica referenciada não pertence inequivocamente ao SKU."));
+        if (!isBaselinePlan)
+        {
+            var effectiveVersions = versions.Where(x => x.VariantSku == row.Item.SabrVariantSku
+                && x.ValidFrom <= economicAt.Value && (x.ValidTo == null || economicAt.Value < x.ValidTo.Value)).ToArray();
+            if (effectiveVersions.Length != 1 || effectiveVersions[0].Id != versionId)
+                return new(null, Pending("PRICE_VERSION_AMBIGUOUS", "A versão referenciada não é a única vigente em economicAt."));
+        }
 
         var catalogQuantity = catalog.Sum(x => x.Quantity);
         var lotQuantity = lots.Sum(x => x.Quantity);
@@ -517,7 +803,15 @@ public sealed class FinancialCostCorrectionPlanService
         var activeEntryHash = HashActiveEntry(row.Entry);
         var breakdown = JsonSerializer.Serialize(new
         {
-            catalog = new { quantity = catalogQuantity, unitCostCents = rule.CorrectUnitCostCents, priceVersionId = versionId },
+            catalog = new
+            {
+                quantity = catalogQuantity,
+                unitCostCents = rule.CorrectUnitCostCents,
+                previousPriceVersionId = versionId,
+                baselinePriceVersionId = rule.BaselinePriceVersionId,
+                origin = isBaselinePlan ? CatalogCostBaselineOrigins.ApprovedRetroactiveBaseline : referencedVersions[0].CatalogPriceOrigin,
+                baselineCutAt = rule.BaselineCutAt
+            },
             prePurchasedLots = lots.OrderBy(x => x.LotId).Select(x => new { x.LotId, x.Quantity, x.UnitCostCents })
         });
 
@@ -540,7 +834,9 @@ public sealed class FinancialCostCorrectionPlanService
             currentCost,
             replacementCost,
             currentCost - replacementCost,
-            breakdown), null);
+            breakdown,
+            rule.BaselineCutAt,
+            rule.BaselinePriceVersionId), null);
     }
 
     private static CostReference[] ParseCostReferences(string json)
@@ -573,23 +869,45 @@ public sealed class FinancialCostCorrectionPlanService
         entry.SupersedesEntryId
     }));
 
+    private static string HashBaseline(CatalogCostBaseline baseline) => Sha256(JsonSerializer.Serialize(new
+    {
+        baseline.Id,
+        baseline.PlanId,
+        baseline.ProductSku,
+        baseline.VariantSku,
+        baseline.BaselinePriceVersionId,
+        baseline.BaselineUnitCostCents,
+        baseline.BaselineCutAt,
+        baseline.CostOrigin,
+        baseline.Status,
+        baseline.PlanHash
+    }));
+
     private static string CanonicalScope(string tenantId, Guid clientId, long sellerId, string reason,
-        DateTimeOffset rangeFrom, DateTimeOffset rangeToExclusive,
+        DateTimeOffset rangeFrom, DateTimeOffset rangeToExclusive, string planType,
         IReadOnlyDictionary<string, CorrectionRule> corrections,
         IEnumerable<FinancialCostCorrectionManifestEntry> manifest,
-        IEnumerable<FinancialCostCorrectionPendingItem> pending) => JsonSerializer.Serialize(new
+        IEnumerable<FinancialCostCorrectionPendingItem> pending,
+        FinancialCorrectionHistoryCoverage? historyCoverage) => JsonSerializer.Serialize(new
         {
             tenantId,
             clientId,
             sellerId,
+            planType,
             rangeFrom,
             rangeToExclusive,
             reason,
+            historyCoverage,
             corrections = corrections.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => new
             {
                 sku = x.Key,
                 x.Value.CorrectUnitCostCents,
-                incorrectCatalogPriceVersionIds = x.Value.IncorrectVersionIds
+                incorrectCatalogPriceVersionIds = x.Value.IncorrectVersionIds,
+                x.Value.ProductSku,
+                x.Value.BaselinePriceVersionId,
+                x.Value.BaselineCutAt,
+                x.Value.ExpectedActiveBaselineId,
+                x.Value.ExpectedActiveBaselineHash
             }),
             manifest = manifest.OrderBy(x => x.EconomicKey, StringComparer.Ordinal),
             pending = pending.OrderBy(x => x.EconomicKey, StringComparer.Ordinal).ThenBy(x => x.Code, StringComparer.Ordinal)
@@ -627,8 +945,15 @@ public sealed class FinancialCostCorrectionPlanService
             throw new ArgumentException("Tenant, cliente e ator são obrigatórios.");
         if (request.SellerId <= 0 || request.Skus.Count == 0 || string.IsNullOrWhiteSpace(request.Reason))
             throw new ArgumentException("Seller, SKUs e motivo são obrigatórios.");
-        if (request.Skus.Any(x => x.CorrectUnitCostCents <= 0 || x.IncorrectCatalogPriceVersionIds.Count == 0))
+        if (request.PlanType is not (FinancialCorrectionPlanTypes.PriceVersionCorrection
+            or FinancialCorrectionPlanTypes.CatalogBaselineCurrent))
+            throw new ArgumentException($"Tipo de plano {request.PlanType} não suportado.");
+        if (request.PlanType == FinancialCorrectionPlanTypes.PriceVersionCorrection
+            && request.Skus.Any(x => x.CorrectUnitCostCents <= 0 || x.IncorrectCatalogPriceVersionIds.Count == 0))
             throw new ArgumentException("Cada SKU exige custo positivo e ao menos uma versão de preço incorreta comprovada.");
+        if (request.PlanType == FinancialCorrectionPlanTypes.CatalogBaselineCurrent
+            && request.Skus.Any(x => x.CorrectUnitCostCents < 0))
+            throw new ArgumentException("O custo opcional do baseline não pode ser negativo.");
         var normalized = request.Skus.Select(x => Sku.Normalize(x.Sku)).ToArray();
         if (normalized.Distinct(StringComparer.Ordinal).Count() != normalized.Length)
             throw new ArgumentException("Não é permitido repetir SKU no plano.");
@@ -636,9 +961,12 @@ public sealed class FinancialCostCorrectionPlanService
 
     private sealed record CandidateRow(FinancialEconomicHead Head, MarketplaceFinancialEntry Entry,
         MarketplaceOrderItem Item, MarketplaceOrder Order);
-    private sealed record CorrectionRule(long CorrectUnitCostCents, Guid[] IncorrectVersionIds);
+    private sealed record CorrectionRule(long CorrectUnitCostCents, Guid[] IncorrectVersionIds,
+        string? ProductSku = null, Guid? BaselinePriceVersionId = null, DateTimeOffset? BaselineCutAt = null,
+        Guid? ExpectedActiveBaselineId = null, string? ExpectedActiveBaselineHash = null);
     private sealed record CostReference(string Source, Guid? LotId, int Quantity, long UnitCostCents,
         Guid? CatalogPriceVersionId, string? PriceOrigin);
+    private sealed record BaselineExpectation(Guid? ExpectedActiveBaselineId, string? ExpectedActiveBaselineHash);
     private sealed record Evaluation(FinancialCostCorrectionManifestEntry? Manifest, FinancialCostCorrectionPendingItem? Pending);
     private sealed class StaleCorrectionPlanException : Exception;
 }

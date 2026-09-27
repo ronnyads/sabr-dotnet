@@ -84,6 +84,26 @@ public interface IMercadoLivreApiClient
         int availableQuantity,
         string accessToken,
         CancellationToken cancellationToken = default);
+    async Task<MercadoLivreOrderSearchPage> SearchOrdersPageAsync(
+        string sellerId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int offset,
+        int limit,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        var all = await SearchOrdersAsync(sellerId, from, to, accessToken, cancellationToken);
+        var page = all.Skip(Math.Max(0, offset)).Take(Math.Clamp(limit, 1, 50)).ToList();
+        return new MercadoLivreOrderSearchPage
+        {
+            OrderIds = page,
+            Offset = Math.Max(0, offset),
+            Limit = Math.Clamp(limit, 1, 50),
+            RemoteReportedTotal = all.Count,
+            HasMore = Math.Max(0, offset) + page.Count < all.Count
+        };
+    }
     Task<MercadoLivreShipmentCostDetails?> GetShipmentCostsAsync(
         string shipmentId, long sellerId, string accessToken, CancellationToken cancellationToken = default)
         => Task.FromResult<MercadoLivreShipmentCostDetails?>(null);
