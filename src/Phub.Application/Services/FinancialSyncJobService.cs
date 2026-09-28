@@ -378,8 +378,11 @@ public sealed class FinancialSyncJobService
         {
             try
             {
-                await EnqueueOperationalBackfillAsync(scope.TenantId, scope.ClientId, scope.SellerId,
-                    lookbackDays: 366, chunkDays: 1, cancellationToken: cancellationToken);
+                // Repair both durable history and the canonical recent lane. This
+                // also retires legacy hour-shifted recent windows automatically,
+                // without requiring the seller to press the manual sync button.
+                await EnqueueCompleteOperationalSyncAsync(
+                    scope.TenantId, scope.ClientId, scope.SellerId, cancellationToken);
                 ensured++;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
