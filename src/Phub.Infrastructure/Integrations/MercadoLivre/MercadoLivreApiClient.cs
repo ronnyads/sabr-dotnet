@@ -426,7 +426,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
     {
         return await ExecuteWithResilienceAsync(async ct =>
         {
-            const int pageSize = 50;
+            const int pageSize = 1000;
             var orderIds = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (var offset = 0; ; offset += pageSize)

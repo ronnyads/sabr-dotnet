@@ -16,7 +16,9 @@ public sealed class MercadoLivreOrderSearchTests
         var handler = new CallbackHandler(request =>
         {
             var offset = int.Parse(GetQuery(request.RequestUri!, "offset"));
-            var count = Math.Min(50, total - offset);
+            var limit = int.Parse(GetQuery(request.RequestUri!, "limit"));
+            Assert.Equal(1000, limit);
+            var count = Math.Min(limit, total - offset);
             var ids = Enumerable.Range(offset, Math.Max(0, count)).Select(x => $"{{\"id\":\"{x}\"}}");
             var json = $"{{\"paging\":{{\"total\":{total}}},\"results\":[{string.Join(',', ids)}]}}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

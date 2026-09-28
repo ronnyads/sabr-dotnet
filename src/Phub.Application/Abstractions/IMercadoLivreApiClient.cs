@@ -94,12 +94,12 @@ public interface IMercadoLivreApiClient
         CancellationToken cancellationToken = default)
     {
         var all = await SearchOrdersAsync(sellerId, from, to, accessToken, cancellationToken);
-        var page = all.Skip(Math.Max(0, offset)).Take(Math.Clamp(limit, 1, 50)).ToList();
+        var page = all.Skip(Math.Max(0, offset)).Take(Math.Clamp(limit, 1, 1000)).ToList();
         return new MercadoLivreOrderSearchPage
         {
             OrderIds = page,
             Offset = Math.Max(0, offset),
-            Limit = Math.Clamp(limit, 1, 50),
+            Limit = Math.Clamp(limit, 1, 1000),
             RemoteReportedTotal = all.Count,
             HasMore = Math.Max(0, offset) + page.Count < all.Count
         };

@@ -15,11 +15,10 @@ namespace Phub.Application.Services;
 
 public sealed class FinancialSyncJobService
 {
-    // Mercado Livre allows up to 1,000 results in /orders/search. We deliberately
-    // consume 50 at a time because every id fans out into order/shipment/financial
-    // detail calls; the fetch gate controls concurrency and protects the provider
-    // quota while this larger page removes the default 10-result bottleneck.
-    private const int OperationalHistoryPageSize = 50;
+    // Discovery and enrichment are separate concerns. /orders/search officially
+    // accepts up to 1,000 results, so discover the largest supported page and let
+    // MercadoLivreSyncService's bounded fetch gate control the detail fan-out.
+    private const int OperationalHistoryPageSize = 1000;
     private const string OperationalHistoryAlgorithm = "ml-history-hourly-v1";
     private const string SkippedBeforeFirstOrder = "SKIPPED_BEFORE_FIRST_ORDER";
     private const string SkippedOutsideRollingWindow = "SKIPPED_OUTSIDE_ROLLING_WINDOW";
