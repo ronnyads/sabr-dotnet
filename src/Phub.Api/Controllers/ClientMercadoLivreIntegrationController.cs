@@ -257,7 +257,8 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
             // A sincronizacao externa nunca deve manter a requisicao HTTP aberta.
             // O worker processa janelas idempotentes e o cliente acompanha pelo jobId.
             var result = await _financialSync.EnqueueCompleteOperationalSyncAsync(
-                tenantId!, clientId, sellerId, cancellationToken, discoverBoundaries: false);
+                tenantId!, clientId, sellerId, cancellationToken, discoverBoundaries: false,
+                useAdvisoryLocks: false);
             return Accepted(result);
         }
         catch (InvalidOperationException ex)
@@ -413,7 +414,8 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         try
         {
             await _financialSync.EnqueueCompleteOperationalSyncAsync(
-                tenantId!, clientId, sellerId, cancellationToken, discoverBoundaries: false);
+                tenantId!, clientId, sellerId, cancellationToken, discoverBoundaries: false,
+                useAdvisoryLocks: false);
             return Accepted(await _financialSync.GetHistoryStatusAsync(tenantId!, clientId, cancellationToken));
         }
         catch (InvalidOperationException ex)

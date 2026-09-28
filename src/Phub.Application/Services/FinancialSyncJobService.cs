@@ -96,7 +96,8 @@ public sealed class FinancialSyncJobService
 
     public async Task<FinancialSyncEnqueueResult> EnqueueOperationalBackfillAsync(
         string tenantId, Guid clientId, long? sellerId, int lookbackDays = 365, int chunkDays = 30,
-        CancellationToken cancellationToken = default, bool discoverBoundaries = true)
+        CancellationToken cancellationToken = default, bool discoverBoundaries = true,
+        bool useAdvisoryLocks = true)
     {
         lookbackDays = Math.Clamp(lookbackDays, 1, 366);
         chunkDays = Math.Clamp(chunkDays, 1, 7);
@@ -185,7 +186,7 @@ public sealed class FinancialSyncJobService
             // process whenever the clock crossed a boundary.
             var jobPrefix = isHistoricalBackfill ? "OP:HISTORY" : "OP:RECENT";
             var stableDedupe = $"{jobPrefix}:{OperationalHistoryAlgorithm}:{tenantId}:{clientId:N}:{seller}";
-            if (_db.Database.IsRelational())
+            if (_db.Database.IsRelational() && useAdvisoryLocks)
             {
                 var lockKey = $"ML_SYNC_QUEUE:{tenantId}:{clientId:N}:{seller}:{jobPrefix}";
                 await _db.Database.ExecuteSqlInterpolatedAsync(
@@ -351,16 +352,18 @@ public sealed class FinancialSyncJobService
 
     public async Task<FinancialSyncEnqueueResult> EnqueueCompleteOperationalSyncAsync(
         string tenantId, Guid clientId, long? sellerId,
-        CancellationToken cancellationToken = default, bool discoverBoundaries = true)
+        CancellationToken cancellationToken = default, bool discoverBoundaries = true,
+        bool useAdvisoryLocks = true)
     {
         // One user command guarantees the durable 12-month coverage and also
         // refreshes the recent/open window. Both paths are idempotent.
         var history = await EnqueueOperationalBackfillAsync(
             tenantId, clientId, sellerId, lookbackDays: 366, chunkDays: 1,
-            cancellationToken: cancellationToken, discoverBoundaries: discoverBoundaries);
+            cancellationToken: cancellationToken, discoverBoundaries: discoverBoundaries,
+            useAdvisoryLocks: useAdvisoryLocks);
         var recent = await EnqueueOperationalBackfillAsync(
             tenantId, clientId, sellerId, lookbackDays: 30, chunkDays: 1,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken, useAdvisoryLocks: useAdvisoryLocks);
         foreach (var job in recent.Jobs)
         {
             if (history.Jobs.All(x => x.JobId != job.JobId)) history.Jobs.Add(job);
