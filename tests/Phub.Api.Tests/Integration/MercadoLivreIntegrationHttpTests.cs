@@ -315,6 +315,40 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task SyncNow_ConcurrentRequestsReuseDurableQueueWithoutUniqueViolation()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-sync-concurrent";
+        const string tenantSlug = "mlsyncconcurrent";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001012";
+
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAndMappingAsync(
+            tenantId, clientId, sellerId, "ITEM-ML-SYNC-CONCURRENT", null, "SKU-NOT-USED");
+
+        using var firstClient = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        using var secondClient = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var responses = await Task.WhenAll(
+            firstClient.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId }),
+            secondClient.PostAsJsonAsync("/api/v1/client/integrations/mercadolivre/sync-now", new { sellerId }));
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.Accepted, response.StatusCode));
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var jobs = await db.FinancialSyncJobs.AsNoTracking()
+            .Where(job => job.TenantId == tenantId && job.ClientId == clientId)
+            .ToListAsync();
+        Assert.Equal(2, jobs.Count(job => job.ParentJobId == null));
+        Assert.Empty(jobs.GroupBy(job => new { job.SellerId, job.DedupeKey })
+            .Where(group => group.Count() > 1));
+        Assert.Contains(jobs, job => job.DedupeKey.StartsWith("OP:CHUNK:OP:HISTORY:"));
+        Assert.Contains(jobs, job => job.DedupeKey.StartsWith("OP:CHUNK:OP:RECENT:"));
+    }
+
+    [Fact]
     public async Task SyncNow_DeliveredShipmentReleasesReservationAndDoesNotRecreateIt()
     {
         await _factory.ResetDatabaseAsync();

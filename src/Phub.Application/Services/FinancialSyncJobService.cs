@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Concurrent;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -15,6 +16,7 @@ namespace Phub.Application.Services;
 public sealed class FinancialSyncJobService
 {
     private const string OperationalHistoryAlgorithm = "ml-history-hourly-v1";
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> EnqueueGates = new(StringComparer.Ordinal);
     private readonly IAppDbContext _db;
     private readonly MercadoLivreSyncService _sync;
     private readonly BillingFinancialReconciliationService _billing;
@@ -95,10 +97,17 @@ public sealed class FinancialSyncJobService
         var sellers = await _db.TenantMarketplaceConnections.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.Provider == MarketplaceProvider.MercadoLivre)
             .Where(x => !sellerId.HasValue || x.SellerId == sellerId.Value)
-            .Select(x => x.SellerId).Distinct().ToListAsync(cancellationToken);
+            .Select(x => x.SellerId).Distinct().OrderBy(x => x).ToListAsync(cancellationToken);
         if (sellers.Count == 0) throw new InvalidOperationException("Nenhum seller Mercado Livre conectado.");
 
+        // Keep simultaneous clicks/callbacks idempotent in this process; PostgreSQL's
+        // transaction-scoped advisory lock below coordinates separate app instances.
+        using var enqueueGateLease = await AcquireEnqueueGatesAsync(
+            tenantId, clientId, sellers, cancellationToken);
         var result = new FinancialSyncEnqueueResult();
+        await using var enqueueTransaction = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
         // ML applies hour precision to order search filters. Canonical, aligned
         // boundaries avoid losing orders at a minute/second boundary.
         var now = DateTimeOffset.UtcNow;
@@ -117,6 +126,12 @@ public sealed class FinancialSyncJobService
             // process whenever the clock crossed a boundary.
             var jobPrefix = isHistoricalBackfill ? "OP:HISTORY" : "OP:RECENT";
             var stableDedupe = $"{jobPrefix}:{OperationalHistoryAlgorithm}:{tenantId}:{clientId:N}:{seller}";
+            if (_db.Database.IsRelational())
+            {
+                var lockKey = $"ML_SYNC_QUEUE:{tenantId}:{clientId:N}:{seller}:{jobPrefix}";
+                await _db.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_advisory_xact_lock(hashtext({lockKey}));", cancellationToken);
+            }
             var batch = await _db.FinancialSyncJobs.FirstOrDefaultAsync(x =>
                 x.TenantId == tenantId && x.ClientId == clientId && x.Provider == MarketplaceProvider.MercadoLivre
                 && x.SellerId == seller && x.JobType == FinancialSyncJobTypes.OperationalSyncBatch
@@ -188,7 +203,9 @@ public sealed class FinancialSyncJobService
                 {
                     ParentJobId = batch.Id, TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
                     SellerId = seller, JobType = FinancialSyncJobTypes.OperationalSyncChunk, RangeFrom = cursor, RangeTo = chunkTo,
-                    DedupeKey = $"OP:CHUNK:{OperationalHistoryAlgorithm}:{tenantId}:{clientId:N}:{seller}:{cursor:O}:{chunkTo:O}", Status = "PENDING",
+                    // History and recent refreshes overlap intentionally, but each
+                    // bounded lane must reuse only its own durable window row.
+                    DedupeKey = $"OP:CHUNK:{jobPrefix}:{OperationalHistoryAlgorithm}:{tenantId}:{clientId:N}:{seller}:{cursor:O}:{chunkTo:O}", Status = "PENDING",
                     Checkpoint = JsonSerializer.Serialize(new HistoryPageCheckpoint(cursor, 0))
                 });
                 needsWork = true;
@@ -202,6 +219,8 @@ public sealed class FinancialSyncJobService
             result.Jobs.Add(Map(batch));
         }
         await _db.SaveChangesAsync(cancellationToken);
+        if (enqueueTransaction != null)
+            await enqueueTransaction.CommitAsync(cancellationToken);
         return result;
     }
 
@@ -667,6 +686,38 @@ public sealed class FinancialSyncJobService
     }
 
     private sealed record HistoryPageCheckpoint(DateTimeOffset SegmentFrom, int Offset);
+
+    private static async Task<IDisposable> AcquireEnqueueGatesAsync(
+        string tenantId, Guid clientId, IReadOnlyCollection<long> sellers, CancellationToken cancellationToken)
+    {
+        var held = new List<SemaphoreSlim>(sellers.Count);
+        try
+        {
+            foreach (var seller in sellers)
+            {
+                var key = $"{tenantId}:{clientId:N}:{seller}";
+                var gate = EnqueueGates.GetOrAdd(key, static _ => new SemaphoreSlim(1, 1));
+                await gate.WaitAsync(cancellationToken);
+                held.Add(gate);
+            }
+            return new EnqueueGateLease(held);
+        }
+        catch
+        {
+            for (var index = held.Count - 1; index >= 0; index--)
+                held[index].Release();
+            throw;
+        }
+    }
+
+    private sealed class EnqueueGateLease(IReadOnlyList<SemaphoreSlim> held) : IDisposable
+    {
+        public void Dispose()
+        {
+            for (var index = held.Count - 1; index >= 0; index--)
+                held[index].Release();
+        }
+    }
 
     private sealed class HistoryChunkResult
     {
