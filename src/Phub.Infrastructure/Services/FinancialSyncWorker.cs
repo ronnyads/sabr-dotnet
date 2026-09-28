@@ -7,7 +7,10 @@ namespace Phub.Infrastructure.Services;
 
 public sealed class FinancialSyncWorker : BackgroundService
 {
-    private const int ParallelTenantLanes = 4;
+    // Keep database pressure bounded while preserving independent progress across
+    // tenants/sellers. Each lane still claims a different tenant-safe job; the
+    // Mercado Livre client controls external detail concurrency separately.
+    private const int ParallelTenantLanes = 2;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<FinancialSyncWorker> _logger;
     private readonly string _workerId = $"{Environment.MachineName}:{Guid.NewGuid():N}";
