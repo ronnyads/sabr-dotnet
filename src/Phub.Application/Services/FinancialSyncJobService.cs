@@ -96,7 +96,7 @@ public sealed class FinancialSyncJobService
 
     public async Task<FinancialSyncEnqueueResult> EnqueueOperationalBackfillAsync(
         string tenantId, Guid clientId, long? sellerId, int lookbackDays = 365, int chunkDays = 30,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool discoverBoundaries = true)
     {
         lookbackDays = Math.Clamp(lookbackDays, 1, 366);
         chunkDays = Math.Clamp(chunkDays, 1, 7);
@@ -129,7 +129,7 @@ public sealed class FinancialSyncJobService
         // transaction/advisory locks so one slow seller never holds PostgreSQL locks
         // while Mercado Livre responds.
         var discoveredPlans = new Dictionary<long, HistoryBoundaryPlan?>();
-        if (isHistoricalBackfill)
+        if (isHistoricalBackfill && discoverBoundaries)
         {
             foreach (var seller in sellers)
             {
@@ -351,13 +351,13 @@ public sealed class FinancialSyncJobService
 
     public async Task<FinancialSyncEnqueueResult> EnqueueCompleteOperationalSyncAsync(
         string tenantId, Guid clientId, long? sellerId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool discoverBoundaries = true)
     {
         // One user command guarantees the durable 12-month coverage and also
         // refreshes the recent/open window. Both paths are idempotent.
         var history = await EnqueueOperationalBackfillAsync(
             tenantId, clientId, sellerId, lookbackDays: 366, chunkDays: 1,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken, discoverBoundaries: discoverBoundaries);
         var recent = await EnqueueOperationalBackfillAsync(
             tenantId, clientId, sellerId, lookbackDays: 30, chunkDays: 1,
             cancellationToken: cancellationToken);
