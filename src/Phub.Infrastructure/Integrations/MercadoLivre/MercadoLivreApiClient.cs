@@ -317,7 +317,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var response = await _httpClient.SendAsync(request, ct);
             if (response.StatusCode == HttpStatusCode.NotFound) return null;
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
             var root = doc.RootElement;
 
@@ -462,7 +462,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 return null;
             }
 
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -565,7 +565,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 return null;
             }
 
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -614,7 +614,9 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         string accessToken, CancellationToken cancellationToken)
     {
         offset = Math.Max(0, offset);
-        limit = Math.Clamp(limit, 1, 50);
+        // Official /orders/search contract: limit defaults to 10 and accepts up
+        // to 1,000. Operational callers still choose a smaller fan-out-safe page.
+        limit = Math.Clamp(limit, 1, 1000);
         var requestUri =
             $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
             $"&order.date_created.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
@@ -623,7 +625,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessOrThrowApiExceptionAsync(response, cancellationToken);
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(json);
         var ids = new List<string>();
@@ -663,7 +665,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             request.Headers.TryAddWithoutValidation("x-format-new", "true");
             using var response = await _httpClient.SendAsync(request, ct);
             if (response.StatusCode == HttpStatusCode.NotFound) return null;
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -692,7 +694,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             request.Headers.TryAddWithoutValidation("x-format-new", "true");
             using var response = await _httpClient.SendAsync(request, ct);
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -724,7 +726,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var response = await _httpClient.SendAsync(request, ct);
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return (IReadOnlyList<MercadoLivreOrderDiscountDetails>)[];
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             var rows = new List<MercadoLivreOrderDiscountDetails>();
@@ -1425,7 +1427,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         // anti-bot policy. Any non-5xx response still proves DNS/TLS/API reachability.
         if ((int)response.StatusCode >= 500)
         {
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessOrThrowApiExceptionAsync(response, cancellationToken);
         }
     }
 
@@ -1450,7 +1452,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             {
                 lastException = ex;
                 RegisterFailure();
-                await Task.Delay(CalculateDelay(baseDelayMs, attempt), cancellationToken);
+                await Task.Delay(CalculateDelay(baseDelayMs, attempt, ex), cancellationToken);
             }
             catch (Exception ex)
             {
@@ -1582,7 +1584,8 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             response.StatusCode,
             errorCode,
             errorMessage ?? response.ReasonPhrase ?? "Mercado Livre API request failed.",
-            rawBody);
+            rawBody,
+            retryAfter: ResolveRetryAfter(response));
     }
 
     private static (string? errorCode, string? errorMessage) ParseMlError(string? rawBody)
@@ -1622,11 +1625,32 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }
     }
 
-    private static TimeSpan CalculateDelay(int baseDelayMs, int attempt)
+    private static TimeSpan CalculateDelay(int baseDelayMs, int attempt, Exception exception)
     {
         var multiplier = Math.Pow(2, Math.Max(0, attempt - 1));
-        var delayMs = (int)Math.Min(10000, baseDelayMs * multiplier);
-        return TimeSpan.FromMilliseconds(delayMs);
+        var exponentialMs = Math.Min(30000, baseDelayMs * multiplier);
+        var jitterMs = Random.Shared.Next(0, Math.Max(2, baseDelayMs + 1));
+        var calculated = TimeSpan.FromMilliseconds(exponentialMs + jitterMs);
+        return exception is MercadoLivreApiException { RetryAfter: { } retryAfter }
+               && retryAfter > calculated
+            ? retryAfter
+            : calculated;
+    }
+
+    private static TimeSpan? ResolveRetryAfter(HttpResponseMessage response)
+    {
+        if (response.Headers.RetryAfter?.Delta is { } delta)
+        {
+            return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;
+        }
+
+        if (response.Headers.RetryAfter?.Date is { } date)
+        {
+            var delay = date - DateTimeOffset.UtcNow;
+            return delay < TimeSpan.Zero ? TimeSpan.Zero : delay;
+        }
+
+        return null;
     }
 
     private static string GetRequiredString(JsonElement root, string propertyName)

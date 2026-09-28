@@ -15,10 +15,11 @@ namespace Phub.Application.Services;
 
 public sealed class FinancialSyncJobService
 {
-    // A history page fans out into order, shipment, shipment-cost and discount
-    // requests. Keeping this recovery unit small makes the durable checkpoint
-    // advance every few minutes even when the provider is slow or rate-limited.
-    private const int OperationalHistoryPageSize = 10;
+    // Mercado Livre allows up to 1,000 results in /orders/search. We deliberately
+    // consume 50 at a time because every id fans out into order/shipment/financial
+    // detail calls; the fetch gate controls concurrency and protects the provider
+    // quota while this larger page removes the default 10-result bottleneck.
+    private const int OperationalHistoryPageSize = 50;
     private const string OperationalHistoryAlgorithm = "ml-history-hourly-v1";
     private const string SkippedBeforeFirstOrder = "SKIPPED_BEFORE_FIRST_ORDER";
     private const string SkippedOutsideRollingWindow = "SKIPPED_OUTSIDE_ROLLING_WINDOW";
@@ -570,7 +571,17 @@ public sealed class FinancialSyncJobService
                 && !_db.FinancialSyncJobs.Any(active => active.Id != x.Id
                     && active.TenantId == x.TenantId
                     && active.Status == "RUNNING"
-                    && active.LeaseUntil >= now))
+                    && active.LeaseUntil >= now)
+                // The rolling lane overlaps the historical lane by design, but it
+                // must not consume the same provider pages while initial history is
+                // still open. Incremental webhooks keep new orders current meanwhile.
+                && !(x.DedupeKey.StartsWith("OP:CHUNK:OP:RECENT:")
+                    && _db.FinancialSyncJobs.Any(history =>
+                        history.TenantId == x.TenantId
+                        && history.ClientId == x.ClientId
+                        && history.SellerId == x.SellerId
+                        && history.DedupeKey.StartsWith("OP:CHUNK:OP:HISTORY:")
+                        && (history.Status == "PENDING" || history.Status == "RETRY" || history.Status == "RUNNING"))))
                 .OrderBy(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk ? 0 : 1)
                 // Process the newest missing day across every seller first. If one
                 // seller owns hundreds of older windows it can no longer starve a
@@ -580,7 +591,7 @@ public sealed class FinancialSyncJobService
                 .ThenBy(x => x.SellerId)
                 .ThenBy(x => x.CreatedAt);
             job = _db.Database.IsRelational()
-                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT candidate.* FROM financial_sync_jobs candidate WHERE candidate.job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY','BILLING_RECONCILIATION') AND candidate.status IN ('PENDING','RETRY','RUNNING') AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= now()) AND (candidate.lease_until IS NULL OR candidate.lease_until < now()) AND NOT EXISTS (SELECT 1 FROM financial_sync_jobs active WHERE active.id <> candidate.id AND active.tenant_id = candidate.tenant_id AND active.status = 'RUNNING' AND active.lease_until >= now()) ORDER BY CASE WHEN candidate.job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY') THEN 0 ELSE 1 END, candidate.range_to DESC, candidate.updated_at, candidate.seller_id, candidate.created_at FOR UPDATE OF candidate SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
+                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT candidate.* FROM financial_sync_jobs candidate WHERE candidate.job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY','BILLING_RECONCILIATION') AND candidate.status IN ('PENDING','RETRY','RUNNING') AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= now()) AND (candidate.lease_until IS NULL OR candidate.lease_until < now()) AND NOT EXISTS (SELECT 1 FROM financial_sync_jobs active WHERE active.id <> candidate.id AND active.tenant_id = candidate.tenant_id AND active.status = 'RUNNING' AND active.lease_until >= now()) AND NOT (candidate.dedupe_key LIKE 'OP:CHUNK:OP:RECENT:%' AND EXISTS (SELECT 1 FROM financial_sync_jobs history WHERE history.tenant_id = candidate.tenant_id AND history.client_id = candidate.client_id AND history.seller_id = candidate.seller_id AND history.dedupe_key LIKE 'OP:CHUNK:OP:HISTORY:%' AND history.status IN ('PENDING','RETRY','RUNNING'))) ORDER BY CASE WHEN candidate.job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY') THEN 0 ELSE 1 END, candidate.range_to DESC, candidate.updated_at, candidate.seller_id, candidate.created_at FOR UPDATE OF candidate SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
                 : await query.FirstOrDefaultAsync(cancellationToken);
             if (job == null) return false;
             job.Status = "RUNNING";

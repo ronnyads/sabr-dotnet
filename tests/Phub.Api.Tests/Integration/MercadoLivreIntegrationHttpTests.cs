@@ -1727,7 +1727,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             await db.SaveChangesAsync();
         }
 
-        var expectedOffsets = new[] { 10, 20, 0 };
+        var expectedOffsets = new[] { 0 };
         for (var page = 0; page < expectedOffsets.Length; page++)
         {
             using var scope = _factory.Services.CreateScope();
@@ -1739,7 +1739,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             Assert.Equal(rangeFrom,
                 checkpoint.RootElement.GetProperty("SegmentFrom").GetDateTimeOffset());
             Assert.Equal(expectedOffsets[page], checkpoint.RootElement.GetProperty("Offset").GetInt32());
-            Assert.Equal(page == 2 ? "COMPLETED" : "PENDING", job.Status);
+            Assert.Equal(page == expectedOffsets.Length - 1 ? "COMPLETED" : "PENDING", job.Status);
             Assert.Null(job.LeaseUntil);
         }
     }

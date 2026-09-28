@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Options;
+using Phub.Application.Abstractions;
 using Phub.Application.Options;
 using Phub.Infrastructure.Integrations.MercadoLivre;
 
@@ -51,6 +52,47 @@ public sealed class MercadoLivreOrderSearchTests
 
         Assert.Equal(50, result.Count);
         Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task Search_order_page_accepts_provider_maximum_limit()
+    {
+        var handler = new CallbackHandler(request =>
+        {
+            Assert.Equal("1000", GetQuery(request.RequestUri!, "limit"));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"paging\":{\"total\":0},\"results\":[]}", Encoding.UTF8, "application/json")
+            });
+        });
+
+        var page = await CreateClient(handler).SearchOrdersPageAsync(
+            "123", DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow,
+            offset: 0, limit: 1000, accessToken: "token");
+
+        Assert.Equal(1000, page.Limit);
+    }
+
+    [Fact]
+    public async Task Search_order_page_preserves_provider_retry_after()
+    {
+        var handler = new CallbackHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("{\"error\":\"too_many_requests\"}", Encoding.UTF8, "application/json")
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(17));
+            return Task.FromResult(response);
+        });
+
+        var exception = await Assert.ThrowsAsync<MercadoLivreApiException>(() =>
+            CreateClient(handler).SearchOrdersPageAsync(
+                "123", DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow,
+                offset: 0, limit: 50, accessToken: "token"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, exception.StatusCode);
+        Assert.Equal(TimeSpan.FromSeconds(17), exception.RetryAfter);
     }
 
     private static MercadoLivreApiClient CreateClient(HttpMessageHandler handler)
