@@ -20,6 +20,8 @@ public sealed class FinancialSyncJobService
     // advance every few minutes even when the provider is slow or rate-limited.
     private const int OperationalHistoryPageSize = 10;
     private const string OperationalHistoryAlgorithm = "ml-history-hourly-v1";
+    private const string SkippedBeforeFirstOrder = "SKIPPED_BEFORE_FIRST_ORDER";
+    private const string SkippedOutsideRollingWindow = "SKIPPED_OUTSIDE_ROLLING_WINDOW";
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> EnqueueGates = new(StringComparer.Ordinal);
     private readonly IAppDbContext _db;
     private readonly MercadoLivreSyncService _sync;
@@ -109,20 +111,72 @@ public sealed class FinancialSyncJobService
         using var enqueueGateLease = await AcquireEnqueueGatesAsync(
             tenantId, clientId, sellers, cancellationToken);
         var result = new FinancialSyncEnqueueResult();
-        await using var enqueueTransaction = _db.Database.IsRelational()
-            ? await _db.Database.BeginTransactionAsync(cancellationToken)
-            : null;
         // ML applies hour precision to order search filters. Canonical, aligned
         // boundaries avoid losing orders at a minute/second boundary.
         var now = DateTimeOffset.UtcNow;
         // A canonical day boundary keeps OAuth retries and repeated manual clicks
         // on the same annual interval/idempotency key. The recent incremental sync
         // owns the still-open UTC day.
-        var to = isHistoricalBackfill
-            ? new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, TimeSpan.Zero)
-            : new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, 0, 0, TimeSpan.Zero).AddHours(1);
+        // Both lanes use a stable UTC day boundary. The previous recent lane moved
+        // its interval every hour, so every repair created another overlapping set.
+        // Webhooks and the incremental synchronizer own the still-open UTC day.
+        var to = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, TimeSpan.Zero);
         var from = isHistoricalBackfill ? to.AddMonths(-12) : to.AddDays(-lookbackDays);
         from = new DateTimeOffset(from.Year, from.Month, from.Day, from.Hour, 0, 0, TimeSpan.Zero);
+
+        // Provider discovery is network I/O. Resolve it before opening the enqueue
+        // transaction/advisory locks so one slow seller never holds PostgreSQL locks
+        // while Mercado Livre responds.
+        var discoveredPlans = new Dictionary<long, HistoryBoundaryPlan?>();
+        if (isHistoricalBackfill)
+        {
+            foreach (var seller in sellers)
+            {
+                var existingPayload = await _db.FinancialSyncJobs.AsNoTracking()
+                    .Where(x => x.TenantId == tenantId && x.ClientId == clientId
+                        && x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == seller
+                        && x.JobType == FinancialSyncJobTypes.OperationalSyncBatch
+                        && x.DedupeKey.StartsWith($"OP:HISTORY:{OperationalHistoryAlgorithm}:"))
+                    .OrderByDescending(x => x.UpdatedAt).Select(x => x.PayloadJson)
+                    .FirstOrDefaultAsync(cancellationToken);
+                var cached = ParseHistoryBoundaryPlan(existingPayload);
+                if (cached?.DiscoveryCompletedAt != null
+                    && cached.DiscoveryFrom == from && cached.DiscoveryTo == to)
+                {
+                    discoveredPlans[seller] = cached;
+                    continue;
+                }
+
+                var discovery = await _sync.DiscoverHistoryBoundaryAsync(
+                    tenantId, clientId, seller, from, to, cancellationToken);
+                if (discovery.Succeeded && discovery.Data?.IsConclusive == true)
+                {
+                    var firstOrderAt = discovery.Data.FirstOrderAt;
+                    var discoveredDay = firstOrderAt.HasValue ? StartOfUtcDay(firstOrderAt.Value) : to;
+                    discoveredPlans[seller] = new HistoryBoundaryPlan
+                    {
+                        AlgorithmVersion = OperationalHistoryAlgorithm,
+                        OverlapHours = 1,
+                        DiscoveryFrom = from,
+                        DiscoveryTo = to,
+                        FirstOrderAt = firstOrderAt,
+                        WorkFrom = discoveredDay < from ? from : discoveredDay,
+                        DiscoveryCompletedAt = DateTimeOffset.UtcNow,
+                        RemoteReportedTotal = discovery.Data.RemoteReportedTotal
+                    };
+                }
+                else
+                {
+                    // An inconclusive probe must never hide history. The full range
+                    // remains the safe fallback and discovery is retried next repair.
+                    discoveredPlans[seller] = null;
+                }
+            }
+        }
+
+        await using var enqueueTransaction = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
         foreach (var seller in sellers)
         {
             // One durable parent per seller and algorithm. The covered interval is
@@ -178,10 +232,71 @@ public sealed class FinancialSyncJobService
                 if (from < batch.RangeFrom) batch.RangeFrom = from;
                 if (to > batch.RangeTo) batch.RangeTo = to;
             }
-            var existingWindows = await _db.FinancialSyncJobs.AsNoTracking()
+
+
+            var workFrom = from;
+            HistoryBoundaryPlan? historyPlan = null;
+            if (isHistoricalBackfill)
+            {
+                historyPlan = discoveredPlans.GetValueOrDefault(seller);
+                workFrom = historyPlan == null ? from
+                    : historyPlan.WorkFrom < from ? from : historyPlan.WorkFrom;
+            }
+
+            batch.PayloadJson = historyPlan == null
+                ? JsonSerializer.Serialize(new { algorithmVersion = OperationalHistoryAlgorithm, overlapHours = 1 })
+                : JsonSerializer.Serialize(historyPlan);
+            var existingWindows = await _db.FinancialSyncJobs
                 .Where(x => x.ParentJobId == batch.Id && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk)
-                .Select(x => new { x.RangeFrom, x.RangeTo, x.Status }).ToListAsync(cancellationToken);
-            for (var cursor = from; cursor < to; cursor = cursor.AddDays(chunkDays))
+                .ToListAsync(cancellationToken);
+            if (isHistoricalBackfill && workFrom > from)
+            {
+                var obsoleteIds = await _db.FinancialSyncJobs
+                    .Where(x => x.ParentJobId == batch.Id
+                        && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
+                        && x.RangeTo <= workFrom
+                        && (x.Status != "RUNNING" || !x.LeaseUntil.HasValue || x.LeaseUntil < now)
+                        && x.Status != SkippedBeforeFirstOrder)
+                    .Select(x => x.Id).ToListAsync(cancellationToken);
+                if (obsoleteIds.Count > 0)
+                {
+                    var obsolete = await _db.FinancialSyncJobs
+                        .Where(x => obsoleteIds.Contains(x.Id)).ToListAsync(cancellationToken);
+                    foreach (var window in obsolete)
+                    {
+                        window.Status = SkippedBeforeFirstOrder;
+                        window.NextAttemptAt = null;
+                        window.LastError = null;
+                        window.CompletedAt = DateTimeOffset.UtcNow;
+                    }
+                }
+            }
+            if (!isHistoricalBackfill)
+            {
+                var desiredRecentWindows = new HashSet<(DateTimeOffset From, DateTimeOffset To)>();
+                for (var cursor = workFrom; cursor < to; cursor = cursor.AddDays(chunkDays))
+                {
+                    var chunkTo = cursor.AddDays(chunkDays) < to ? cursor.AddDays(chunkDays) : to;
+                    desiredRecentWindows.Add((cursor, chunkTo));
+                }
+                foreach (var window in existingWindows.Where(x =>
+                             !desiredRecentWindows.Contains((x.RangeFrom, x.RangeTo))
+                             && x.Status != SkippedOutsideRollingWindow))
+                {
+                    // Preserve old hourly-shifted rows for audit, but revoke them
+                    // from the live queue. An in-flight stale attempt cannot publish
+                    // afterwards because its LockedBy compare-and-set no longer owns
+                    // this row.
+                    window.Status = SkippedOutsideRollingWindow;
+                    window.LockedBy = null;
+                    window.LeaseUntil = null;
+                    window.NextAttemptAt = null;
+                    window.LastError = "Superseded by canonical UTC-day rolling window.";
+                    window.CompletedAt = DateTimeOffset.UtcNow;
+                    window.UpdatedAt = DateTimeOffset.UtcNow;
+                }
+            }
+            for (var cursor = workFrom; cursor < to; cursor = cursor.AddDays(chunkDays))
             {
                 var chunkTo = cursor.AddDays(chunkDays) < to ? cursor.AddDays(chunkDays) : to;
                 var existingWindow = existingWindows.FirstOrDefault(x => x.RangeFrom == cursor && x.RangeTo == chunkTo);
@@ -190,15 +305,13 @@ public sealed class FinancialSyncJobService
                     // Historical windows are immutable once reconciled. A manual
                     // recent refresh reuses the same durable window instead of
                     // accumulating another job row on every click.
+                    var isLatestClosedRecentWindow = !isHistoricalBackfill && chunkTo == to;
                     if (existingWindow.Status is "FAILED" or "PARTIAL"
-                        || (!isHistoricalBackfill && existingWindow.Status == "COMPLETED"))
+                        || (isLatestClosedRecentWindow && existingWindow.Status == "COMPLETED"))
                     {
-                        var tracked = await _db.FinancialSyncJobs.SingleAsync(x => x.ParentJobId == batch.Id
-                            && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
-                            && x.RangeFrom == cursor && x.RangeTo == chunkTo, cancellationToken);
-                        tracked.Status = "PENDING";
-                        tracked.NextAttemptAt = null;
-                        tracked.LastError = null;
+                        existingWindow.Status = "PENDING";
+                        existingWindow.NextAttemptAt = null;
+                        existingWindow.LastError = null;
                         needsWork = true;
                     }
                     continue;
@@ -219,6 +332,13 @@ public sealed class FinancialSyncJobService
                 batch.Status = "BACKFILLING";
                 batch.CompletedAt = null;
             }
+            if (isHistoricalBackfill && workFrom >= to)
+            {
+                batch.Status = "CURRENT";
+                batch.Processed = 0;
+                batch.Total = 0;
+                batch.CompletedAt = DateTimeOffset.UtcNow;
+            }
             batch.UpdatedAt = DateTimeOffset.UtcNow;
             result.Jobs.Add(Map(batch));
         }
@@ -238,7 +358,7 @@ public sealed class FinancialSyncJobService
             tenantId, clientId, sellerId, lookbackDays: 366, chunkDays: 1,
             cancellationToken: cancellationToken);
         var recent = await EnqueueOperationalBackfillAsync(
-            tenantId, clientId, sellerId, lookbackDays: 7, chunkDays: 1,
+            tenantId, clientId, sellerId, lookbackDays: 30, chunkDays: 1,
             cancellationToken: cancellationToken);
         foreach (var job in recent.Jobs)
         {
@@ -253,10 +373,31 @@ public sealed class FinancialSyncJobService
             .Where(x => x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId > 0)
             .Select(x => new { x.TenantId, x.ClientId, x.SellerId }).Distinct()
             .ToListAsync(cancellationToken);
+        var ensured = 0;
         foreach (var scope in scopes)
-            await EnqueueOperationalBackfillAsync(scope.TenantId, scope.ClientId, scope.SellerId,
-                lookbackDays: 366, chunkDays: 1, cancellationToken: cancellationToken);
-        return scopes.Count;
+        {
+            try
+            {
+                await EnqueueOperationalBackfillAsync(scope.TenantId, scope.ClientId, scope.SellerId,
+                    lookbackDays: 366, chunkDays: 1, cancellationToken: cancellationToken);
+                ensured++;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Isolation is per tenant/client/seller: one expired token or slow
+                // provider response must not prevent the remaining stores from being
+                // repaired in the same cycle.
+                _logger.LogWarning(ex,
+                    "Mercado Livre history ensure failed tenant={TenantId} client={ClientId} seller={SellerId}; continuing other sellers",
+                    scope.TenantId, scope.ClientId, scope.SellerId);
+                if (_db is DbContext context) context.ChangeTracker.Clear();
+            }
+        }
+        return ensured;
     }
 
     public async Task<FinancialSyncJobResult?> GetAsync(string tenantId, Guid clientId, Guid jobId, CancellationToken cancellationToken)
@@ -298,6 +439,19 @@ public sealed class FinancialSyncJobService
                     && (x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
                         || x.JobType == FinancialSyncJobTypes.OperationalSyncGapRetry))
                 .OrderBy(x => x.UpdatedAt).ToListAsync(cancellationToken);
+            var statusNow = DateTimeOffset.UtcNow;
+            var active = children
+                .Where(x => x.Status == "RUNNING" && x.LeaseUntil >= statusNow)
+                .OrderByDescending(x => x.UpdatedAt)
+                .FirstOrDefault();
+            var waiting = children
+                .Where(x => x.Status is "PENDING" or "RETRY"
+                    && (!x.NextAttemptAt.HasValue || x.NextAttemptAt <= statusNow))
+                .OrderByDescending(x => x.RangeTo)
+                .ThenBy(x => x.UpdatedAt)
+                .FirstOrDefault();
+            var current = active ?? waiting;
+            var currentCheckpoint = current == null ? null : ParseCheckpoint(current.Checkpoint, current.RangeFrom);
             var aggregate = AggregateHistory(children);
             var discovered = aggregate.Orders.Keys.ToArray();
             var imported = discovered.Length == 0 ? 0 : await _db.MarketplaceOrders.AsNoTracking()
@@ -328,7 +482,17 @@ public sealed class FinancialSyncJobService
                 UnresolvedGapOrderIds = aggregate.Orders.Count(x => x.Value == HistoryOrderStates.Gap),
                 CompletedWindows = children.Count(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
                     && x.Status is "COMPLETED" or "PARTIAL"),
-                TotalWindows = children.Count(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk),
+                TotalWindows = children.Count(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
+                    && !IsSkippedWindow(x.Status)),
+                ActiveWindows = children.Count(x => x.Status == "RUNNING" && x.LeaseUntil >= statusNow),
+                QueuedWindows = children.Count(x => x.Status is "PENDING" or "RETRY"),
+                IsProcessing = active != null,
+                CurrentWindowFrom = current?.RangeFrom,
+                CurrentWindowTo = current?.RangeTo,
+                CurrentPageOffset = currentCheckpoint?.Offset,
+                LastActivityAt = children.Count == 0 ? parent.UpdatedAt : children.Max(x => x.UpdatedAt),
+                NextAttemptAt = children.Where(x => x.Status == "RETRY" && x.NextAttemptAt.HasValue)
+                    .Select(x => x.NextAttemptAt).OrderBy(x => x).FirstOrDefault(),
                 OldestOrderAt = oldest,
                 NewestOrderAt = newest,
                 LastError = children.LastOrDefault(x => !string.IsNullOrWhiteSpace(x.LastError))?.LastError
@@ -384,12 +548,26 @@ public sealed class FinancialSyncJobService
         FinancialSyncJob? job;
         await using (var transaction = _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync(cancellationToken) : null)
         {
+            if (transaction != null)
+            {
+                // Claiming is a very short critical section. Serializing only this
+                // section prevents two worker lanes from concurrently claiming two
+                // windows for the same tenant before either RUNNING lease is visible.
+                // External Mercado Livre calls still execute concurrently afterwards.
+                await _db.Database.ExecuteSqlRawAsync(
+                    "SELECT pg_advisory_xact_lock(hashtext('FINANCIAL_SYNC_CLAIM_V2'))",
+                    cancellationToken);
+            }
             var query = _db.FinancialSyncJobs.Where(x => (x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
                     || x.JobType == FinancialSyncJobTypes.OperationalSyncGapRetry
                     || x.JobType == FinancialSyncJobTypes.BillingReconciliation)
                 && (x.Status == "PENDING" || x.Status == "RETRY" || x.Status == "RUNNING")
                 && (!x.NextAttemptAt.HasValue || x.NextAttemptAt <= now)
-                && (!x.LeaseUntil.HasValue || x.LeaseUntil < now))
+                && (!x.LeaseUntil.HasValue || x.LeaseUntil < now)
+                && !_db.FinancialSyncJobs.Any(active => active.Id != x.Id
+                    && active.TenantId == x.TenantId
+                    && active.Status == "RUNNING"
+                    && active.LeaseUntil >= now))
                 .OrderBy(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk ? 0 : 1)
                 // Process the newest missing day across every seller first. If one
                 // seller owns hundreds of older windows it can no longer starve a
@@ -399,7 +577,7 @@ public sealed class FinancialSyncJobService
                 .ThenBy(x => x.SellerId)
                 .ThenBy(x => x.CreatedAt);
             job = _db.Database.IsRelational()
-                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT * FROM financial_sync_jobs WHERE job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY','BILLING_RECONCILIATION') AND status IN ('PENDING','RETRY','RUNNING') AND (next_attempt_at IS NULL OR next_attempt_at <= now()) AND (lease_until IS NULL OR lease_until < now()) ORDER BY CASE WHEN job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY') THEN 0 ELSE 1 END, range_to DESC, updated_at, seller_id, created_at FOR UPDATE SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
+                ? await _db.FinancialSyncJobs.FromSqlRaw("SELECT candidate.* FROM financial_sync_jobs candidate WHERE candidate.job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY','BILLING_RECONCILIATION') AND candidate.status IN ('PENDING','RETRY','RUNNING') AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= now()) AND (candidate.lease_until IS NULL OR candidate.lease_until < now()) AND NOT EXISTS (SELECT 1 FROM financial_sync_jobs active WHERE active.id <> candidate.id AND active.tenant_id = candidate.tenant_id AND active.status = 'RUNNING' AND active.lease_until >= now()) ORDER BY CASE WHEN candidate.job_type IN ('OPERATIONAL_SYNC_CHUNK','OPERATIONAL_SYNC_GAP_RETRY') THEN 0 ELSE 1 END, candidate.range_to DESC, candidate.updated_at, candidate.seller_id, candidate.created_at FOR UPDATE OF candidate SKIP LOCKED LIMIT 1").FirstOrDefaultAsync(cancellationToken)
                 : await query.FirstOrDefaultAsync(cancellationToken);
             if (job == null) return false;
             job.Status = "RUNNING";
@@ -600,7 +778,8 @@ public sealed class FinancialSyncJobService
         var parent = await _db.FinancialSyncJobs.FirstOrDefaultAsync(x => x.Id == parentId.Value, ct);
         if (parent == null) return;
         var children = await _db.FinancialSyncJobs.AsNoTracking().Where(x => x.ParentJobId == parent.Id).ToListAsync(ct);
-        var windows = children.Where(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk).ToList();
+        var windows = children.Where(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
+            && !IsSkippedWindow(x.Status)).ToList();
         if (parent.JobType == FinancialSyncJobTypes.OperationalSyncBatch)
         {
             parent.Processed = windows.Count(x => x.Status is "COMPLETED" or "PARTIAL");
@@ -633,6 +812,29 @@ public sealed class FinancialSyncJobService
         RangeFrom = x.RangeFrom, RangeTo = x.RangeTo, Total = x.Total, Processed = x.Processed,
         LastError = x.LastError, CreatedAt = x.CreatedAt, CompletedAt = x.CompletedAt
     };
+
+    private static DateTimeOffset StartOfUtcDay(DateTimeOffset value)
+    {
+        var utc = value.ToUniversalTime();
+        return new DateTimeOffset(utc.Year, utc.Month, utc.Day, 0, 0, 0, TimeSpan.Zero);
+    }
+
+    private static bool IsSkippedWindow(string status) =>
+        status.StartsWith("SKIPPED_", StringComparison.Ordinal);
+
+    private static HistoryBoundaryPlan? ParseHistoryBoundaryPlan(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<HistoryBoundaryPlan>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private static HistoryPageCheckpoint ParseCheckpoint(string? json, DateTimeOffset fallback)
     {
@@ -690,6 +892,18 @@ public sealed class FinancialSyncJobService
     }
 
     private sealed record HistoryPageCheckpoint(DateTimeOffset SegmentFrom, int Offset);
+
+    private sealed class HistoryBoundaryPlan
+    {
+        public string AlgorithmVersion { get; set; } = OperationalHistoryAlgorithm;
+        public int OverlapHours { get; set; } = 1;
+        public DateTimeOffset DiscoveryFrom { get; set; }
+        public DateTimeOffset DiscoveryTo { get; set; }
+        public DateTimeOffset? FirstOrderAt { get; set; }
+        public DateTimeOffset WorkFrom { get; set; }
+        public DateTimeOffset? DiscoveryCompletedAt { get; set; }
+        public long RemoteReportedTotal { get; set; }
+    }
 
     private static async Task<IDisposable> AcquireEnqueueGatesAsync(
         string tenantId, Guid clientId, IReadOnlyCollection<long> sellers, CancellationToken cancellationToken)

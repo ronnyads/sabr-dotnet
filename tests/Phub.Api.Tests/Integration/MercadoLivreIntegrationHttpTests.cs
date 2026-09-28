@@ -344,7 +344,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.Equal(2, jobs.Count(job => job.ParentJobId == null));
         Assert.Empty(jobs.GroupBy(job => new { job.SellerId, job.DedupeKey })
             .Where(group => group.Count() > 1));
-        Assert.Contains(jobs, job => job.DedupeKey.StartsWith("OP:CHUNK:OP:HISTORY:"));
+        Assert.Contains(jobs, job => job.DedupeKey.StartsWith("OP:HISTORY:")
+            && job.Status == "CURRENT" && job.Total == 0);
         Assert.Contains(jobs, job => job.DedupeKey.StartsWith("OP:CHUNK:OP:RECENT:"));
     }
 
@@ -1496,6 +1497,189 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             Assert.Equal("PENDING", (await db.FinancialSyncJobs.SingleAsync(x => x.Id == olderJobId)).Status);
             Assert.Equal("COMPLETED", (await db.FinancialSyncJobs.SingleAsync(x => x.Id == currentJobId)).Status);
+        }
+    }
+
+    [Fact]
+    public async Task FinancialSync_DoesNotLetAnActiveTenantBlockAnotherTenant()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string busyTenantId = "tenant-ml-busy";
+        const string freeTenantId = "tenant-ml-free";
+        var busyClientId = Guid.NewGuid();
+        var freeClientId = Guid.NewGuid();
+        const string busySellerId = "1001030";
+        const string freeSellerId = "1001031";
+        await SeedTenantClientAsync(busyTenantId, "mlbusy", busyClientId);
+        await SeedTenantClientAsync(freeTenantId, "mlfree", freeClientId);
+        await SeedConnectionAsync(busyTenantId, busyClientId, busySellerId);
+        await SeedConnectionAsync(freeTenantId, freeClientId, freeSellerId);
+
+        var now = DateTimeOffset.UtcNow;
+        var busyPendingId = Guid.NewGuid();
+        var freePendingId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.FinancialSyncJobs.AddRange(
+                new FinancialSyncJob
+                {
+                    TenantId = busyTenantId, ClientId = busyClientId,
+                    SellerId = ParseSellerId(busySellerId),
+                    JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                    Status = "RUNNING", LockedBy = "another-lane",
+                    LeaseUntil = now.AddMinutes(10), RangeFrom = now.AddDays(-1), RangeTo = now,
+                    DedupeKey = $"test-active-busy-{Guid.NewGuid():N}"
+                },
+                new FinancialSyncJob
+                {
+                    Id = busyPendingId, TenantId = busyTenantId, ClientId = busyClientId,
+                    SellerId = ParseSellerId(busySellerId),
+                    JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                    RangeFrom = now.AddDays(-2), RangeTo = now.AddDays(-1),
+                    DedupeKey = $"test-pending-busy-{busyPendingId:N}"
+                },
+                new FinancialSyncJob
+                {
+                    Id = freePendingId, TenantId = freeTenantId, ClientId = freeClientId,
+                    SellerId = ParseSellerId(freeSellerId),
+                    JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                    RangeFrom = now.AddDays(-3), RangeTo = now.AddDays(-2),
+                    DedupeKey = $"test-pending-free-{freePendingId:N}"
+                });
+            await db.SaveChangesAsync();
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            Assert.True(await service.ProcessNextAsync("parallel-lane", CancellationToken.None));
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal("PENDING", (await db.FinancialSyncJobs.SingleAsync(x => x.Id == busyPendingId)).Status);
+            Assert.Equal("COMPLETED", (await db.FinancialSyncJobs.SingleAsync(x => x.Id == freePendingId)).Status);
+        }
+    }
+
+    [Fact]
+    public async Task HistoryStatus_ReportsActiveWindowAndDurableCheckpoint()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-active-status";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001032";
+        await SeedTenantClientAsync(tenantId, "mlactivestatus", clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        var now = DateTimeOffset.UtcNow;
+        var parentId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.FinancialSyncJobs.AddRange(
+                new FinancialSyncJob
+                {
+                    Id = parentId, TenantId = tenantId, ClientId = clientId,
+                    SellerId = ParseSellerId(sellerId),
+                    JobType = FinancialSyncJobTypes.OperationalSyncBatch,
+                    Status = "BACKFILLING", RangeFrom = now.AddDays(-30), RangeTo = now,
+                    DedupeKey = $"OP:HISTORY:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}"
+                },
+                new FinancialSyncJob
+                {
+                    ParentJobId = parentId, TenantId = tenantId, ClientId = clientId,
+                    SellerId = ParseSellerId(sellerId),
+                    JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                    Status = "RUNNING", LockedBy = "active-lane", LeaseUntil = now.AddMinutes(10),
+                    RangeFrom = now.AddDays(-1), RangeTo = now,
+                    Checkpoint = JsonSerializer.Serialize(new { SegmentFrom = now.AddDays(-1), Offset = 20 }),
+                    DedupeKey = $"test-active-status-{Guid.NewGuid():N}", UpdatedAt = now
+                });
+            await db.SaveChangesAsync();
+        }
+
+        using var resultScope = _factory.Services.CreateScope();
+        var service = resultScope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+        var result = await service.GetHistoryStatusAsync(tenantId, clientId);
+        var seller = Assert.Single(result.Sellers);
+        Assert.True(seller.IsProcessing);
+        Assert.Equal(1, seller.ActiveWindows);
+        Assert.Equal(20, seller.CurrentPageOffset);
+        Assert.NotNull(seller.CurrentWindowFrom);
+        Assert.NotNull(seller.LastActivityAt);
+    }
+
+    [Fact]
+    public async Task RecentSync_ReusesCanonicalDailyWindows_AndSupersedesShiftedLegacyWork()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-recent-canonical";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001033";
+        await SeedTenantClientAsync(tenantId, "mlrecentcanonical", clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        Guid parentId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            var result = await service.EnqueueOperationalBackfillAsync(
+                tenantId, clientId, ParseSellerId(sellerId), lookbackDays: 30, chunkDays: 1);
+            parentId = Assert.Single(result.Jobs).JobId;
+        }
+
+        Guid shiftedId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var windows = await db.FinancialSyncJobs
+                .Where(x => x.ParentJobId == parentId && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk)
+                .OrderBy(x => x.RangeFrom).ToListAsync();
+            Assert.Equal(30, windows.Count);
+            foreach (var window in windows)
+            {
+                window.Status = "COMPLETED";
+                window.CompletedAt = DateTimeOffset.UtcNow;
+            }
+            shiftedId = Guid.NewGuid();
+            var shiftedFrom = windows[10].RangeFrom.AddHours(1);
+            db.FinancialSyncJobs.Add(new FinancialSyncJob
+            {
+                Id = shiftedId, ParentJobId = parentId, TenantId = tenantId, ClientId = clientId,
+                SellerId = ParseSellerId(sellerId), JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                Status = "RUNNING", LockedBy = "legacy-hour-worker", LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(10),
+                RangeFrom = shiftedFrom, RangeTo = shiftedFrom.AddDays(1),
+                DedupeKey = $"test-shifted-recent-{shiftedId:N}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            await service.EnqueueOperationalBackfillAsync(
+                tenantId, clientId, ParseSellerId(sellerId), lookbackDays: 30, chunkDays: 1);
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var shifted = await db.FinancialSyncJobs.SingleAsync(x => x.Id == shiftedId);
+            Assert.Equal("SKIPPED_OUTSIDE_ROLLING_WINDOW", shifted.Status);
+            Assert.Null(shifted.LockedBy);
+            Assert.Null(shifted.LeaseUntil);
+
+            var canonical = await db.FinancialSyncJobs.Where(x => x.ParentJobId == parentId
+                && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
+                && x.Status != "SKIPPED_OUTSIDE_ROLLING_WINDOW").ToListAsync();
+            Assert.Equal(30, canonical.Count);
+            Assert.Equal(1, canonical.Count(x => x.Status == "PENDING"));
+            Assert.Equal(29, canonical.Count(x => x.Status == "COMPLETED"));
+            Assert.All(canonical, x => Assert.Equal(TimeSpan.Zero, x.RangeFrom.TimeOfDay));
+            Assert.All(canonical, x => Assert.Equal(TimeSpan.Zero, x.RangeTo.TimeOfDay));
         }
     }
 
@@ -3019,6 +3203,56 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         Assert.NotNull(previewResult);
         Assert.Contains(previewResult!.Items, item => item.ItemId == "MLB-NEVER-SELECTED");
         Assert.False(await db.Products.AnyAsync());
+    }
+
+    [Fact]
+    public async Task HistoryBackfill_StartsAtFirstAvailableOrder_AndKeepsFullDiscoveryCoverage()
+    {
+        await _factory.ResetDatabaseAsync();
+
+        const string tenantId = "tenant-ml-history-boundary";
+        const string tenantSlug = "mlhistoryboundary";
+        const string sellerId = "1001199";
+        const string orderId = "ORDER-FIRST-AVAILABLE";
+        var clientId = Guid.NewGuid();
+        var firstOrderAt = DateTimeOffset.UtcNow.AddDays(-5).AddHours(-2);
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAndMappingAsync(
+            tenantId, clientId, sellerId, "ITEM-HISTORY-BOUNDARY", null, "SKU-HISTORY-BOUNDARY");
+        _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = [orderId];
+        _factory.FakeMercadoLivreApiClient.OrdersById[orderId] = new MercadoLivreOrderDetails
+        {
+            MlOrderId = orderId,
+            SellerId = sellerId,
+            Status = "paid",
+            ChannelCreatedAt = firstOrderAt,
+            Items = [],
+            RawJson = "{}"
+        };
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var jobs = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            await jobs.EnqueueOperationalBackfillAsync(
+                tenantId, clientId, ParseSellerId(sellerId), lookbackDays: 366, chunkDays: 1);
+            await jobs.EnqueueOperationalBackfillAsync(
+                tenantId, clientId, ParseSellerId(sellerId), lookbackDays: 366, chunkDays: 1);
+        }
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var db = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var parent = await db.FinancialSyncJobs.SingleAsync(x => x.ParentJobId == null
+            && x.TenantId == tenantId && x.DedupeKey.StartsWith("OP:HISTORY:"));
+        var windows = await db.FinancialSyncJobs.Where(x => x.ParentJobId == parent.Id
+            && x.JobType == FinancialSyncJobTypes.OperationalSyncChunk).OrderBy(x => x.RangeFrom).ToListAsync();
+        var firstUtcDay = new DateTimeOffset(firstOrderAt.UtcDateTime.Date, TimeSpan.Zero);
+
+        Assert.True(parent.RangeFrom <= parent.RangeTo.AddMonths(-12));
+        Assert.NotEmpty(windows);
+        Assert.All(windows, window => Assert.True(window.RangeFrom >= firstUtcDay));
+        Assert.True(windows.Count <= 7, $"Expected only useful history days, got {windows.Count}.");
+        Assert.Contains("FirstOrderAt", parent.PayloadJson, StringComparison.Ordinal);
+        Assert.Empty(windows.GroupBy(x => new { x.RangeFrom, x.RangeTo }).Where(x => x.Count() > 1));
     }
 
     [Fact]

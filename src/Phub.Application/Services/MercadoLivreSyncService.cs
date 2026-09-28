@@ -197,6 +197,48 @@ public sealed class MercadoLivreSyncService
         return ServiceResult<MercadoLivreOrderSearchPage>.Success(page);
     }
 
+    public async Task<ServiceResult<MercadoLivreHistoryBoundaryDiscovery>> DiscoverHistoryBoundaryAsync(
+        string tenantId, Guid clientId, long sellerId, DateTimeOffset from, DateTimeOffset to,
+        CancellationToken cancellationToken = default)
+    {
+        var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(x =>
+            x.TenantId == tenantId && x.ClientId == clientId
+            && x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId,
+            cancellationToken);
+        if (connection == null)
+            return ServiceResult<MercadoLivreHistoryBoundaryDiscovery>.Failure(
+                [new ValidationError("sellerId", "No active Mercado Livre connection found")]);
+
+        var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
+        // One ascending page over the provider retention interval proves whether
+        // there is any useful history before we create hundreds of empty day jobs.
+        var page = await _mercadoLivreApiClient.SearchOrdersPageAsync(
+            MercadoLivreSellerIdParser.ToApiString(sellerId), from, to, 0, 1,
+            accessToken, cancellationToken);
+        if (page.OrderIds.Count == 0)
+        {
+            return ServiceResult<MercadoLivreHistoryBoundaryDiscovery>.Success(new()
+            {
+                RangeFrom = from,
+                RangeTo = to,
+                RemoteReportedTotal = page.RemoteReportedTotal,
+                IsConclusive = page.RemoteReportedTotal == 0
+            });
+        }
+
+        var firstOrder = await _mercadoLivreApiClient.GetOrderAsync(
+            page.OrderIds[0], accessToken, cancellationToken);
+        var firstOrderAt = firstOrder?.ChannelCreatedAt;
+        return ServiceResult<MercadoLivreHistoryBoundaryDiscovery>.Success(new()
+        {
+            RangeFrom = from,
+            RangeTo = to,
+            FirstOrderAt = firstOrderAt,
+            RemoteReportedTotal = page.RemoteReportedTotal,
+            IsConclusive = firstOrderAt.HasValue
+        });
+    }
+
     public async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncDiscoveredOrdersAsync(
         string tenantId, Guid clientId, long sellerId, IReadOnlyList<string> orderIds,
         CancellationToken cancellationToken = default)

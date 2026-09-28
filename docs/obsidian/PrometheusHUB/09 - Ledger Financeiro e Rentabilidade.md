@@ -52,7 +52,8 @@ Para produtos explicitamente classificados como externos, o custo vem da versão
 ## Sincronização
 
 - Webhook permanece primário.
-- O catch-up operacional de até 365 dias é particionado em chunks de no máximo 31 dias.
+  - O catch-up operacional consulta a retenção de até 12 meses, mas agenda chunks somente desde o primeiro pedido disponível descoberto por uma busca ascendente. A faixa recente usa limites UTC diários estáveis para não acumular janelas sobrepostas a cada hora.
+  - Reparos são isolados por tenant, cliente e seller: falha de token, rede ou provedor em uma loja é registrada e não interrompe o agendamento das demais lojas.
 - Cada chunk possui checkpoint, dedupe key, tentativas, lease e retomada durável.
 - A execução de um chunk avança no máximo uma hora por tentativa. O checkpoint só avança após persistir a sincronização dessa hora; uma interrupção repete apenas a hora incompleta. Timeout HTTP sem cancelamento do worker gera `RETRY`, não deixa o chunk em `RUNNING`.
 - O catch-up nunca reserva estoque de pedidos com envio externo terminal (`shipped`, `delivered`, `returned`, `cancelled`, `not_delivered`) ou pedido cancelado/reembolsado. A sincronização usa o reconciliador transacional de reservas; mapeamentos legados sem `integrationId` são fallback somente dentro do mesmo tenant, cliente, provider e seller.

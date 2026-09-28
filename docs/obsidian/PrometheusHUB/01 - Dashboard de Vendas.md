@@ -16,7 +16,8 @@ O Mercado Livre fornece pedido, item/variação, `seller_sku`, quantidade, preç
 
 - ciclo normal: últimos 2 dias;
 - reconciliação noturna: últimos 7 dias;
-- sincronização manual: backfill dos últimos 365 dias, com chamadas remotas concorrentes e gravações EF sequenciais;
+- sincronização histórica: uma busca ascendente no intervalo de retenção descobre o primeiro pedido disponível e cria janelas diárias somente dessa data em diante; o intervalo completo consultado continua registrado como cobertura, sem executar centenas de dias vazios;
+- o carregamento inicial prioriza uma faixa recente canônica de 30 dias. Webhooks e o incremental automático continuam trazendo pedidos novos, sem depender do botão;
 - a busca agora percorre todas as páginas de até 50 resultados, limitada defensivamente a 10.000 pedidos por conexão/ciclo;
 - o Mercado Livre permite consultar pedidos mantidos por até 12 meses; o histórico maior depende do armazenamento local contínuo.
 

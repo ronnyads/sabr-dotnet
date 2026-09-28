@@ -285,7 +285,8 @@ public sealed class FinancialCostCorrectionPlanService
         var children = await _db.FinancialSyncJobs.AsNoTracking()
             .Where(x => x.ParentJobId == parent.Id).OrderBy(x => x.RangeFrom).ThenBy(x => x.Id)
             .ToListAsync(cancellationToken);
-        var windows = children.Where(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk).ToArray();
+        var windows = children.Where(x => x.JobType == FinancialSyncJobTypes.OperationalSyncChunk
+            && !x.Status.StartsWith("SKIPPED_", StringComparison.Ordinal)).ToArray();
         var isCompleteStatus = parent.Status is "COMPLETED" or "CURRENT";
         var coversTwelveMonths = parent.RangeFrom <= parent.RangeTo.AddMonths(-12);
         // PARTIAL means the search window itself finished; any unavailable ID is

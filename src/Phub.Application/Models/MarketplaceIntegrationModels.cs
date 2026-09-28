@@ -428,6 +428,15 @@ public sealed class MercadoLivreOrderSearchPage
     public bool HasMore { get; set; }
 }
 
+public sealed class MercadoLivreHistoryBoundaryDiscovery
+{
+    public DateTimeOffset RangeFrom { get; set; }
+    public DateTimeOffset RangeTo { get; set; }
+    public DateTimeOffset? FirstOrderAt { get; set; }
+    public long RemoteReportedTotal { get; set; }
+    public bool IsConclusive { get; set; }
+}
+
 public sealed class MercadoLivreSyncGapResult
 {
     public string OrderId { get; set; } = string.Empty;

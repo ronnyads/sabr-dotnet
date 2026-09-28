@@ -412,9 +412,8 @@ public sealed class ClientMercadoLivreIntegrationController : ControllerBase
         }
         try
         {
-            await _financialSync.EnqueueOperationalBackfillAsync(
-                tenantId!, clientId, sellerId, lookbackDays: 366, chunkDays: 1,
-                cancellationToken: cancellationToken);
+            await _financialSync.EnqueueCompleteOperationalSyncAsync(
+                tenantId!, clientId, sellerId, cancellationToken);
             return Accepted(await _financialSync.GetHistoryStatusAsync(tenantId!, clientId, cancellationToken));
         }
         catch (InvalidOperationException ex)

@@ -211,6 +211,14 @@ public sealed class MercadoLivreHistorySellerStatusResult
     public int UnresolvedGapOrderIds { get; set; }
     public int CompletedWindows { get; set; }
     public int TotalWindows { get; set; }
+    public int ActiveWindows { get; set; }
+    public int QueuedWindows { get; set; }
+    public bool IsProcessing { get; set; }
+    public DateTimeOffset? CurrentWindowFrom { get; set; }
+    public DateTimeOffset? CurrentWindowTo { get; set; }
+    public int? CurrentPageOffset { get; set; }
+    public DateTimeOffset? LastActivityAt { get; set; }
+    public DateTimeOffset? NextAttemptAt { get; set; }
     public DateTimeOffset? OldestOrderAt { get; set; }
     public DateTimeOffset? NewestOrderAt { get; set; }
     public string? LastError { get; set; }
