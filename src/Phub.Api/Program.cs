@@ -20,6 +20,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using Phub.Application.Abstractions;
 using Phub.Application.Categories;
 using Phub.Application.Options;
@@ -180,6 +181,15 @@ var connectionString = hasValidConfiguredConnectionString
         ? databaseOptions!.BuildConnectionString()
         : throw new InvalidOperationException(
             "Database connection is not configured. Set ConnectionStrings__Default or Database options via environment/secrets.");
+
+// The API and worker are separate processes and each owns an Npgsql pool. Leaving
+// Npgsql's default of 100 connections per process can exhaust a managed Postgres
+// instance during history imports, where several hosted workers are active at once.
+// Apply the application limit even when the base connection string comes from a
+// production secret so every process has the same bounded behaviour.
+connectionString = Program.ConfigureDatabaseConnectionString(
+    connectionString,
+    databaseOptions?.MaxPoolSize ?? 20);
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
@@ -717,6 +727,20 @@ app.Run();
 
 public partial class Program
 {
+    internal static string ConfigureDatabaseConnectionString(string connectionString, int maximumPoolSize)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Pooling = true,
+            MinPoolSize = 0,
+            MaxPoolSize = Math.Clamp(maximumPoolSize, 1, 50),
+            ConnectionIdleLifetime = 60,
+            ConnectionPruningInterval = 10,
+            KeepAlive = 30
+        };
+        return builder.ConnectionString;
+    }
+
     private static bool IsUsableDatabaseOptions(DatabaseOptions? options)
     {
         return options is not null
