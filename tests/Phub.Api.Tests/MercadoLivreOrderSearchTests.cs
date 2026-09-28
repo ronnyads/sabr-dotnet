@@ -16,9 +16,7 @@ public sealed class MercadoLivreOrderSearchTests
         var handler = new CallbackHandler(request =>
         {
             var offset = int.Parse(GetQuery(request.RequestUri!, "offset"));
-            var limit = int.Parse(GetQuery(request.RequestUri!, "limit"));
-            Assert.Equal(1000, limit);
-            var count = Math.Min(limit, total - offset);
+            var count = Math.Min(50, total - offset);
             var ids = Enumerable.Range(offset, Math.Max(0, count)).Select(x => $"{{\"id\":\"{x}\"}}");
             var json = $"{{\"paging\":{{\"total\":{total}}},\"results\":[{string.Join(',', ids)}]}}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
@@ -57,11 +55,11 @@ public sealed class MercadoLivreOrderSearchTests
     }
 
     [Fact]
-    public async Task Search_order_page_accepts_provider_maximum_limit()
+    public async Task Search_order_page_clamps_to_production_maximum_limit()
     {
         var handler = new CallbackHandler(request =>
         {
-            Assert.Equal("1000", GetQuery(request.RequestUri!, "limit"));
+            Assert.Equal("51", GetQuery(request.RequestUri!, "limit"));
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{\"paging\":{\"total\":0},\"results\":[]}", Encoding.UTF8, "application/json")
@@ -72,7 +70,7 @@ public sealed class MercadoLivreOrderSearchTests
             "123", DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow,
             offset: 0, limit: 1000, accessToken: "token");
 
-        Assert.Equal(1000, page.Limit);
+        Assert.Equal(51, page.Limit);
     }
 
     [Fact]

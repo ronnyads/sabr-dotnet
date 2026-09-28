@@ -15,10 +15,10 @@ namespace Phub.Application.Services;
 
 public sealed class FinancialSyncJobService
 {
-    // Discovery and enrichment are separate concerns. /orders/search officially
-    // accepts up to 1,000 results, so discover the largest supported page and let
-    // MercadoLivreSyncService's bounded fetch gate control the detail fan-out.
-    private const int OperationalHistoryPageSize = 1000;
+    // Although the public documentation advertises a larger limit, the production
+    // Brazilian /orders/search endpoint currently rejects values above 51. Keep 50
+    // for compatibility and use the bounded fetch gate to accelerate enrichment.
+    private const int OperationalHistoryPageSize = 50;
     private const string OperationalHistoryAlgorithm = "ml-history-hourly-v1";
     private const string SkippedBeforeFirstOrder = "SKIPPED_BEFORE_FIRST_ORDER";
     private const string SkippedOutsideRollingWindow = "SKIPPED_OUTSIDE_ROLLING_WINDOW";

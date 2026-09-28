@@ -426,7 +426,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
     {
         return await ExecuteWithResilienceAsync(async ct =>
         {
-            const int pageSize = 1000;
+            const int pageSize = 50;
             var orderIds = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (var offset = 0; ; offset += pageSize)
@@ -614,9 +614,9 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         string accessToken, CancellationToken cancellationToken)
     {
         offset = Math.Max(0, offset);
-        // Official /orders/search contract: limit defaults to 10 and accepts up
-        // to 1,000. Operational callers still choose a smaller fan-out-safe page.
-        limit = Math.Clamp(limit, 1, 1000);
+        // The production Brazilian endpoint currently rejects values above 51,
+        // despite the larger limit advertised in the public documentation.
+        limit = Math.Clamp(limit, 1, 51);
         var requestUri =
             $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
             $"&order.date_created.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
