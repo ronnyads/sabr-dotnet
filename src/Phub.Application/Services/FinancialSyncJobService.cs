@@ -15,6 +15,10 @@ namespace Phub.Application.Services;
 
 public sealed class FinancialSyncJobService
 {
+    // A history page fans out into order, shipment, shipment-cost and discount
+    // requests. Keeping this recovery unit small makes the durable checkpoint
+    // advance every few minutes even when the provider is slow or rate-limited.
+    private const int OperationalHistoryPageSize = 10;
     private const string OperationalHistoryAlgorithm = "ml-history-hourly-v1";
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> EnqueueGates = new(StringComparer.Ordinal);
     private readonly IAppDbContext _db;
@@ -458,7 +462,7 @@ public sealed class FinancialSyncJobService
                 // plus (sellerId, orderId) deduplication avoids boundary loss.
                 var queryFrom = segmentFrom.AddHours(-1);
                 var pageResult = await _sync.SearchOrderPageAsync(job.TenantId, job.ClientId, job.SellerId,
-                    queryFrom, segmentTo, pageCheckpoint.Offset, 50, cancellationToken);
+                    queryFrom, segmentTo, pageCheckpoint.Offset, OperationalHistoryPageSize, cancellationToken);
                 if (!pageResult.Succeeded || pageResult.Data == null)
                     throw new InvalidOperationException(string.Join("; ", pageResult.Errors.Select(x => x.Message)));
                 var page = pageResult.Data;

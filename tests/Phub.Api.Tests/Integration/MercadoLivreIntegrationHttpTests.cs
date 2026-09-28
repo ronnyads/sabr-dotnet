@@ -1513,7 +1513,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
         var jobId = Guid.NewGuid();
         var rangeTo = DateTimeOffset.UtcNow.AddDays(-1);
         var rangeFrom = rangeTo.AddDays(-1);
-        var orderIds = Enumerable.Range(1, 120).Select(x => $"page-{x:000}").ToList();
+        var orderIds = Enumerable.Range(1, 25).Select(x => $"page-{x:000}").ToList();
         _factory.FakeMercadoLivreApiClient.SearchOrdersBySeller[sellerId] = orderIds;
         foreach (var orderId in orderIds)
         {
@@ -1543,7 +1543,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
             await db.SaveChangesAsync();
         }
 
-        var expectedOffsets = new[] { 50, 100, 0 };
+        var expectedOffsets = new[] { 10, 20, 0 };
         for (var page = 0; page < expectedOffsets.Length; page++)
         {
             using var scope = _factory.Services.CreateScope();
