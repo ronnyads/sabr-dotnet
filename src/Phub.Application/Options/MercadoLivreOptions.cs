@@ -39,6 +39,11 @@ public sealed class MercadoLivreOptions
     [Range(1, 12)]
     public int SyncFetchConcurrency { get; set; } = 6;
 
+    // A single remote order must not hold an entire history page forever.
+    // Timed-out orders are recorded as explicit gaps and retried by the job.
+    [Range(10, 300)]
+    public int SyncOrderTimeoutSeconds { get; set; } = 45;
+
     [Range(1, 30)]
     public int NightlyReconcileLookbackDays { get; set; } = 7;
 

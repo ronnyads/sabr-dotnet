@@ -498,7 +498,10 @@ public sealed class MercadoLivreSyncService
                 {
                     try
                     {
-                    var details = await _mercadoLivreApiClient.GetOrderAsync(orderId, accessToken, cancellationToken);
+                    using var orderTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    orderTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(_options.SyncOrderTimeoutSeconds, 10, 300)));
+                    var orderCancellationToken = orderTimeout.Token;
+                    var details = await _mercadoLivreApiClient.GetOrderAsync(orderId, accessToken, orderCancellationToken);
                     MercadoLivreShipmentDetails? shipment = null;
                     MercadoLivreShipmentCostDetails? shipmentCosts = null;
                     IReadOnlyList<MercadoLivreOrderDiscountDetails> discounts = [];
@@ -507,11 +510,11 @@ public sealed class MercadoLivreSyncService
                         shipment = await _mercadoLivreApiClient.GetShipmentAsync(
                             details.ShipmentId,
                             accessToken,
-                            cancellationToken);
+                            orderCancellationToken);
                         try
                         {
                             shipmentCosts = await _mercadoLivreApiClient.GetShipmentCostsAsync(
-                                details.ShipmentId, connection.SellerId, accessToken, cancellationToken);
+                                details.ShipmentId, connection.SellerId, accessToken, orderCancellationToken);
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException)
                         {
@@ -520,7 +523,7 @@ public sealed class MercadoLivreSyncService
                     }
                     if (details != null)
                     {
-                        try { discounts = await _mercadoLivreApiClient.GetOrderDiscountsAsync(details.MlOrderId, accessToken, cancellationToken); }
+                        try { discounts = await _mercadoLivreApiClient.GetOrderDiscountsAsync(details.MlOrderId, accessToken, orderCancellationToken); }
                         catch (Exception ex) when (ex is not OperationCanceledException)
                         {
                             _logger.LogWarning(ex, "Order discounts unavailable seller={SellerId} order={OrderId}", connection.SellerId, details.MlOrderId);
