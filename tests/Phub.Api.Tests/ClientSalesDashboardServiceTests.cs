@@ -108,6 +108,44 @@ public sealed class ClientSalesDashboardServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_CombinesDifferentMarketplaceListingsMappedToSameInternalSku()
+    {
+        await using var db = CreateDb();
+        const string tenantId = "tenant-shared-internal-sku";
+        var clientId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        var first = CreateOrder(tenantId, clientId, "ORDER-LISTING-A", "paid", now.AddMinutes(-2), 64.98m);
+        first.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = first.SellerId, MlItemId = "MLB-LISTING-A", SabrVariantSku = "PH-RN03",
+            ProductName = "Retinol - anuncio A", Quantity = 2, UnitPrice = 32.49m,
+            MappingState = "MAPPED", RawJson = "{}"
+        });
+        var second = CreateOrder(tenantId, clientId, "ORDER-LISTING-B", "paid", now.AddMinutes(-1), 32.49m);
+        second.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = second.SellerId, MlItemId = "MLB-LISTING-B", SabrVariantSku = "ph-rn03",
+            ProductName = "Retinol - anuncio B", Quantity = 1, UnitPrice = 32.49m,
+            MappingState = "MAPPED", RawJson = "{}"
+        });
+        db.MarketplaceOrders.AddRange(first, second);
+        await db.SaveChangesAsync();
+
+        var result = await new ClientSalesDashboardService(db).GetAsync(
+            tenantId, clientId, now.AddDays(-1), now.AddMinutes(1), MarketplaceProvider.MercadoLivre);
+
+        var product = Assert.Single(result.Products);
+        Assert.Equal("PH-RN03", product.Sku);
+        Assert.Equal(2, product.Orders);
+        Assert.Equal(3, product.Units);
+        Assert.Equal(97.47m, product.Revenue);
+        Assert.Equal(1, result.TotalProducts);
+    }
+
+    [Fact]
     public async Task GetAsync_UsesSemiOpenPeriodAndExcludesOrderAtEndBoundary()
     {
         await using var db = CreateDb();

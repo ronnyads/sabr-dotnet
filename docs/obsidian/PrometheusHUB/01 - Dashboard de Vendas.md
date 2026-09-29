@@ -62,7 +62,7 @@ Regras:
 - receita considera somente pedidos `paid`; pedidos parcialmente reembolsados permanecem visíveis no detalhamento de status sem inflar o faturamento confirmado;
 - O cabeçalho separa **vendas totais recebidas** (todos os pedidos que entraram no canal), **vendas válidas/pagas** e **vendas canceladas**. O valor cancelado é informativo e não compõe faturamento nem lucro.
 - valor após taxas = valor total confirmado menos comissões identificadas;
-- agrupamento prefere `sabr_variant_sku`, usa `channel_sku` como fallback e sinaliza `SEM-SKU`.
+- agrupamento usa `sabr_variant_sku` como identidade canônica: anúncios e variações diferentes que apontam para a mesma SKU interna aparecem em uma única linha, somando pedidos, unidades e receita. Itens ainda sem vínculo permanecem separados por seller, item e variação do canal e são sinalizados para revisão.
 
 Resposta contém:
 

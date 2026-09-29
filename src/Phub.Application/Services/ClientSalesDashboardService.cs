@@ -344,7 +344,16 @@ public sealed class ClientSalesDashboardService
         => (item.UnitPrice ?? item.FullUnitPrice ?? 0m) * item.Quantity;
 
     private static string ResolveProductKey(MarketplaceOrderItem item)
-        => $"seller:{item.SellerId}:item:{item.MlItemId.Trim()}:variation:{item.MlVariationId?.Trim() ?? "base"}";
+    {
+        // Different marketplace listings are only channel identities. Once they are
+        // mapped, the internal SKU is the product identity used by the dashboard.
+        // Unmapped/external items intentionally remain isolated by listing and
+        // variation so unrelated products are never collapsed by assumption.
+        if (!string.IsNullOrWhiteSpace(item.SabrVariantSku))
+            return $"sku:{item.SabrVariantSku.Trim().ToUpperInvariant()}";
+
+        return $"seller:{item.SellerId}:item:{item.MlItemId.Trim()}:variation:{item.MlVariationId?.Trim() ?? "base"}";
+    }
 
     private static string ResolveDisplaySku(MarketplaceOrderItem item)
         => item.SabrVariantSku?.Trim()
