@@ -660,8 +660,11 @@ public sealed class FinancialSyncJobService
                 if (!pageResult.Succeeded || pageResult.Data == null)
                     throw new InvalidOperationException(string.Join("; ", pageResult.Errors.Select(x => x.Message)));
                 var page = pageResult.Data;
+                var reuseExistingOrders = job.DedupeKey.StartsWith(
+                    $"OP:CHUNK:OP:HISTORY:{OperationalHistoryAlgorithm}:",
+                    StringComparison.Ordinal);
                 var syncResult = await _sync.SyncDiscoveredOrdersAsync(job.TenantId, job.ClientId, job.SellerId,
-                    page.OrderIds, cancellationToken);
+                    page.OrderIds, cancellationToken, reuseExistingOrders);
                 if (!syncResult.Succeeded)
                     throw new InvalidOperationException(string.Join("; ", syncResult.Errors.Select(x => x.Message)));
 

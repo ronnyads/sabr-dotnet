@@ -1786,6 +1786,65 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task HistoricalCoverage_ReusesScopedLocalOrder_AndFetchesOnlyMissingIds()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-history-local";
+        const string tenantSlug = "mlhistorylocal";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001026";
+        const string existingOrderId = "ORDER-HISTORY-LOCAL";
+        const string missingOrderId = "ORDER-HISTORY-MISSING";
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.MarketplaceOrders.Add(new MarketplaceOrder
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                ClientId = clientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = ParseSellerId(sellerId),
+                MlOrderId = existingOrderId,
+                Status = "paid",
+                ImportedAt = DateTimeOffset.UtcNow.AddDays(-1),
+                RawJson = "{}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // If the already durable order were fetched again, this remote state would
+        // overwrite it. Historical coverage must only fetch the genuinely missing ID.
+        _factory.FakeMercadoLivreApiClient.OrdersById[existingOrderId] = new MercadoLivreOrderDetails
+        {
+            MlOrderId = existingOrderId,
+            SellerId = sellerId,
+            Status = "cancelled",
+            ChannelCreatedAt = DateTimeOffset.UtcNow.AddDays(-1),
+            TotalAmount = 10m,
+            CurrencyId = "BRL"
+        };
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var service = verifyScope.ServiceProvider.GetRequiredService<MercadoLivreSyncService>();
+        var result = await service.SyncDiscoveredOrdersAsync(
+            tenantId, clientId, ParseSellerId(sellerId), [existingOrderId, missingOrderId],
+            CancellationToken.None, reuseExistingOrders: true);
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(result.Data);
+        Assert.Equal(2, result.Data!.DiscoveredUnique);
+        Assert.Contains(existingOrderId, result.Data.ImportedOrderIds);
+        Assert.Contains(missingOrderId, result.Data.ResolvedUnavailableOrderIds);
+        var local = await verifyScope.ServiceProvider.GetRequiredService<AppDbContext>()
+            .MarketplaceOrders.AsNoTracking().SingleAsync(x => x.MlOrderId == existingOrderId);
+        Assert.Equal("paid", local.Status);
+    }
+
+    [Fact]
     public async Task MercadoPagoCallback_WithoutState_RedirectsBeforeTenantResolution()
     {
         using var anonymousClient = _factory.CreateAnonymousClientWithoutRedirect("http://localhost");

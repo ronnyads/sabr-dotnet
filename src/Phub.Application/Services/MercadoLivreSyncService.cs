@@ -241,7 +241,7 @@ public sealed class MercadoLivreSyncService
 
     public async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncDiscoveredOrdersAsync(
         string tenantId, Guid clientId, long sellerId, IReadOnlyList<string> orderIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool reuseExistingOrders = false)
     {
         var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(x =>
             x.TenantId == tenantId && x.ClientId == clientId
@@ -252,9 +252,36 @@ public sealed class MercadoLivreSyncService
                 [new ValidationError("sellerId", "No active Mercado Livre connection found")]);
         var ids = orderIds.Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList();
-        return ServiceResult<MercadoLivreSyncNowResult>.Success(await SyncConnectionAsync(
-            connection, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, cancellationToken, ids,
-            enforceOrderSeller: false));
+        if (!reuseExistingOrders || ids.Count == 0)
+        {
+            return ServiceResult<MercadoLivreSyncNowResult>.Success(await SyncConnectionAsync(
+                connection, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, cancellationToken, ids,
+                enforceOrderSeller: false));
+        }
+
+        // Historical coverage only needs to prove that every discovered provider ID
+        // is either already durable locally, unavailable, or an explicit gap. Most
+        // orders in a backfill have already arrived through webhooks/incremental sync;
+        // fetching all shipment, cost and discount endpoints again made each 50-order
+        // page take many minutes without adding coverage. Reuse exact scoped local IDs
+        // and call Mercado Livre only for the genuinely missing orders.
+        var existingIds = await _dbContext.MarketplaceOrders.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId
+                && x.Provider == MarketplaceProvider.MercadoLivre && x.SellerId == sellerId
+                && ids.Contains(x.MlOrderId))
+            .Select(x => x.MlOrderId)
+            .ToListAsync(cancellationToken);
+        var existingSet = existingIds.ToHashSet(StringComparer.Ordinal);
+        var missingIds = ids.Where(x => !existingSet.Contains(x)).ToList();
+        var result = missingIds.Count == 0
+            ? new MercadoLivreSyncNowResult()
+            : await SyncConnectionAsync(connection, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+                cancellationToken, missingIds, enforceOrderSeller: false);
+        result.DiscoveredUnique = ids.Count;
+        result.RemoteReportedTotal = ids.Count;
+        result.LocalImported += existingIds.Count;
+        result.ImportedOrderIds.AddRange(existingIds);
+        return ServiceResult<MercadoLivreSyncNowResult>.Success(result);
     }
 
     private async Task<ServiceResult<MercadoLivreSyncNowResult>> SyncScopedAsync(

@@ -51,6 +51,7 @@ Os mappings armazenam identidades Legacy (`itemId`/`variationId`) e `userProduct
 - A idempotência do lote inclui seller, intervalo canônico e versão do algoritmo. Cliques repetidos e retries reutilizam o mesmo lote; somente janelas ausentes ou incompletas voltam à fila.
 - O `/orders/search` é percorrido sem teto interno de 10.000. As consultas usam horas alinhadas, pequena sobreposição e deduplicação por seller/pedido.
 - Cada janela diária persiste checkpoint de hora e página. Falha no detalhe de um pedido não descarta os demais; o pedido vira `GAP` e pode ser reprocessado isoladamente.
+- No backfill histórico, IDs de pedidos que já existem no escopo exato de tenant, cliente e seller são reaproveitados como `IMPORTED`; somente IDs realmente ausentes consultam novamente detalhes, frete e descontos no Mercado Livre. A faixa recente continua atualizando os pedidos remotamente. Isso evita reprocessar milhares de pedidos já duráveis sem reduzir a cobertura auditável.
 - `remoteReportedTotal` é somente diagnóstico por janela e nunca é somado como total histórico. A cobertura canônica usa IDs únicos descobertos e as classificações `IMPORTED`, `UNAVAILABLE` e `GAP`.
 - Um seller só fica `CURRENT` quando todas as janelas concluíram e nenhum gap permanece. Caso contrário, usa `BACKFILLING`, `PARTIAL_WITH_GAPS` ou `FAILED`.
 - Cliente: `POST /api/v1/client/integrations/mercadolivre/history-sync` e `GET /api/v1/client/integrations/mercadolivre/history-sync/status`.
