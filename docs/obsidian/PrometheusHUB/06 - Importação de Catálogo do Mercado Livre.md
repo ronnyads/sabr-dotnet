@@ -52,6 +52,7 @@ Os mappings armazenam identidades Legacy (`itemId`/`variationId`) e `userProduct
 - O `/orders/search` é percorrido sem teto interno de 10.000. As consultas usam horas alinhadas, pequena sobreposição e deduplicação por seller/pedido.
 - Cada janela diária persiste checkpoint de hora e página. Falha no detalhe de um pedido não descarta os demais; o pedido vira `GAP` e pode ser reprocessado isoladamente.
 - No backfill histórico, IDs de pedidos que já existem no escopo exato de tenant, cliente e seller são reaproveitados como `IMPORTED`; somente IDs realmente ausentes consultam novamente detalhes, frete e descontos no Mercado Livre. A faixa recente continua atualizando os pedidos remotamente. Isso evita reprocessar milhares de pedidos já duráveis sem reduzir a cobertura auditável.
+- O worker usa até 12 buscas remotas concorrentes por página, mantendo as gravações do EF sequenciais. O limite coincide com o teto validado da aplicação e reduz o tempo de contas cujo histórico ainda não existe localmente; timeouts e retries continuam isolados por pedido.
 - `remoteReportedTotal` é somente diagnóstico por janela e nunca é somado como total histórico. A cobertura canônica usa IDs únicos descobertos e as classificações `IMPORTED`, `UNAVAILABLE` e `GAP`.
 - Um seller só fica `CURRENT` quando todas as janelas concluíram e nenhum gap permanece. Caso contrário, usa `BACKFILLING`, `PARTIAL_WITH_GAPS` ou `FAILED`.
 - Cliente: `POST /api/v1/client/integrations/mercadolivre/history-sync` e `GET /api/v1/client/integrations/mercadolivre/history-sync/status`.
