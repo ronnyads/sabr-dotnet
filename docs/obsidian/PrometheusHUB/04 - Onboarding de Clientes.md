@@ -1,6 +1,6 @@
 ---
 tags: [prometheushub, clientes, onboarding, senha, cadastro]
-updated: 2026-09-07
+updated: 2026-09-29
 ---
 
 # Onboarding de clientes
@@ -12,6 +12,8 @@ updated: 2026-09-07
 - Cliente com cadastro incompleto continua pelas etapas Empresa, Contato/Endereço, Responsável e Documentos.
 - O status retornado por `GET /client/profile` é a fonte atualizada usada pelo frontend antes de decidir o destino.
 - “Salvar depois / Voltar ao login” executa logout real antes da navegação; apenas trocar a rota mantinha a sessão e o guard devolvia o cliente ao onboarding.
+- Datas de nascimento recebidas sem fuso são tratadas como datas civis e persistidas à meia-noite UTC, sem deslocar o dia. Isso evita erro do Npgsql ao gravar o `timestamptz` legado.
+- Ao solicitar análise de vários documentos em paralelo, cada documento é persistido antes da verificação do conjunto obrigatório. A transição de `PendingDocuments` para `UnderReview` é feita por atualização condicional no banco para não deixar o cliente preso como pendente.
 
 ## Inscrição estadual
 
@@ -23,3 +25,5 @@ A confirmação documental e administrativa permanece como fonte de verdade para
 
 - IE paulista `155.203.127.118`, vinculada a cadastro ativo, deve ser aceita.
 - IE ausente, curta ou composta por um único dígito repetido deve ser rejeitada.
+- Data de nascimento com `DateTimeKind.Unspecified` deve manter o dia informado e ser gravada como UTC.
+- O envio paralelo dos quatro documentos obrigatórios deve concluir com o cliente em `UnderReview`.

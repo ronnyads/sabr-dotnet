@@ -323,12 +323,21 @@ DO UPDATE SET
         document.ProtheusTag = ProtheusTag.Build(ProtheusPrefixes.Client, ProtheusOperationType.UPDATE);
         document.ProtheusOperation = ProtheusOperationType.UPDATE;
 
+        // Persist the current document before evaluating the aggregate state.
+        // The frontend requests all required documents in parallel; checking first
+        // lets every request observe the other documents as Pending and leaves the
+        // client stuck in PendingDocuments even though all files are UnderReview.
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
         if (await HasAllRequiredDocumentsReadyForReviewAsync(clientId, cancellationToken))
         {
-            client.Status = ClientStatus.UnderReview;
+            await _dbContext.Clients
+                .Where(item => item.Id == clientId && item.Status == ClientStatus.PendingDocuments)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(item => item.Status, ClientStatus.UnderReview),
+                    cancellationToken);
         }
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
         return Ok(new { documentId = document.Id, status = document.Status });
     }
 
