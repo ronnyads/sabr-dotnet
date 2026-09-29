@@ -74,6 +74,46 @@ public sealed class CatalogCostDomainTests
     }
 
     [Fact]
+    public async Task HistoricalCost_ClientPublicationSnapshot_PrecedesGlobalVariantPrice()
+    {
+        await using var db = CreateDb();
+        var order = Order(
+            new DateTimeOffset(2026, 9, 5, 3, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 9, 6, 3, 0, 0, TimeSpan.Zero));
+        db.ProductVariants.Add(new ProductVariant
+        {
+            VariantSku = "PH-SERUM",
+            BaseSku = "PH-SERUM",
+            Name = "Serum",
+            CatalogPriceCents = 3_900,
+            CostPriceCents = 0,
+            PricingMode = ProductPricingModes.Override,
+            CatalogPriceOrigin = CatalogPriceOrigins.VariantOverride
+        });
+        db.Publications.Add(new Publication
+        {
+            TenantId = order.TenantId,
+            ClientId = order.ClientId,
+            ProductSku = "PH-SERUM",
+            CatalogPriceCentsSnapshot = 1_500,
+            CostPriceCentsSnapshot = 1_500,
+            FinalPriceCentsSnapshot = 4_990,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedByUserId = Guid.NewGuid()
+        });
+        db.ProductPriceVersions.Add(Version(1, 3_900,
+            new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero), null));
+        await db.SaveChangesAsync();
+
+        var result = await new HistoricalProductCostService(db).ResolveAsync(order, Item(order));
+
+        Assert.NotNull(result);
+        Assert.Equal(1_500, result!.CatalogPriceCents);
+        Assert.Equal(CatalogPriceOrigins.PublicationSnapshot, result.Origin);
+        Assert.Equal(Guid.Empty, result.VersionId);
+    }
+
+    [Fact]
     public async Task HistoricalCost_WithOverlappingVersions_RemainsPending()
     {
         await using var db = CreateDb();

@@ -13,13 +13,14 @@ public static class CatalogPriceOrigins
     public const string VariantOverride = "VARIANT_OVERRIDE";
     public const string ExternalSupplier = "EXTERNAL_SUPPLIER";
     public const string PrePurchasedLot = "PREPURCHASED_LOT";
+    public const string PublicationSnapshot = "PUBLICATION_SNAPSHOT";
 
     public const string MarketplaceListing = "MARKETPLACE_LISTING";
     public const string OrderPrice = "ORDER_PRICE";
     public const string ChannelPrice = "CHANNEL_PRICE";
 
     public static bool IsAuthorizedCatalogOrigin(string? origin) => origin is
-        MasterProduct or VariantOverride or ExternalSupplier or PrePurchasedLot;
+        MasterProduct or VariantOverride or ExternalSupplier or PrePurchasedLot or PublicationSnapshot;
 
     public static bool IsChannelPriceOrigin(string? origin) => origin is
         MarketplaceListing or OrderPrice or ChannelPrice;

@@ -400,6 +400,7 @@ builder.Services.AddScoped<SellerOwnedStockLotService>();
 builder.Services.AddScoped<StockReservationAllocationService>();
 builder.Services.AddScoped<HistoricalProductCostService>();
 builder.Services.AddScoped<FinancialCostCorrectionPlanService>();
+builder.Services.AddScoped<LegacyFinancialCostRepairService>();
 builder.Services.AddScoped<MarketplaceOrderPaymentService>();
 builder.Services.AddScoped<MarketplaceOrderCheckoutService>();
 builder.Services.AddScoped<MarketplaceShipmentLabelService>();

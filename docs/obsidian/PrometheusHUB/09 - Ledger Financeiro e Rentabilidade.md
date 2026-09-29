@@ -114,3 +114,11 @@ As migrações são aditivas. Ativar primeiro em shadow mode, auditar grants sep
 - Receita bruta usa o valor dos itens antes das deduções; tarifa, frete, reembolso e ajuste são fatos separados com sinais próprios. A soma externa ativa representa o líquido econômico estimado, não necessariamente o valor já disponível na conta Mercado Pago.
 - Se o pedido não trouxer preço bruto ou `sale_fee` para algum item, a projeção inclui `GROSS_REVENUE_PENDING` ou `MARKETPLACE_FEE_PENDING` e permanece incompleta; ausência desses dados não significa valor zero. A interface traduz esses motivos para linguagem do seller.
 - O líquido efetivamente creditado só recebe status conferido após conciliação dos recursos oficiais. A implementação produz entradas `Reconciled` apenas para componentes com correspondência inequívoca e mantém o restante como pendência ou ajuste não alocado. O indicador integralmente confirmado continua bloqueado até a amostra manual explicar diferenças de competência, liberação, retenções, estornos e eventuais centavos.
+
+## Correção de custo legado
+
+- O snapshot de preço de catálogo da publicação do cliente é o contrato econômico do produto e prevalece sobre alterações posteriores do catálogo global.
+- Preço de anúncio, preço do pedido e preço de venda do marketplace nunca são aceitos como custo do produto.
+- O reparo legado é global e idempotente: cria um novo fato no ledger, mantém o lançamento anterior e move apenas a cabeça econômica.
+- Itens de fornecedor externo sem snapshot de custo confiável são anulados do resultado e voltam para `EXTERNAL_COST_PENDING`; custo desconhecido nunca é convertido em zero.
+- Após a correção, o estado financeiro de cada pedido afetado é reconstruído.

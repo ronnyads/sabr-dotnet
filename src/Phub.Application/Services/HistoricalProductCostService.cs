@@ -20,6 +20,30 @@ public sealed class HistoricalProductCostService
         var resolvedEconomicAt = ResolveEconomicAt(order);
         if (resolvedEconomicAt == null) return null;
         var (economicAt, source) = resolvedEconomicAt.Value;
+
+        // A publication is the commercial contract between the catalog and the
+        // seller. Its snapshot is client-scoped and must take precedence over a
+        // later global catalog change. This also prevents a marketplace listing
+        // or order sale price from ever becoming the seller's product cost.
+        var baseSku = await _db.ProductVariants.AsNoTracking()
+            .Where(x => x.VariantSku == item.SabrVariantSku)
+            .Select(x => x.BaseSku)
+            .SingleOrDefaultAsync(cancellationToken);
+        var publicationSkus = string.IsNullOrWhiteSpace(baseSku)
+            ? new[] { item.SabrVariantSku }
+            : new[] { item.SabrVariantSku, baseSku };
+        var publication = await _db.Publications.AsNoTracking()
+            .Where(x => x.TenantId == order.TenantId && x.ClientId == order.ClientId
+                        && publicationSkus.Contains(x.ProductSku)
+                        && x.CatalogPriceCentsSnapshot > 0)
+            .OrderByDescending(x => x.ProductSku == item.SabrVariantSku)
+            .ThenByDescending(x => x.PriceSnapshotTakenAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (publication != null)
+            return new HistoricalProductCost(Guid.Empty, 0, publication.CatalogPriceCentsSnapshot,
+                publication.CostPriceCentsSnapshot, CatalogPriceOrigins.PublicationSnapshot,
+                economicAt, source);
+
         var baselines = await _db.CatalogCostBaselines.AsNoTracking()
             .Where(x => x.VariantSku == item.SabrVariantSku
                         && x.Status == CatalogCostBaselineStatuses.Active
