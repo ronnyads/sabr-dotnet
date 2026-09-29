@@ -27,7 +27,18 @@ public sealed class ClientSalesDashboardService
         DateTimeOffset? to,
         MarketplaceProvider? provider,
         CancellationToken cancellationToken = default)
+        => await GetAsync(tenantId, clientId, from, to, provider, null, cancellationToken);
+
+    public async Task<ClientSalesDashboardResult> GetAsync(
+        string tenantId,
+        Guid clientId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        MarketplaceProvider? provider,
+        string? supplierScope,
+        CancellationToken cancellationToken = default)
     {
+        supplierScope = NormalizeSupplierScope(supplierScope);
         var now = DateTimeOffset.UtcNow;
         var rangeTo = (to ?? now).ToUniversalTime();
         var rangeFrom = (from ?? rangeTo.AddDays(-29)).ToUniversalTime();
@@ -59,28 +70,37 @@ public sealed class ClientSalesDashboardService
                             && (order.ChannelCreatedAt ?? order.ImportedAt) < rangeTo)
             .ToListAsync(cancellationToken);
 
-        var current = orders
+        var unfilteredCurrent = orders
             .Where(order => EffectiveDate(order) >= rangeFrom && EffectiveDate(order) < rangeTo)
             .ToList();
-        var previous = orders
+        var unfilteredPrevious = orders
             .Where(order => EffectiveDate(order) >= previousFrom && EffectiveDate(order) < rangeFrom)
             .ToList();
 
+        var supplierFilters = BuildSupplierFilters(unfilteredCurrent.Where(IsRevenueOrder));
+        var current = unfilteredCurrent.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
+        var previous = unfilteredPrevious.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
+
         var currentPaid = current.Where(IsRevenueOrder).ToList();
         var previousPaid = previous.Where(IsRevenueOrder).ToList();
-        var includedPaid = currentPaid.Where(order => order.Items.Any(IsIncludedInSalesResult)).ToList();
-        var previousIncludedPaid = previousPaid.Where(order => order.Items.Any(IsIncludedInSalesResult)).ToList();
-        var grossRevenue = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue);
-        var totalSalesAmount = current.SelectMany(order => order.Items).Sum(ItemRevenue);
+        var includedPaid = currentPaid.Where(order => order.Items.Any(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope))).ToList();
+        var previousIncludedPaid = previousPaid.Where(order => order.Items.Any(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope))).ToList();
+        var grossRevenue = includedPaid.SelectMany(order => order.Items)
+            .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
+        var totalSalesAmount = current.SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
         var cancelledSalesAmount = current.Where(order => IsCancelled(order.Status))
-            .SelectMany(order => order.Items).Sum(ItemRevenue);
-        var previousRevenue = previousIncludedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue);
-        var fees = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.SaleFee ?? 0m);
-        var totalUnits = includedPaid.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.Quantity);
+            .SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
+        var previousRevenue = previousIncludedPaid.SelectMany(order => order.Items)
+            .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
+        var fees = includedPaid.SelectMany(order => order.Items)
+            .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(item => item.SaleFee ?? 0m);
+        var totalUnits = includedPaid.SelectMany(order => order.Items)
+            .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
 
         var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, ResolveSaoPauloTimeZone()).Date);
         var products = currentPaid
             .SelectMany(order => order.Items.Select(item => new { Order = order, Item = item }))
+            .Where(row => MatchesSupplierScope(row.Item, supplierScope))
             .GroupBy(row => ResolveProductKey(row.Item), StringComparer.OrdinalIgnoreCase)
             .Select(group => new ClientSalesSkuResult
             {
@@ -151,8 +171,10 @@ public sealed class ClientSalesDashboardService
                 {
                     Date = group.Key,
                     Orders = group.Count(),
-                    Units = group.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(item => item.Quantity),
-                    Revenue = Math.Round(group.SelectMany(order => order.Items).Where(IsIncludedInSalesResult).Sum(ItemRevenue), 2)
+                    Units = group.SelectMany(order => order.Items)
+                        .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity),
+                    Revenue = Math.Round(group.SelectMany(order => order.Items)
+                        .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue), 2)
                 });
 
         var dailySales = new List<ClientSalesDailyResult>();
@@ -185,6 +207,7 @@ public sealed class ClientSalesDashboardService
             clientId,
             provider,
             now,
+            supplierScope,
             cancellationToken);
 
         return new ClientSalesDashboardResult
@@ -206,7 +229,8 @@ public sealed class ClientSalesDashboardService
             CancelledOrders = current.Count(order => NormalizeStatus(order.Status).Contains("cancel", StringComparison.Ordinal)),
             RefundedOrders = current.Count(order => NormalizeStatus(order.Status) is "refunded" or "partially_refunded"),
             UnmappedUnits = currentPaid.SelectMany(order => order.Items)
-                .Where(item => string.IsNullOrWhiteSpace(item.SabrVariantSku) && !IsExternalSupplier(item))
+                .Where(item => MatchesSupplierScope(item, supplierScope)
+                               && string.IsNullOrWhiteSpace(item.SabrVariantSku) && !IsExternalSupplier(item))
                 .Sum(item => item.Quantity),
             OrdersChangePercent = PercentageChange(current.Count, previous.Count),
             RevenueChangePercent = PercentageChange(grossRevenue, previousRevenue),
@@ -224,7 +248,9 @@ public sealed class ClientSalesDashboardService
                 GrossRevenue = Math.Round(externalProducts.Sum(product => product.Revenue), 2),
                 ProductsWithCost = externalProducts.Count(product => product.HasExternalCost),
                 ProductsPendingCost = externalProducts.Count(product => !product.HasExternalCost)
-            }
+            },
+            SupplierScope = supplierScope ?? "ALL",
+            SupplierFilters = supplierFilters
         };
     }
 
@@ -233,6 +259,7 @@ public sealed class ClientSalesDashboardService
         Guid clientId,
         MarketplaceProvider? provider,
         DateTimeOffset nowUtc,
+        string? supplierScope,
         CancellationToken cancellationToken)
     {
         var timeZone = ResolveSaoPauloTimeZone();
@@ -301,10 +328,12 @@ public sealed class ClientSalesDashboardService
             .Where(order => !externallyDispatchedShipmentIds.Contains(order.ShipmentId ?? string.Empty))
             .Where(order => !dispatched.Contains(order.ShipmentId ?? string.Empty)
                             && !dispatched.Contains(order.MlOrderId))
+            .Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope)))
             .ToList();
 
         var products = pendingOrders
             .SelectMany(order => order.Items.Select(item => new { order.Id, Item = item }))
+            .Where(row => MatchesSupplierScope(row.Item, supplierScope))
             .GroupBy(row => ResolveProductKey(row.Item), StringComparer.OrdinalIgnoreCase)
             .Select(group => new ClientShippingTodaySkuResult
             {
@@ -327,7 +356,7 @@ public sealed class ClientSalesDashboardService
             PendingPaymentOrders = pendingOrders.Count(order => !order.SabrPaymentConfirmedAt.HasValue),
             TotalUnits = products.Sum(product => product.Units),
             UnmappedUnits = pendingOrders.SelectMany(order => order.Items)
-                .Where(item => string.IsNullOrWhiteSpace(item.SabrVariantSku))
+                .Where(item => MatchesSupplierScope(item, supplierScope) && string.IsNullOrWhiteSpace(item.SabrVariantSku))
                 .Sum(item => item.Quantity),
             Products = products
         };
@@ -371,6 +400,56 @@ public sealed class ClientSalesDashboardService
 
     private static bool IsIncludedInSalesResult(MarketplaceOrderItem item)
         => item.MappingState != MarketplaceMappingStates.ExternalCostPending;
+
+    private static string? NormalizeSupplierScope(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope) || string.Equals(scope, "ALL", StringComparison.OrdinalIgnoreCase)) return null;
+        var trimmed = scope.Trim();
+        if (trimmed.Equals("INTERNAL", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("EXTERNAL", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("UNCLASSIFIED", StringComparison.OrdinalIgnoreCase))
+            return trimmed.ToUpperInvariant();
+        return trimmed.StartsWith("EXTERNAL:", StringComparison.OrdinalIgnoreCase) ? trimmed : null;
+    }
+
+    private static bool MatchesSupplierScope(MarketplaceOrderItem item, string? scope)
+    {
+        if (scope == null) return true;
+        if (scope == "INTERNAL") return !IsExternalSupplier(item) && !string.IsNullOrWhiteSpace(item.SabrVariantSku);
+        if (scope == "EXTERNAL") return IsExternalSupplier(item);
+        if (scope == "UNCLASSIFIED") return !IsExternalSupplier(item) && string.IsNullOrWhiteSpace(item.SabrVariantSku);
+        if (scope.StartsWith("EXTERNAL:", StringComparison.OrdinalIgnoreCase))
+            return IsExternalSupplier(item)
+                   && string.Equals(item.ExternalSupplierName?.Trim(), scope[9..].Trim(), StringComparison.OrdinalIgnoreCase);
+        return true;
+    }
+
+    private static List<ClientSupplierFilterOption> BuildSupplierFilters(IEnumerable<MarketplaceOrder> orders)
+    {
+        var items = orders.SelectMany(order => order.Items).ToList();
+        var options = new List<ClientSupplierFilterOption>
+        {
+            new() { Key = "ALL", Label = "Todos os fornecedores", Origin = "ALL" }
+        };
+        if (items.Any(item => !IsExternalSupplier(item) && !string.IsNullOrWhiteSpace(item.SabrVariantSku)))
+            options.Add(new ClientSupplierFilterOption { Key = "INTERNAL", Label = "Catálogo SABR", Origin = "INTERNAL" });
+        var external = items.Where(IsExternalSupplier).ToList();
+        if (external.Count > 0)
+        {
+            options.Add(new ClientSupplierFilterOption { Key = "EXTERNAL", Label = "Fornecedores externos · todos", Origin = "EXTERNAL" });
+            options.AddRange(external.Select(item => item.ExternalSupplierName?.Trim())
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name)
+                .Select(name => new ClientSupplierFilterOption
+                {
+                    Key = $"EXTERNAL:{name}", Label = $"Externo · {name}", Origin = "EXTERNAL"
+                }));
+        }
+        if (items.Any(item => !IsExternalSupplier(item) && string.IsNullOrWhiteSpace(item.SabrVariantSku)))
+            options.Add(new ClientSupplierFilterOption { Key = "UNCLASSIFIED", Label = "Origem ainda não definida", Origin = "UNCLASSIFIED" });
+        return options;
+    }
 
     private static TimeZoneInfo ResolveSaoPauloTimeZone()
     {

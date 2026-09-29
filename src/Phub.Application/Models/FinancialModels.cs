@@ -98,6 +98,8 @@ public sealed class ClientProfitabilityResult
     public FinancialAuditCoverageResult CostCoverage { get; set; } = new();
     public FinancialAuditCoverageResult FinancialCoverage { get; set; } = new();
     public PendingCorrectionPlanResult? PendingCorrectionPlan { get; set; }
+    public string SupplierScope { get; set; } = "ALL";
+    public long SupplierUnallocatedCents { get; set; }
 }
 
 public sealed class ExternalSupplierProfitabilityResult

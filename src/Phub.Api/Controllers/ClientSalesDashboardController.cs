@@ -34,6 +34,7 @@ public sealed class ClientSalesDashboardController : ControllerBase
         [FromQuery] DateTimeOffset? from = null,
         [FromQuery] DateTimeOffset? to = null,
         [FromQuery] string? provider = null,
+        [FromQuery] string? supplier = null,
         CancellationToken cancellationToken = default)
     {
         if (!string.Equals(User.FindFirst("accountType")?.Value, AccountTypes.Client, StringComparison.OrdinalIgnoreCase))
@@ -63,13 +64,14 @@ public sealed class ClientSalesDashboardController : ControllerBase
             parsedProvider = value;
         }
 
-        var result = await _dashboardService.GetAsync(tenantId, clientId, from, to, parsedProvider, cancellationToken);
+        var result = await _dashboardService.GetAsync(tenantId, clientId, from, to, parsedProvider, supplier, cancellationToken);
         return Ok(result);
     }
 
     [HttpGet("profitability")]
     public async Task<IActionResult> GetProfitability([FromQuery] DateTimeOffset? from = null, [FromQuery] DateTimeOffset? to = null,
-        [FromQuery] string? provider = null, [FromQuery] long? sellerId = null, CancellationToken cancellationToken = default)
+        [FromQuery] string? provider = null, [FromQuery] long? sellerId = null, [FromQuery] string? supplier = null,
+        CancellationToken cancellationToken = default)
     {
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
         MarketplaceProvider? parsed = null;
@@ -79,23 +81,24 @@ public sealed class ClientSalesDashboardController : ControllerBase
             { Code = "PROVIDER_INVALID", Message = "Canal de venda inválido", TraceId = HttpContext.TraceIdentifier });
             parsed = value;
         }
-        return Ok(await _profitabilityService.GetAsync(tenantId!, clientId, from, to, parsed, sellerId, cancellationToken));
+        return Ok(await _profitabilityService.GetAsync(tenantId!, clientId, from, to, parsed, sellerId, supplier, cancellationToken));
     }
 
     [HttpGet("profitability/orders")]
     public async Task<IActionResult> GetProfitabilityOrders([FromQuery] DateTimeOffset? from = null,
-        [FromQuery] DateTimeOffset? to = null, [FromQuery] long? sellerId = null,
+        [FromQuery] DateTimeOffset? to = null, [FromQuery] long? sellerId = null, [FromQuery] string? supplier = null,
         CancellationToken cancellationToken = default)
     {
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
-        return Ok(await _profitabilityService.GetOrdersAsync(tenantId!, clientId, from, to, sellerId, cancellationToken));
+        return Ok(await _profitabilityService.GetOrdersAsync(tenantId!, clientId, from, to, sellerId, supplier, cancellationToken));
     }
 
     [HttpGet("profitability/orders/{orderId:guid}")]
-    public async Task<IActionResult> GetProfitabilityOrder(Guid orderId, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetProfitabilityOrder(Guid orderId, [FromQuery] string? supplier,
+        CancellationToken cancellationToken)
     {
         if (!TryGetClientContext(out var tenantId, out var clientId, out var error)) return error!;
-        var result = await _profitabilityService.GetOrderAsync(tenantId!, clientId, orderId, cancellationToken);
+        var result = await _profitabilityService.GetOrderAsync(tenantId!, clientId, orderId, supplier, cancellationToken);
         return result == null ? NotFound() : Ok(result);
     }
 

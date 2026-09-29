@@ -21,7 +21,19 @@ public sealed class FinancialProfitabilityService
         MarketplaceProvider? provider,
         long? sellerId,
         CancellationToken cancellationToken = default)
+        => await GetAsync(tenantId, clientId, from, to, provider, sellerId, null, cancellationToken);
+
+    public async Task<ClientProfitabilityResult> GetAsync(
+        string tenantId,
+        Guid clientId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        MarketplaceProvider? provider,
+        long? sellerId,
+        string? supplierScope,
+        CancellationToken cancellationToken = default)
     {
+        supplierScope = NormalizeSupplierScope(supplierScope);
         var now = DateTimeOffset.UtcNow;
         var rangeTo = (to ?? now).ToUniversalTime();
         var rangeFrom = (from ?? rangeTo.AddDays(-29)).ToUniversalTime();
@@ -36,6 +48,17 @@ public sealed class FinancialProfitabilityService
         if (sellerId.HasValue) orderQuery = orderQuery.Where(x => x.SellerId == sellerId.Value);
         var orderIds = await orderQuery.Select(x => x.Id).ToListAsync(cancellationToken);
 
+        var allPeriodItems = await _db.MarketplaceOrderItems.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && orderIds.Contains(x.MarketplaceOrderId))
+            .ToListAsync(cancellationToken);
+        var selectedItems = allPeriodItems.Where(x => MatchesSupplierScope(x, supplierScope)).ToList();
+        var selectedItemIds = selectedItems.Select(x => x.Id).ToHashSet();
+        var selectedOrderIds = selectedItems.Select(x => x.MarketplaceOrderId).ToHashSet();
+        var exclusiveOrderIds = allPeriodItems.GroupBy(x => x.MarketplaceOrderId)
+            .Where(group => group.All(item => selectedItemIds.Contains(item.Id)))
+            .Select(group => group.Key).ToHashSet();
+        if (supplierScope != null) orderIds = orderIds.Where(selectedOrderIds.Contains).ToList();
+
         var statesQuery = _db.MarketplaceOrderFinancialStates.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId && orderIds.Contains(x.MarketplaceOrderId));
         if (provider.HasValue) statesQuery = statesQuery.Where(x => x.Provider == provider.Value);
@@ -47,7 +70,12 @@ public sealed class FinancialProfitabilityService
                         && x.MarketplaceOrderId.HasValue && orderIds.Contains(x.MarketplaceOrderId.Value));
         if (provider.HasValue) entriesQuery = entriesQuery.Where(x => x.Provider == provider.Value);
         if (sellerId.HasValue) entriesQuery = entriesQuery.Where(x => x.SellerId == sellerId.Value);
-        var allEntries = await entriesQuery.ToListAsync(cancellationToken);
+        var allEntriesUnfiltered = await entriesQuery.ToListAsync(cancellationToken);
+        var allEntries = supplierScope == null ? allEntriesUnfiltered : allEntriesUnfiltered
+            .Where(x => x.MarketplaceOrderItemId.HasValue
+                ? selectedItemIds.Contains(x.MarketplaceOrderItemId.Value)
+                : x.MarketplaceOrderId.HasValue && exclusiveOrderIds.Contains(x.MarketplaceOrderId.Value))
+            .ToList();
 
         var activeIds = await _db.FinancialEconomicHeads.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
@@ -56,6 +84,12 @@ public sealed class FinancialProfitabilityService
             .Select(x => x.ActiveEntryId)
             .ToListAsync(cancellationToken);
         var activeSet = activeIds.ToHashSet();
+        var supplierUnallocatedCents = supplierScope == null ? 0L : Math.Abs(allEntriesUnfiltered
+            .Where(x => activeSet.Contains(x.Id) && x.Status != FinancialEntryStatuses.Voided
+                        && !x.MarketplaceOrderItemId.HasValue
+                        && x.MarketplaceOrderId.HasValue
+                        && !exclusiveOrderIds.Contains(x.MarketplaceOrderId.Value))
+            .Sum(x => x.AmountCents));
         // VOIDED is an auditable correction head: its original amount is kept
         // in the append-only ledger, but it has no economic effect.
         var activeEntries = allEntries.Where(x => activeSet.Contains(x.Id)
@@ -64,16 +98,9 @@ public sealed class FinancialProfitabilityService
             .Select(x => x.MarketplaceOrderId!.Value).ToHashSet();
         states = states.Where(x => economicallyActiveOrderIds.Contains(x.MarketplaceOrderId)).ToList();
 
-        var externalItems = await _db.MarketplaceOrderItems.AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.ClientId == clientId
-                        && orderIds.Contains(x.MarketplaceOrderId)
-                        && (x.MappingState == MarketplaceMappingStates.ExternalSupplier
-                            || x.MappingState == MarketplaceMappingStates.ExternalCostPending))
-            .ToListAsync(cancellationToken);
+        var externalItems = selectedItems.Where(x => MarketplaceMappingStates.IsExternal(x.MappingState)).ToList();
         var externalItemIds = externalItems.Select(x => x.Id).ToHashSet();
-        var periodItems = await _db.MarketplaceOrderItems.AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && orderIds.Contains(x.MarketplaceOrderId))
-            .ToListAsync(cancellationToken);
+        var periodItems = selectedItems;
 
         var estimatedByKey = allEntries.Where(x => x.Status == FinancialEntryStatuses.Estimated)
             .GroupBy(x => x.EconomicKey).ToDictionary(x => x.Key, x => x.OrderByDescending(e => e.ObservedAt).First());
@@ -190,6 +217,8 @@ public sealed class FinancialProfitabilityService
             .MaxBy(x => x.ObservedAt)?.ObservedAt;
 
         var incompleteReasons = states.SelectMany(ReadReasons).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToList();
+        if (supplierScope != null && supplierUnallocatedCents != 0)
+            incompleteReasons.Add("SUPPLIER_SCOPE_UNALLOCATED");
         var isAuditComplete = costCoverage.Percent == 100m && financialCoverage.Percent == 100m
                               && states.All(x => x.OperationalComponentsResolved && x.ConfirmedComponentsResolved && x.ItemAllocationResolved)
                               && states.Sum(x => x.UnallocatedCents) == 0 && incompleteReasons.Count == 0 && pendingPlan == null;
@@ -239,6 +268,8 @@ public sealed class FinancialProfitabilityService
             CostCoverage = costCoverage,
             FinancialCoverage = financialCoverage,
             PendingCorrectionPlan = pendingPlan,
+            SupplierScope = supplierScope ?? "ALL",
+            SupplierUnallocatedCents = supplierUnallocatedCents,
             ExternalSupplier = new ExternalSupplierProfitabilityResult
             {
                 Products = externalItems.Select(x => new { x.SellerId, x.MlItemId, x.MlVariationId }).Distinct().Count(),
@@ -257,7 +288,13 @@ public sealed class FinancialProfitabilityService
     public async Task<IReadOnlyList<ClientProfitabilityOrderResult>> GetOrdersAsync(
         string tenantId, Guid clientId, DateTimeOffset? from, DateTimeOffset? to,
         long? sellerId, CancellationToken cancellationToken)
+        => await GetOrdersAsync(tenantId, clientId, from, to, sellerId, null, cancellationToken);
+
+    public async Task<IReadOnlyList<ClientProfitabilityOrderResult>> GetOrdersAsync(
+        string tenantId, Guid clientId, DateTimeOffset? from, DateTimeOffset? to,
+        long? sellerId, string? supplierScope, CancellationToken cancellationToken)
     {
+        supplierScope = NormalizeSupplierScope(supplierScope);
         var rangeTo = (to ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var rangeFrom = (from ?? rangeTo.AddDays(-29)).ToUniversalTime();
         if (rangeFrom > rangeTo) (rangeFrom, rangeTo) = (rangeTo, rangeFrom);
@@ -273,15 +310,59 @@ public sealed class FinancialProfitabilityService
                     select new { order, state };
 
         var rows = await query.Take(500).ToListAsync(cancellationToken);
-        return rows.Where(x => !IsCancelledOrder(x.order.Status)
+        var visibleRows = rows.Where(x => !IsCancelledOrder(x.order.Status)
                                || x.state.OperationalProfitCents != 0
                                || x.state.UnallocatedCents != 0)
-            .Select(x => MapOrder(x.order, x.state)).ToList();
+            .ToList();
+        if (supplierScope == null) return visibleRows.Select(x => MapOrder(x.order, x.state)).ToList();
+
+        var ids = visibleRows.Select(x => x.order.Id).ToList();
+        var items = await _db.MarketplaceOrderItems.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId && ids.Contains(x.MarketplaceOrderId))
+            .ToListAsync(cancellationToken);
+        var selectedItems = items.Where(x => MatchesSupplierScope(x, supplierScope)).ToList();
+        var selectedItemIds = selectedItems.Select(x => x.Id).ToHashSet();
+        var selectedOrderIds = selectedItems.Select(x => x.MarketplaceOrderId).ToHashSet();
+        var exclusiveOrderIds = items.GroupBy(x => x.MarketplaceOrderId)
+            .Where(group => group.All(item => selectedItemIds.Contains(item.Id)))
+            .Select(group => group.Key).ToHashSet();
+        var activeIds = await _db.FinancialEconomicHeads.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
+            .Select(x => x.ActiveEntryId).ToListAsync(cancellationToken);
+        var activeSet = activeIds.ToHashSet();
+        var entries = await _db.MarketplaceFinancialEntries.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId
+                        && x.MarketplaceOrderId.HasValue && ids.Contains(x.MarketplaceOrderId.Value))
+            .ToListAsync(cancellationToken);
+
+        return visibleRows.Where(x => selectedOrderIds.Contains(x.order.Id)).Select(row =>
+        {
+            var summary = MapOrder(row.order, row.state);
+            var scoped = entries.Where(entry => entry.MarketplaceOrderId == row.order.Id
+                                                && activeSet.Contains(entry.Id)
+                                                && entry.Status != FinancialEntryStatuses.Voided
+                                                && (entry.MarketplaceOrderItemId.HasValue
+                                                    ? selectedItemIds.Contains(entry.MarketplaceOrderItemId.Value)
+                                                    : exclusiveOrderIds.Contains(row.order.Id))).ToList();
+            summary.GrossRevenueCents = scoped.Where(x => x.EntryType == FinancialEntryTypes.GrossSale).Sum(x => x.AmountCents);
+            summary.EstimatedEconomicNetCents = scoped.Where(x => x.EntryType is not FinancialEntryTypes.ProductCost
+                and not FinancialEntryTypes.ProductCostRecovery and not FinancialEntryTypes.SellerTaxEstimate).Sum(x => x.AmountCents);
+            summary.OperationalProfitCents = scoped.Where(x => x.EntryType != FinancialEntryTypes.SellerTaxEstimate).Sum(x => x.AmountCents);
+            summary.ConfirmedValueCents = scoped.Where(x => x.Layer == FinancialLayers.Reconciled
+                && x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents);
+            if (!exclusiveOrderIds.Contains(row.order.Id)) summary.IncompleteReasons.Add("SUPPLIER_SCOPE_UNALLOCATED");
+            return summary;
+        }).ToList();
     }
 
     public async Task<ClientProfitabilityOrderDetailResult?> GetOrderAsync(
         string tenantId, Guid clientId, Guid orderId, CancellationToken cancellationToken)
+        => await GetOrderAsync(tenantId, clientId, orderId, null, cancellationToken);
+
+    public async Task<ClientProfitabilityOrderDetailResult?> GetOrderAsync(
+        string tenantId, Guid clientId, Guid orderId, string? supplierScope, CancellationToken cancellationToken)
     {
+        supplierScope = NormalizeSupplierScope(supplierScope);
         var order = await _db.MarketplaceOrders.AsNoTracking().FirstOrDefaultAsync(x =>
             x.Id == orderId && x.TenantId == tenantId && x.ClientId == clientId, cancellationToken);
         if (order == null) return null;
@@ -297,7 +378,27 @@ public sealed class FinancialProfitabilityService
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId && x.MarketplaceOrderId == orderId)
             .OrderBy(x => x.EconomicOccurredAt).ThenBy(x => x.ObservedAt).ToListAsync(cancellationToken);
 
+        var items = await _db.MarketplaceOrderItems.AsNoTracking()
+            .Where(x => x.MarketplaceOrderId == orderId).ToListAsync(cancellationToken);
+        var selectedItemIds = items.Where(x => MatchesSupplierScope(x, supplierScope)).Select(x => x.Id).ToHashSet();
+        var exclusiveOrder = supplierScope == null || items.All(x => selectedItemIds.Contains(x.Id));
+        if (supplierScope != null)
+            entries = entries.Where(entry => entry.MarketplaceOrderItemId.HasValue
+                ? selectedItemIds.Contains(entry.MarketplaceOrderItemId.Value)
+                : exclusiveOrder).ToList();
+
         var summary = MapOrder(order, state);
+        if (supplierScope != null)
+        {
+            var activeScoped = entries.Where(x => active.Contains(x.Id) && x.Status != FinancialEntryStatuses.Voided).ToList();
+            summary.GrossRevenueCents = activeScoped.Where(x => x.EntryType == FinancialEntryTypes.GrossSale).Sum(x => x.AmountCents);
+            summary.EstimatedEconomicNetCents = activeScoped.Where(x => x.EntryType is not FinancialEntryTypes.ProductCost
+                and not FinancialEntryTypes.ProductCostRecovery and not FinancialEntryTypes.SellerTaxEstimate).Sum(x => x.AmountCents);
+            summary.OperationalProfitCents = activeScoped.Where(x => x.EntryType != FinancialEntryTypes.SellerTaxEstimate).Sum(x => x.AmountCents);
+            summary.ConfirmedValueCents = activeScoped.Where(x => x.Layer == FinancialLayers.Reconciled
+                && x.Status == FinancialEntryStatuses.Confirmed).Sum(x => x.AmountCents);
+            if (!exclusiveOrder) summary.IncompleteReasons.Add("SUPPLIER_SCOPE_UNALLOCATED");
+        }
         return new ClientProfitabilityOrderDetailResult
         {
             OrderId = summary.OrderId, ExternalOrderId = summary.ExternalOrderId,
@@ -398,6 +499,27 @@ public sealed class FinancialProfitabilityService
         if (states.Any(x => x.Maturity == FinancialMaturity.PartiallyConfirmed)) return FinancialMaturity.PartiallyConfirmed;
         if (states.Any(x => x.Maturity == FinancialMaturity.Estimated)) return FinancialMaturity.Estimated;
         return FinancialMaturity.Confirmed;
+    }
+    private static string? NormalizeSupplierScope(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope) || string.Equals(scope, "ALL", StringComparison.OrdinalIgnoreCase)) return null;
+        var trimmed = scope.Trim();
+        if (trimmed.Equals("INTERNAL", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("EXTERNAL", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("UNCLASSIFIED", StringComparison.OrdinalIgnoreCase))
+            return trimmed.ToUpperInvariant();
+        return trimmed.StartsWith("EXTERNAL:", StringComparison.OrdinalIgnoreCase) ? trimmed : null;
+    }
+    private static bool MatchesSupplierScope(MarketplaceOrderItem item, string? scope)
+    {
+        if (scope == null) return true;
+        var external = MarketplaceMappingStates.IsExternal(item.MappingState);
+        if (scope == "INTERNAL") return !external && !string.IsNullOrWhiteSpace(item.SabrVariantSku);
+        if (scope == "EXTERNAL") return external;
+        if (scope == "UNCLASSIFIED") return !external && string.IsNullOrWhiteSpace(item.SabrVariantSku);
+        if (scope.StartsWith("EXTERNAL:", StringComparison.OrdinalIgnoreCase))
+            return external && string.Equals(item.ExternalSupplierName?.Trim(), scope[9..].Trim(), StringComparison.OrdinalIgnoreCase);
+        return true;
     }
     private static bool IsCancelledOrder(string? status)
         => status?.Trim().ToLowerInvariant() is "cancelled" or "canceled";

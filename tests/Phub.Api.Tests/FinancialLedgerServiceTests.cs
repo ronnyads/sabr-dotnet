@@ -567,6 +567,14 @@ public sealed class FinancialLedgerServiceTests
         Assert.Equal(-3_000, result.ExternalSupplier.ProductCostCents);
         Assert.Equal(6_000, result.ExternalSupplier.OperationalProfitCents);
         Assert.Equal(8_300, result.MarketplaceNetAmountCents); // includes unallocated shipping/refund at order grain
+
+        var filtered = await new FinancialProfitabilityService(db).GetAsync(tenant, client,
+            DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow, order.Provider, order.SellerId,
+            "EXTERNAL:Fornecedor externo");
+        Assert.Equal("EXTERNAL:Fornecedor externo", filtered.SupplierScope);
+        Assert.Equal(8_300, filtered.MarketplaceNetAmountCents);
+        Assert.Equal(5_300, filtered.OperationalProfitCents);
+        Assert.Equal(0, filtered.SupplierUnallocatedCents);
     }
 
     private static AppendFinancialEntryRequest CreateRequest(string type, long cents, string idempotency, string status,

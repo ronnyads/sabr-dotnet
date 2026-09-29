@@ -290,6 +290,16 @@ public sealed class ClientSalesDashboardServiceTests
         Assert.Equal(2, result.TotalUnits);
         Assert.All(result.Products, product => Assert.True(product.IsExternalSupplier));
         Assert.Contains(result.Products, product => product.MappingPriority == "EXTERNAL_COST_PENDING");
+
+        var filtered = await new ClientSalesDashboardService(db).GetAsync(
+            tenantId, clientId, now.AddDays(-1), now.AddMinutes(1), MarketplaceProvider.MercadoLivre,
+            "EXTERNAL:Fornecedor A");
+        Assert.Equal("EXTERNAL:Fornecedor A", filtered.SupplierScope);
+        Assert.Equal(40m, filtered.GrossRevenue);
+        Assert.Equal(2, filtered.TotalUnits);
+        Assert.Equal("Fornecedor A", Assert.Single(filtered.Products).ExternalSupplierName);
+        Assert.Contains(filtered.SupplierFilters, option => option.Key == "EXTERNAL");
+        Assert.Contains(filtered.SupplierFilters, option => option.Key == "EXTERNAL:Fornecedor B");
     }
 
     private static MarketplaceOrder CreateOrder(

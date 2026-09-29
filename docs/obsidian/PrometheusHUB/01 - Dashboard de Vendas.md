@@ -63,6 +63,7 @@ Regras:
 - O cabeçalho separa **vendas totais recebidas** (todos os pedidos que entraram no canal), **vendas válidas/pagas** e **vendas canceladas**. O valor cancelado é informativo e não compõe faturamento nem lucro.
 - valor após taxas = valor total confirmado menos comissões identificadas;
 - agrupamento usa `sabr_variant_sku` como identidade canônica: anúncios e variações diferentes que apontam para a mesma SKU interna aparecem em uma única linha, somando pedidos, unidades e receita. Itens ainda sem vínculo permanecem separados por seller, item e variação do canal e são sinalizados para revisão.
+- o filtro `supplier` recorta vendas, produtos, lucro e detalhamento em `INTERNAL` (Catálogo SABR), `EXTERNAL` (todos os externos), `EXTERNAL:<nome>` e `UNCLASSIFIED`. Componentes financeiros no nível do pedido só entram num recorte quando todos os itens do pedido pertencem a ele; em pedidos mistos, frete e ajustes sem alocação oficial ficam explicitamente fora do subtotal, sem rateio inventado.
 
 Resposta contém:
 

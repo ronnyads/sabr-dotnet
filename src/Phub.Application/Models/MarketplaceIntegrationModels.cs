@@ -473,6 +473,15 @@ public sealed class ClientSalesDashboardResult
     public List<ClientSalesStatusResult> Statuses { get; set; } = new();
     public ClientShippingTodayResult ShippingToday { get; set; } = new();
     public ExternalSupplierSalesSummary ExternalSupplier { get; set; } = new();
+    public string SupplierScope { get; set; } = "ALL";
+    public List<ClientSupplierFilterOption> SupplierFilters { get; set; } = new();
+}
+
+public sealed class ClientSupplierFilterOption
+{
+    public string Key { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string Origin { get; set; } = string.Empty;
 }
 
 public sealed class ExternalSupplierSalesSummary
