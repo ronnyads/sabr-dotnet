@@ -46,7 +46,13 @@ public sealed class FinancialProfitabilityService
                         && (x.PaidAt ?? x.ChannelCreatedAt) < rangeTo);
         if (provider.HasValue) orderQuery = orderQuery.Where(x => x.Provider == provider.Value);
         if (sellerId.HasValue) orderQuery = orderQuery.Where(x => x.SellerId == sellerId.Value);
-        var orderIds = await orderQuery.Select(x => x.Id).ToListAsync(cancellationToken);
+        var periodOrders = await orderQuery.Select(x => new { x.Id, x.Status }).ToListAsync(cancellationToken);
+        // Profit is a commercial view of effective sales, not the Mercado Pago
+        // account statement. Cancelled/refunded orders remain in the immutable
+        // financial ledger for reconciliation, but none of their sale, cost,
+        // fee, shipping or refund entries may leak into profitability.
+        var orderIds = periodOrders.Where(x => IsProfitEligibleOrder(x.Status))
+            .Select(x => x.Id).ToList();
 
         var allPeriodItems = await _db.MarketplaceOrderItems.AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ClientId == clientId && orderIds.Contains(x.MarketplaceOrderId))
@@ -304,6 +310,7 @@ public sealed class FinancialProfitabilityService
                         on order.Id equals state.MarketplaceOrderId
                     where order.TenantId == tenantId && order.ClientId == clientId
                        && (!sellerId.HasValue || order.SellerId == sellerId.Value)
+                       && order.Status == "paid"
                        && (order.PaidAt ?? order.ChannelCreatedAt) >= rangeFrom
                        && (order.PaidAt ?? order.ChannelCreatedAt) < rangeTo
                     orderby (order.PaidAt ?? order.ChannelCreatedAt) descending
@@ -523,6 +530,9 @@ public sealed class FinancialProfitabilityService
     }
     private static bool IsCancelledOrder(string? status)
         => status?.Trim().ToLowerInvariant() is "cancelled" or "canceled";
+
+    private static bool IsProfitEligibleOrder(string? status)
+        => string.Equals(status?.Trim(), "paid", StringComparison.OrdinalIgnoreCase);
     private static string ToComponent(string type) => type switch
     {
         FinancialEntryTypes.SaleFee => "commission",

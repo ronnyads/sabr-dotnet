@@ -10,7 +10,7 @@ namespace Phub.Api.Tests;
 public sealed class FinancialLedgerServiceTests
 {
     [Fact]
-    public async Task CancelledOrder_VoidsSaleAndProductCost_ButKeepsRealReturnExpense()
+    public async Task CancelledOrder_RemainsAuditable_ButDoesNotAffectProfitability()
     {
         await using var db = CreateDb();
         var clientId = Guid.NewGuid();
@@ -74,11 +74,19 @@ public sealed class FinancialLedgerServiceTests
             MarketplaceProvider.MercadoLivre, order.SellerId);
         Assert.Equal(0, result.GrossRevenueCents);
         Assert.Equal(0, result.ProductCostCents);
-        Assert.Equal(-1_500, result.OperationalProfitCents);
+        Assert.Equal(0, result.OperationalProfitCents);
+        Assert.Empty(await new FinancialProfitabilityService(db).GetOrdersAsync(
+            order.TenantId, clientId, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(1),
+            order.SellerId, CancellationToken.None));
+
+        var detail = await new FinancialProfitabilityService(db).GetOrderAsync(
+            order.TenantId, clientId, order.Id, CancellationToken.None);
+        Assert.NotNull(detail);
+        Assert.Contains(detail!.Entries, entry => entry.EntryType == FinancialEntryTypes.ReturnShippingCost);
     }
 
     [Fact]
-    public async Task RefundedOrder_KeepsOriginalSaleAndCost_AndAddsRefundAsReverseFact()
+    public async Task RefundedOrder_RemainsInLedger_ButDoesNotAffectProfitability()
     {
         await using var db = CreateDb();
         var clientId = Guid.NewGuid();
@@ -109,10 +117,13 @@ public sealed class FinancialLedgerServiceTests
             order.TenantId, clientId, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(1),
             MarketplaceProvider.MercadoLivre, order.SellerId);
 
-        Assert.Equal(10_000, result.GrossRevenueCents);
-        Assert.Equal(10_000, result.RefundsCents);
-        Assert.Equal(-3_000, result.ProductCostCents);
-        Assert.Equal(-3_000, result.OperationalProfitCents);
+        Assert.Equal(0, result.GrossRevenueCents);
+        Assert.Equal(0, result.RefundsCents);
+        Assert.Equal(0, result.ProductCostCents);
+        Assert.Equal(0, result.OperationalProfitCents);
+        Assert.Empty(await new FinancialProfitabilityService(db).GetOrdersAsync(
+            order.TenantId, clientId, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(1),
+            order.SellerId, CancellationToken.None));
     }
 
     [Fact]
