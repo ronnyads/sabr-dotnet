@@ -227,6 +227,23 @@ public sealed class ClientServiceCnpjWarningTests
         Assert.NotNull(stored.OutOfSpCnpjWarningAcceptedAt);
     }
 
+    [Fact]
+    public async Task CompleteProfile_WithUnspecifiedBirthDate_PersistsCalendarDateAsUtc()
+    {
+        await using var db = CreateDb();
+        var client = await SeedClientAsync(db);
+        var request = BuildCnpjRequest(client.Email, "60355549000120", "SP");
+        request.BirthDate = new DateTime(1990, 7, 18, 0, 0, 0, DateTimeKind.Unspecified);
+
+        var service = CreateService(db);
+        var result = await service.CompleteProfileAsync(client.Id, request);
+
+        Assert.True(result.Succeeded);
+        var stored = await db.Clients.SingleAsync(item => item.Id == client.Id);
+        Assert.Equal(new DateTime(1990, 7, 18, 0, 0, 0, DateTimeKind.Utc), stored.BirthDate);
+        Assert.Equal(DateTimeKind.Utc, stored.BirthDate!.Value.Kind);
+    }
+
     private static ClientService CreateService(AppDbContext db, IDocumentLookup? documentLookup = null)
     {
         return new ClientService(

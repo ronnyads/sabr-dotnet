@@ -105,7 +105,7 @@ public sealed class ClientService
             Email = normalizedEmail,
             Whatsapp = BrazilValidators.OnlyDigits(request.Whatsapp),
             Phone = request.Phone != null ? BrazilValidators.OnlyDigits(request.Phone) : null,
-            BirthDate = request.BirthDate,
+            BirthDate = NormalizeBirthDate(request.BirthDate),
             ZipCode = BrazilValidators.OnlyDigits(request.ZipCode),
             Street = request.Street.Trim(),
             Number = request.Number.Trim(),
@@ -536,7 +536,7 @@ public sealed class ClientService
         client.Email = normalizedEmail;
         client.Whatsapp = BrazilValidators.OnlyDigits(request.Whatsapp);
         client.Phone = request.Phone != null ? BrazilValidators.OnlyDigits(request.Phone) : null;
-        client.BirthDate = request.BirthDate;
+        client.BirthDate = NormalizeBirthDate(request.BirthDate);
         client.ZipCode = BrazilValidators.OnlyDigits(request.ZipCode);
         client.Street = request.Street.Trim();
         client.Number = request.Number.Trim();
@@ -641,7 +641,7 @@ public sealed class ClientService
         client.Email = normalizedEmail;
         client.Whatsapp = BrazilValidators.OnlyDigits(request.Whatsapp);
         client.Phone = request.Phone != null ? BrazilValidators.OnlyDigits(request.Phone) : null;
-        client.BirthDate = request.BirthDate;
+        client.BirthDate = NormalizeBirthDate(request.BirthDate);
         client.ZipCode = BrazilValidators.OnlyDigits(request.ZipCode);
         client.Street = request.Street.Trim();
         client.Number = request.Number.Trim();
@@ -1028,6 +1028,18 @@ public sealed class ClientService
             sameScenario && previousWarningAccepted
                 ? previousWarningAcceptedAt ?? DateTimeOffset.UtcNow
                 : DateTimeOffset.UtcNow;
+    }
+
+    private static DateTime? NormalizeBirthDate(DateTime? birthDate)
+    {
+        if (!birthDate.HasValue)
+        {
+            return null;
+        }
+
+        // Birth dates are calendar dates. Persist midnight UTC without shifting the
+        // day so Npgsql can safely write them to the existing timestamptz column.
+        return DateTime.SpecifyKind(birthDate.Value.Date, DateTimeKind.Utc);
     }
 
     private async Task<string> ResolveCnpjUfAsync(string normalizedDocument, string? fallbackState, CancellationToken cancellationToken)
