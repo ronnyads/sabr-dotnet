@@ -1,9 +1,14 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Phub.Application.Abstractions;
 using Phub.Application.Models;
+using Phub.Application.Options;
 using Phub.Application.Services;
 using Phub.Domain.Entities;
 using Phub.Domain.Enums;
+using Phub.Infrastructure.Integrations.MercadoLivre;
 using Phub.Infrastructure.Persistence;
 
 var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Default");
@@ -14,8 +19,11 @@ var apply = args.Any(x => string.Equals(x, "--apply", StringComparison.OrdinalIg
 var rebuild = args.Any(x => string.Equals(x, "--rebuild", StringComparison.OrdinalIgnoreCase));
 var baselineDryRun = args.Any(x => string.Equals(x, "--baseline-dry-run", StringComparison.OrdinalIgnoreCase));
 var preparePriceVersions = args.Any(x => string.Equals(x, "--prepare-price-versions", StringComparison.OrdinalIgnoreCase));
+var rebuildRepairedParallel = args.Any(x => string.Equals(x, "--rebuild-repaired-parallel", StringComparison.OrdinalIgnoreCase));
 var activatePlanArg = ReadArgument(args, "--activate-plan");
+var reportPlanArg = ReadArgument(args, "--report-plan");
 var planHashArg = ReadArgument(args, "--plan-hash");
+var syncOrderArg = ReadArgument(args, "--sync-order");
 var email = ReadArgument(args, "--email");
 var sellerArg = ReadArgument(args, "--seller");
 await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
@@ -38,6 +46,58 @@ if (!string.IsNullOrWhiteSpace(email) || !string.IsNullOrWhiteSpace(sellerArg))
     if (!ownsSeller)
         throw new InvalidOperationException($"Seller {sellerId} does not belong to client {email}.");
     scope = new LegacyFinancialCostRepairScope(client.TenantId, client.Id, sellerId);
+}
+
+if (!string.IsNullOrWhiteSpace(syncOrderArg))
+{
+    if (scope == null)
+        throw new InvalidOperationException("Directed order sync requires --email and --seller.");
+
+    var mlOptions = new MercadoLivreOptions
+    {
+        ClientId = Environment.GetEnvironmentVariable("MercadoLivre__ClientId") ?? string.Empty,
+        ClientSecret = Environment.GetEnvironmentVariable("MercadoLivre__ClientSecret") ?? string.Empty,
+        RedirectUri = Environment.GetEnvironmentVariable("MercadoLivre__RedirectUri") ?? string.Empty
+    };
+    using var httpClient = new HttpClient
+    {
+        BaseAddress = new Uri(mlOptions.ApiBaseUrl),
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+    IMercadoLivreApiClient apiClient = new MercadoLivreApiClient(httpClient, Options.Create(mlOptions));
+    var oauth = new MercadoLivreOAuthService(db, apiClient, Options.Create(mlOptions));
+    var allocations = new StockReservationAllocationService(db);
+    var inventory = new MarketplaceOrderInventoryService(db, allocations);
+    var catalogAuthorization = new CatalogAuthorizationService(db);
+    var mapping = new MarketplaceOrderMappingService(db, catalogAuthorization, inventory, projection,
+        NullLogger<MarketplaceOrderMappingService>.Instance);
+    var sync = new MercadoLivreSyncService(
+        db,
+        apiClient,
+        oauth,
+        new StockAvailabilityService(db, apiClient, oauth, NullLogger<StockAvailabilityService>.Instance,
+            Options.Create(mlOptions)),
+        new MarketplaceOrderNumberService(db),
+        new MarketplaceAuditLogService(db),
+        mapping,
+        inventory,
+        projection,
+        allocations,
+        Options.Create(mlOptions),
+        NullLogger<MercadoLivreSyncService>.Instance);
+
+    var syncResult = await sync.SyncOrderNowAsync(
+        scope.TenantId, scope.ClientId, scope.SellerId, syncOrderArg.Trim());
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        mode = "DIRECTED_ORDER_SYNC",
+        scope,
+        orderId = syncOrderArg.Trim(),
+        syncResult.Succeeded,
+        errors = syncResult.Errors,
+        syncResult.Data
+    }));
+    return;
 }
 
 if (baselineDryRun)
@@ -218,6 +278,89 @@ if (!string.IsNullOrWhiteSpace(activatePlanArg))
         current.Report.CostCoverageBefore,
         current.Report.CostCoverageAfter,
         current.Report.FinancialCoverage
+    }));
+    return;
+}
+
+if (!string.IsNullOrWhiteSpace(reportPlanArg))
+{
+    if (scope == null)
+        throw new InvalidOperationException("Plan report requires --email and --seller.");
+    if (!Guid.TryParse(reportPlanArg, out var reportPlanId))
+        throw new InvalidOperationException("--report-plan must be a GUID.");
+    var planService = new FinancialCostCorrectionPlanService(db, projection);
+    var current = await planService.GetAsync(scope.TenantId, scope.ClientId, reportPlanId)
+        ?? throw new InvalidOperationException($"Plan {reportPlanId} was not found in the requested scope.");
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        mode = "PLAN_REPORT",
+        scope,
+        current.PlanId,
+        current.PlanHash,
+        current.Status,
+        current.Report.TotalEntries,
+        current.Report.TotalProfitImpactCents,
+        current.Report.CostCoverageBefore,
+        current.Report.CostCoverageAfter,
+        current.Report.FinancialCoverage,
+        pendingByCode = current.Report.Pending.GroupBy(x => x.Code)
+            .Select(x => new { code = x.Key, count = x.Count(), unitsCostCents = x.Sum(y => y.ObservedCostCents ?? 0) })
+            .OrderByDescending(x => x.count),
+        pendingBySku = current.Report.Pending.GroupBy(x => x.Sku ?? "(sem SKU)")
+            .Select(x => new { sku = x.Key, count = x.Count(), codes = x.Select(y => y.Code).Distinct().Order() })
+            .OrderByDescending(x => x.count).Take(30),
+        skus = current.Report.Skus.OrderByDescending(x => Math.Abs(x.ProfitImpactCents))
+    }));
+    return;
+}
+
+if (rebuildRepairedParallel)
+{
+    if (scope == null)
+        throw new InvalidOperationException("Parallel repaired-order rebuild requires --email and --seller.");
+
+    const string repairEndpoint = "financial-repair/legacy-product-cost-v1";
+    var repairWatermark = await db.MarketplaceFinancialEntries.AsNoTracking()
+        .Where(x => x.TenantId == scope.TenantId && x.ClientId == scope.ClientId
+            && x.SellerId == scope.SellerId && x.SourceEndpoint == repairEndpoint)
+        .MaxAsync(x => (DateTimeOffset?)x.CreatedAt)
+        ?? throw new InvalidOperationException("No legacy repair entries were found in the requested scope.");
+    var repairedOrderIds = await (from head in db.FinancialEconomicHeads.AsNoTracking()
+                                  join entry in db.MarketplaceFinancialEntries.AsNoTracking()
+                                      on head.ActiveEntryId equals entry.Id
+                                  where entry.TenantId == scope.TenantId && entry.ClientId == scope.ClientId
+                                        && entry.SellerId == scope.SellerId
+                                        && entry.SourceEndpoint == repairEndpoint
+                                        && entry.MarketplaceOrderId.HasValue
+                                  select entry.MarketplaceOrderId!.Value)
+        .Distinct().ToListAsync();
+    var projectedIds = await db.MarketplaceOrderFinancialStates.AsNoTracking()
+        .Where(x => repairedOrderIds.Contains(x.MarketplaceOrderId) && x.LastProjectedAt >= repairWatermark)
+        .Select(x => x.MarketplaceOrderId).ToListAsync();
+    var projected = projectedIds.ToHashSet();
+    var remaining = repairedOrderIds.Where(x => !projected.Contains(x)).Order().ToArray();
+    var completed = 0;
+    await Parallel.ForEachAsync(remaining, new ParallelOptions { MaxDegreeOfParallelism = 8 }, async (orderId, ct) =>
+    {
+        await using var workerDb = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql(connectionString, options => options.CommandTimeout(180)).Options);
+        var workerLedger = new FinancialLedgerService(workerDb);
+        var workerHistorical = new HistoricalProductCostService(workerDb);
+        var workerProjection = new OperationalFinancialProjectionService(workerDb, workerLedger, workerHistorical);
+        var order = await workerDb.MarketplaceOrders.Include(x => x.Items)
+            .SingleAsync(x => x.Id == orderId && x.TenantId == scope.TenantId
+                && x.ClientId == scope.ClientId && x.SellerId == scope.SellerId, ct);
+        await workerProjection.RebuildOrderStateAsync(order, ct);
+        Interlocked.Increment(ref completed);
+    });
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        mode = "PARALLEL_REBUILD_REPAIRED",
+        scope,
+        repairWatermark,
+        total = repairedOrderIds.Count,
+        alreadyProjected = projected.Count,
+        rebuilt = completed
     }));
     return;
 }
