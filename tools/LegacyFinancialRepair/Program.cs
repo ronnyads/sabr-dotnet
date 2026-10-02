@@ -14,6 +14,8 @@ var apply = args.Any(x => string.Equals(x, "--apply", StringComparison.OrdinalIg
 var rebuild = args.Any(x => string.Equals(x, "--rebuild", StringComparison.OrdinalIgnoreCase));
 var baselineDryRun = args.Any(x => string.Equals(x, "--baseline-dry-run", StringComparison.OrdinalIgnoreCase));
 var preparePriceVersions = args.Any(x => string.Equals(x, "--prepare-price-versions", StringComparison.OrdinalIgnoreCase));
+var activatePlanArg = ReadArgument(args, "--activate-plan");
+var planHashArg = ReadArgument(args, "--plan-hash");
 var email = ReadArgument(args, "--email");
 var sellerArg = ReadArgument(args, "--seller");
 await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
@@ -162,6 +164,60 @@ if (baselineDryRun)
         plan.Report.CostCoverageAfter,
         plan.Report.FinancialCoverage,
         history = plan.Report.HistoryCoverage
+    }));
+    return;
+}
+
+if (!string.IsNullOrWhiteSpace(activatePlanArg))
+{
+    if (scope == null)
+        throw new InvalidOperationException("Plan activation requires --email and --seller.");
+    if (!Guid.TryParse(activatePlanArg, out var planId) || string.IsNullOrWhiteSpace(planHashArg))
+        throw new InvalidOperationException("--activate-plan must be a GUID and --plan-hash is required.");
+
+    var actorId = await db.PlatformUsers.AsNoTracking()
+        .Where(x => x.IsActive && x.Role == PlatformUserRole.SuperAdmin)
+        .OrderBy(x => x.CreatedAt)
+        .Select(x => x.Id)
+        .FirstOrDefaultAsync();
+    if (actorId == Guid.Empty)
+        throw new InvalidOperationException("No active SuperAdmin actor was found.");
+
+    var planService = new FinancialCostCorrectionPlanService(db, projection);
+    var current = await planService.GetAsync(scope.TenantId, scope.ClientId, planId)
+        ?? throw new InvalidOperationException($"Plan {planId} was not found in the requested scope.");
+    if (!string.Equals(current.PlanHash, planHashArg.Trim(), StringComparison.Ordinal))
+        throw new InvalidOperationException("The provided planHash does not match the persisted plan.");
+
+    var command = new FinancialCorrectionPlanCommand
+    {
+        PlanHash = planHashArg.Trim(),
+        Reason = "Ativação operacional explicitamente autorizada após validação do relatório de dry-run"
+    };
+    if (current.Status is FinancialCorrectionPlanStatuses.DryRun or FinancialCorrectionPlanStatuses.AwaitingApproval)
+        current = await planService.ApproveAsync(scope.TenantId, scope.ClientId, planId, command, actorId);
+
+    while (current.Status is FinancialCorrectionPlanStatuses.Preparing or FinancialCorrectionPlanStatuses.Failed)
+        current = await planService.ResumeAsync(scope.TenantId, scope.ClientId, planId, command, actorId);
+
+    if (current.Status == FinancialCorrectionPlanStatuses.PendingActivation)
+        current = await planService.ActivateAsync(scope.TenantId, scope.ClientId, planId, command, actorId);
+    else if (current.Status == FinancialCorrectionPlanStatuses.Reconciling)
+        current = await planService.ResumeAsync(scope.TenantId, scope.ClientId, planId, command, actorId);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        mode = "ACTIVATE_PLAN",
+        scope,
+        current.PlanId,
+        current.PlanHash,
+        current.Status,
+        current.Report.TotalEntries,
+        current.Report.TotalProfitImpactCents,
+        pending = current.Report.Pending.Count,
+        current.Report.CostCoverageBefore,
+        current.Report.CostCoverageAfter,
+        current.Report.FinancialCoverage
     }));
     return;
 }
