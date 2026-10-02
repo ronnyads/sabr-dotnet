@@ -232,12 +232,28 @@ public sealed class CatalogService
         IQueryable<string> addedSkuQuery,
         CancellationToken cancellationToken)
     {
-        var categories = await query
-            .Where(product => product.CategoryId != null && product.CategoryId != "")
-            .GroupBy(product => product.CategoryId!)
-            .Select(group => new { Value = group.Key, Count = group.Count() })
-            .OrderBy(item => item.Value)
+        // Materialize the small authorized catalog projection once. The former
+        // implementation issued five aggregate queries with correlated SUMs;
+        // on production-sized catalogs those requests held the endpoint until
+        // the Npgsql connection timeout. EXISTS is sufficient for stock facets
+        // because available stock is non-negative by domain invariant.
+        var rows = await query
+            .Select(product => new CatalogFacetRow
+            {
+                CategoryId = product.CategoryId,
+                Brand = product.Brand,
+                HasStock = _dbContext.ProductVariants.Any(variant =>
+                    variant.BaseSku == product.Sku && variant.IsActive && variant.AvailableStock > 0),
+                IsAdded = addedSkuQuery.Contains(product.Sku)
+            })
             .ToListAsync(cancellationToken);
+
+        var categories = rows
+            .Where(item => !string.IsNullOrWhiteSpace(item.CategoryId))
+            .GroupBy(item => item.CategoryId!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var categoryIds = categories.Select(item => item.Value).ToList();
         var categoryLabels = await _dbContext.Categories.AsNoTracking()
             .Where(item => item.IsActive && (categoryIds.Contains(item.Id.ToString()) || categoryIds.Contains(item.Slug)))
@@ -250,22 +266,20 @@ public sealed class CatalogService
             categoryMap[category.Slug] = category.Name;
         }
 
-        var brands = await query
-            .Where(product => product.Brand != "")
-            .GroupBy(product => product.Brand)
+        var brands = rows
+            .Where(item => !string.IsNullOrWhiteSpace(item.Brand))
+            .GroupBy(item => item.Brand, StringComparer.OrdinalIgnoreCase)
             .Select(group => new CatalogFacetOptionDto
             {
                 Value = group.Key,
                 Label = group.Key,
                 Count = group.Count()
             })
-            .OrderBy(item => item.Label)
-            .ToListAsync(cancellationToken);
-        var inStockCount = await query.CountAsync(product => _dbContext.ProductVariants
-            .Where(variant => variant.BaseSku == product.Sku && variant.IsActive)
-            .Sum(variant => (int?)variant.AvailableStock) > 0, cancellationToken);
-        var total = await query.CountAsync(cancellationToken);
-        var addedCount = await query.CountAsync(product => addedSkuQuery.Contains(product.Sku), cancellationToken);
+            .OrderBy(item => item.Label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var inStockCount = rows.Count(item => item.HasStock);
+        var total = rows.Count;
+        var addedCount = rows.Count(item => item.IsAdded);
 
         return new CatalogProductFacetsDto
         {
@@ -281,6 +295,14 @@ public sealed class CatalogService
             AddedCount = addedCount,
             NotAddedCount = total - addedCount
         };
+    }
+
+    private sealed class CatalogFacetRow
+    {
+        public string? CategoryId { get; init; }
+        public string Brand { get; init; } = string.Empty;
+        public bool HasStock { get; init; }
+        public bool IsAdded { get; init; }
     }
 
     private IQueryable<Phub.Domain.Entities.Product> ApplyOrdering(
