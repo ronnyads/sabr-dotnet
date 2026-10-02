@@ -63,12 +63,29 @@ public sealed class LegacyFinancialCostRepairServiceTests
         Assert.Contains("EXTERNAL_COST_PENDING", state.IncompleteReasonsJson);
     }
 
+    [Fact]
+    public async Task RepairAll_WithScope_DoesNotCrossTenantClientOrSeller()
+    {
+        await using var db = CreateDb();
+        var (order, _, _, _) = SeedLegacyInternal(db, 4_990, 1_500);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        var wrongScope = new LegacyFinancialCostRepairScope(order.TenantId, order.ClientId, order.SellerId + 1);
+        var excluded = await service.RepairAllAsync(false, scope: wrongScope);
+        var correctScope = new LegacyFinancialCostRepairScope(order.TenantId, order.ClientId, order.SellerId);
+        var included = await service.RepairAllAsync(false, scope: correctScope);
+
+        Assert.Equal(0, excluded.EntriesReplaced);
+        Assert.Equal(1, included.EntriesReplaced);
+    }
+
     private static LegacyFinancialCostRepairService CreateService(AppDbContext db)
     {
         var ledger = new FinancialLedgerService(db);
         var historical = new HistoricalProductCostService(db);
         var projection = new OperationalFinancialProjectionService(db, ledger, historical);
-        return new LegacyFinancialCostRepairService(db, ledger, projection, historical);
+        return new LegacyFinancialCostRepairService(db, projection, historical);
     }
 
     private static (MarketplaceOrder Order, MarketplaceOrderItem Item,

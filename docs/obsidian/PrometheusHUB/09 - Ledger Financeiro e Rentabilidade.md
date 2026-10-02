@@ -117,8 +117,9 @@ As migrações são aditivas. Ativar primeiro em shadow mode, auditar grants sep
 
 ## Correção de custo legado
 
-- O snapshot de preço de catálogo da publicação do cliente é o contrato econômico do produto e prevalece sobre alterações posteriores do catálogo global.
+- Um baseline retroativo aprovado é uma regra persistente do domínio: para `economicAt < baselineCutAt`, ele prevalece inclusive sobre snapshots legados de publicação. Para datas iguais ou posteriores ao corte, vale a versão de preço vigente. Sem baseline ativo, o snapshot interno da publicação continua sendo o fallback histórico do cliente.
 - Preço de anúncio, preço do pedido e preço de venda do marketplace nunca são aceitos como custo do produto.
-- O reparo legado é global e idempotente: cria um novo fato no ledger, mantém o lançamento anterior e move apenas a cabeça econômica.
+- O reparo legado é idempotente e obrigatoriamente escopado por tenant, cliente e seller em execução operacional: cria um novo fato no ledger, mantém o lançamento anterior e move apenas a cabeça econômica.
 - Itens de fornecedor externo sem snapshot de custo confiável são anulados do resultado e voltam para `EXTERNAL_COST_PENDING`; custo desconhecido nunca é convertido em zero.
 - Após a correção, o estado financeiro de cada pedido afetado é reconstruído.
+- Em 01/10/2026, a reconciliação do seller `2496573592` com o relatório oficial de vendas confirmou integralmente IDs, unidades e faturamento bruto. O plano `CATALOG_BASELINE_CURRENT` foi gerado em `DRY_RUN` com histórico 363/363 e zero gaps; a ativação e o reparo legado exigem o mesmo `planHash` e validação posterior dos agregados.

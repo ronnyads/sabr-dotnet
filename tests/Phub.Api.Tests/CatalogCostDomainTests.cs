@@ -165,6 +165,50 @@ public sealed class CatalogCostDomainTests
         Assert.NotNull(result.BaselineId);
     }
 
+    [Fact]
+    public async Task HistoricalCost_ActiveBaselineWinsOverLegacyPublicationSnapshot()
+    {
+        await using var db = CreateDb();
+        var currentVersion = Version(2, 1_500,
+            new DateTimeOffset(2026, 9, 20, 3, 0, 0, TimeSpan.Zero), null);
+        db.ProductPriceVersions.Add(currentVersion);
+        var order = Order(new DateTimeOffset(2026, 9, 5, 3, 0, 0, TimeSpan.Zero), null);
+        db.Publications.Add(new Publication
+        {
+            TenantId = order.TenantId,
+            ClientId = order.ClientId,
+            ProductSku = "PH-SERUM",
+            CatalogPriceCentsSnapshot = 4_200,
+            CostPriceCentsSnapshot = 4_200,
+            FinalPriceCentsSnapshot = 4_990,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedByUserId = Guid.NewGuid()
+        });
+        db.CatalogCostBaselines.Add(new CatalogCostBaseline
+        {
+            PlanId = Guid.NewGuid(),
+            ProductSku = "PH-SERUM",
+            VariantSku = "PH-SERUM",
+            BaselinePriceVersionId = currentVersion.Id,
+            BaselineUnitCostCents = 1_500,
+            BaselineCutAt = currentVersion.ValidFrom,
+            Status = CatalogCostBaselineStatuses.Active,
+            ApprovedByUserId = Guid.NewGuid(),
+            ApprovedAt = DateTimeOffset.UtcNow,
+            ActivatedAt = DateTimeOffset.UtcNow,
+            Reason = "Custo atual aprovado para histórico",
+            PlanHash = new string('C', 64)
+        });
+        await db.SaveChangesAsync();
+
+        var result = await new HistoricalProductCostService(db).ResolveAsync(order, Item(order));
+
+        Assert.NotNull(result);
+        Assert.Equal(1_500, result!.CatalogPriceCents);
+        Assert.Equal(CatalogCostBaselineOrigins.ApprovedRetroactiveBaseline, result.Origin);
+        Assert.Equal(currentVersion.Id, result.VersionId);
+    }
+
     private static ProductPriceVersion Version(long version, long price, DateTimeOffset from, DateTimeOffset? to) => new()
     {
         ProductSku = "PH-SERUM",

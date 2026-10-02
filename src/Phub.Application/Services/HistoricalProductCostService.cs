@@ -21,33 +21,17 @@ public sealed class HistoricalProductCostService
         if (resolvedEconomicAt == null) return null;
         var (economicAt, source) = resolvedEconomicAt.Value;
 
-        // A publication is the commercial contract between the catalog and the
-        // seller. Its snapshot is client-scoped and must take precedence over a
-        // later global catalog change. This also prevents a marketplace listing
-        // or order sale price from ever becoming the seller's product cost.
         var baseSku = await _db.ProductVariants.AsNoTracking()
             .Where(x => x.VariantSku == item.SabrVariantSku)
             .Select(x => x.BaseSku)
             .SingleOrDefaultAsync(cancellationToken);
-        var publicationSkus = string.IsNullOrWhiteSpace(baseSku)
-            ? new[] { item.SabrVariantSku }
-            : new[] { item.SabrVariantSku, baseSku };
-        var publication = await _db.Publications.AsNoTracking()
-            .Where(x => x.TenantId == order.TenantId && x.ClientId == order.ClientId
-                        && publicationSkus.Contains(x.ProductSku)
-                        && x.CatalogPriceCentsSnapshot > 0)
-            .OrderByDescending(x => x.ProductSku == item.SabrVariantSku)
-            .ThenByDescending(x => x.PriceSnapshotTakenAt)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (publication != null)
-            return new HistoricalProductCost(Guid.Empty, 0, publication.CatalogPriceCentsSnapshot,
-                publication.CostPriceCentsSnapshot, CatalogPriceOrigins.PublicationSnapshot,
-                economicAt, source);
 
+        // An approved baseline is a persistent domain rule. It must be resolved
+        // before legacy publication snapshots; otherwise an order imported after
+        // approval could silently revive the historical, incorrect cost.
         var baselines = await _db.CatalogCostBaselines.AsNoTracking()
             .Where(x => x.VariantSku == item.SabrVariantSku
-                        && x.Status == CatalogCostBaselineStatuses.Active
-                        && economicAt < x.BaselineCutAt)
+                        && x.Status == CatalogCostBaselineStatuses.Active)
             .OrderByDescending(x => x.BaselineCutAt)
             .Take(2)
             .ToListAsync(cancellationToken);
@@ -56,8 +40,30 @@ public sealed class HistoricalProductCostService
         if (baseline != null)
         {
             CatalogCostBaselinePolicy.EnsureValid(baseline);
-            return new HistoricalProductCost(baseline.BaselinePriceVersionId, 0, baseline.BaselineUnitCostCents,
-                baseline.BaselineUnitCostCents, baseline.CostOrigin, economicAt, source, baseline.Id);
+            if (economicAt < baseline.BaselineCutAt)
+                return new HistoricalProductCost(baseline.BaselinePriceVersionId, 0, baseline.BaselineUnitCostCents,
+                    baseline.BaselineUnitCostCents, baseline.CostOrigin, economicAt, source, baseline.Id);
+        }
+
+        // Without an approved baseline, a publication remains the client-scoped
+        // commercial snapshot. It is an internal catalog snapshot, never the
+        // listing or order sale price.
+        var publicationSkus = string.IsNullOrWhiteSpace(baseSku)
+            ? new[] { item.SabrVariantSku }
+            : new[] { item.SabrVariantSku, baseSku };
+        if (baseline == null)
+        {
+            var publication = await _db.Publications.AsNoTracking()
+                .Where(x => x.TenantId == order.TenantId && x.ClientId == order.ClientId
+                            && publicationSkus.Contains(x.ProductSku)
+                            && x.CatalogPriceCentsSnapshot > 0)
+                .OrderByDescending(x => x.ProductSku == item.SabrVariantSku)
+                .ThenByDescending(x => x.PriceSnapshotTakenAt)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (publication != null)
+                return new HistoricalProductCost(Guid.Empty, 0, publication.CatalogPriceCentsSnapshot,
+                    publication.CostPriceCentsSnapshot, CatalogPriceOrigins.PublicationSnapshot,
+                    economicAt, source);
         }
         var versions = await _db.ProductPriceVersions.AsNoTracking()
             .Where(x => x.VariantSku == item.SabrVariantSku && x.ValidFrom <= economicAt

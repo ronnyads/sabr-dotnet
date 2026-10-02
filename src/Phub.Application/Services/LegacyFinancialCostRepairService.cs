@@ -17,6 +17,8 @@ public sealed record LegacyFinancialCostRepairResult(
     long CorrectedCostCents,
     long ProfitImpactCents);
 
+public sealed record LegacyFinancialCostRepairScope(string TenantId, Guid ClientId, long SellerId);
+
 /// <summary>
 /// One-time/idempotent repair for legacy product-cost heads created before cost
 /// provenance was mandatory. It never mutates ledger facts: every correction is
@@ -26,40 +28,63 @@ public sealed class LegacyFinancialCostRepairService
 {
     private const string RepairVersion = "LEGACY_PRODUCT_COST_V1";
     private readonly IAppDbContext _db;
-    private readonly FinancialLedgerService _ledger;
     private readonly OperationalFinancialProjectionService _projection;
     private readonly HistoricalProductCostService _historicalCosts;
 
-    public LegacyFinancialCostRepairService(IAppDbContext db, FinancialLedgerService ledger,
+    public LegacyFinancialCostRepairService(IAppDbContext db,
         OperationalFinancialProjectionService projection, HistoricalProductCostService historicalCosts)
     {
         _db = db;
-        _ledger = ledger;
         _projection = projection;
         _historicalCosts = historicalCosts;
     }
 
     public async Task<LegacyFinancialCostRepairResult> RepairAllAsync(
-        bool apply, CancellationToken cancellationToken = default)
+        bool apply, bool rebuildOrderStates = true, LegacyFinancialCostRepairScope? scope = null,
+        CancellationToken cancellationToken = default)
     {
-        var candidates = await (from head in _db.FinancialEconomicHeads.AsNoTracking()
-                                join entry in _db.MarketplaceFinancialEntries.AsNoTracking()
-                                    on head.ActiveEntryId equals entry.Id
-                                join item in _db.MarketplaceOrderItems.AsNoTracking()
-                                    on entry.MarketplaceOrderItemId equals item.Id
-                                join order in _db.MarketplaceOrders.AsNoTracking()
-                                    on item.MarketplaceOrderId equals order.Id
-                                where entry.EntryType == FinancialEntryTypes.ProductCost
-                                      && entry.Status != FinancialEntryStatuses.Voided
-                                orderby entry.ClientId, entry.SellerId, entry.EconomicKey
-                                select new Candidate(head.Id, entry, item, order)).ToListAsync(cancellationToken);
+        var candidateQuery = from head in _db.FinancialEconomicHeads
+                             join entry in _db.MarketplaceFinancialEntries
+                                 on head.ActiveEntryId equals entry.Id
+                             join item in _db.MarketplaceOrderItems
+                                 on entry.MarketplaceOrderItemId equals item.Id
+                             join order in _db.MarketplaceOrders
+                                 on item.MarketplaceOrderId equals order.Id
+                             where entry.EntryType == FinancialEntryTypes.ProductCost
+                                   && entry.Status != FinancialEntryStatuses.Voided
+                             select new { Head = head, Entry = entry, Item = item, Order = order };
+        if (scope != null)
+        {
+            candidateQuery = candidateQuery.Where(x =>
+                x.Entry.TenantId == scope.TenantId
+                && x.Entry.ClientId == scope.ClientId
+                && x.Entry.SellerId == scope.SellerId
+                && x.Item.TenantId == scope.TenantId
+                && x.Item.ClientId == scope.ClientId
+                && x.Item.SellerId == scope.SellerId
+                && x.Order.TenantId == scope.TenantId
+                && x.Order.ClientId == scope.ClientId
+                && x.Order.SellerId == scope.SellerId);
+        }
+        var candidateRows = await candidateQuery
+            .OrderBy(x => x.Entry.ClientId).ThenBy(x => x.Entry.SellerId).ThenBy(x => x.Entry.EconomicKey)
+            .ToListAsync(cancellationToken);
+        var candidates = candidateRows.Select(x => new Candidate(x.Head, x.Entry, x.Item, x.Order)).ToList();
 
         var accounts = new HashSet<(string TenantId, Guid ClientId, long SellerId)>();
         var affectedOrders = new HashSet<Guid>();
+        var resolvedCostCache = new Dictionary<(string TenantId, Guid ClientId, string Sku), HistoricalProductCost?>();
         var replaced = 0;
         var voided = 0;
         long before = 0;
         long after = 0;
+        var ownsTransaction = apply && _db.Database.IsRelational() && _db.Database.CurrentTransaction == null;
+        await using var transaction = ownsTransaction
+            ? await _db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+        var efContext = _db as DbContext;
+        if (apply && efContext != null)
+            efContext.ChangeTracker.AutoDetectChangesEnabled = false;
 
         foreach (var row in candidates)
         {
@@ -69,7 +94,19 @@ public sealed class LegacyFinancialCostRepairService
                                       && !row.Item.ExternalUnitCostCentsSnapshot.HasValue;
             HistoricalProductCost? resolved = null;
             if (!externalWithoutCost && !string.IsNullOrWhiteSpace(row.Item.SabrVariantSku))
-                resolved = await _historicalCosts.ResolveAsync(row.Order, row.Item, cancellationToken);
+            {
+                var cacheKey = (row.Order.TenantId, row.Order.ClientId, row.Item.SabrVariantSku);
+                if (!resolvedCostCache.TryGetValue(cacheKey, out var cached))
+                {
+                    cached = await _historicalCosts.ResolveAsync(row.Order, row.Item, cancellationToken);
+                    if (cached?.Origin == CatalogPriceOrigins.PublicationSnapshot)
+                        resolvedCostCache[cacheKey] = cached;
+                }
+                resolved = cached;
+                var economicAt = HistoricalProductCostService.ResolveEconomicAt(row.Order);
+                if (resolved != null && economicAt.HasValue)
+                    resolved = resolved with { EconomicAt = economicAt.Value.EconomicAt, EconomicAtSource = economicAt.Value.Source };
+            }
 
             var expected = resolved == null ? (long?)null : -checked(resolved.CatalogPriceCents * row.Item.Quantity);
             var metadataMissing = string.IsNullOrWhiteSpace(row.Item.CostSource);
@@ -85,10 +122,6 @@ public sealed class LegacyFinancialCostRepairService
             affectedOrders.Add(row.Order.Id);
             if (!apply) continue;
 
-            var ownsTransaction = _db.Database.IsRelational() && _db.Database.CurrentTransaction == null;
-            await using var transaction = ownsTransaction
-                ? await _db.Database.BeginTransactionAsync(cancellationToken)
-                : null;
             var payload = JsonSerializer.Serialize(new
             {
                 repair = RepairVersion,
@@ -102,7 +135,7 @@ public sealed class LegacyFinancialCostRepairService
                     ? "Custo externo histórico sem snapshot confiável"
                     : "Reparo global de custo histórico por snapshot do catálogo do cliente"
             });
-            var replacement = await _ledger.AppendAsync(new AppendFinancialEntryRequest
+            var replacement = new MarketplaceFinancialEntry
             {
                 TenantId = row.Entry.TenantId,
                 ClientId = row.Entry.ClientId,
@@ -129,10 +162,17 @@ public sealed class LegacyFinancialCostRepairService
                 SourceEndpoint = "financial-repair/legacy-product-cost-v1",
                 SourceRecordId = row.Entry.Id.ToString("N"),
                 CanonicalPayloadHash = Hash(payload),
-                MetadataJson = payload
-            }, cancellationToken);
+                MetadataJson = payload,
+                SupersedesEntryId = row.Entry.Id,
+                ObservedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            _db.MarketplaceFinancialEntries.Add(replacement);
+            row.Head.ActiveEntryId = replacement.Id;
+            row.Head.Version++;
+            row.Head.UpdatedAt = DateTimeOffset.UtcNow;
 
-            var item = await _db.MarketplaceOrderItems.SingleAsync(x => x.Id == row.Item.Id, cancellationToken);
+            var item = row.Item;
             item.ProductCostEntryId = replacement.Id;
             if (externalWithoutCost)
             {
@@ -164,11 +204,20 @@ public sealed class LegacyFinancialCostRepairService
                     ? InternalCostStatuses.Settled
                     : InternalCostStatuses.Accrued;
             }
+        }
+
+        if (apply)
+        {
+            if (efContext != null)
+            {
+                efContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                efContext.ChangeTracker.DetectChanges();
+            }
             await _db.SaveChangesAsync(cancellationToken);
             if (transaction != null) await transaction.CommitAsync(cancellationToken);
         }
 
-        if (apply)
+        if (apply && rebuildOrderStates)
         {
             foreach (var orderId in affectedOrders.Order())
             {
@@ -185,6 +234,6 @@ public sealed class LegacyFinancialCostRepairService
     private static string Hash(string payload) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
 
-    private sealed record Candidate(Guid HeadId, MarketplaceFinancialEntry Entry,
+    private sealed record Candidate(FinancialEconomicHead Head, MarketplaceFinancialEntry Entry,
         MarketplaceOrderItem Item, MarketplaceOrder Order);
 }
