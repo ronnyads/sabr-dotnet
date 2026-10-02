@@ -27,6 +27,12 @@ public sealed class CatalogController : ControllerBase
         [FromQuery] int skip = 0,
         [FromQuery] int limit = 20,
         [FromQuery] string? search = null,
+        [FromQuery] string? categoryId = null,
+        [FromQuery] string? brand = null,
+        [FromQuery] string stockStatus = "ALL",
+        [FromQuery] string membership = "ALL",
+        [FromQuery] string sort = "NAME",
+        [FromQuery] string direction = "ASC",
         CancellationToken cancellationToken = default)
     {
         if (!TryGetClientContext(out var tenantId, out var clientId, out var errorResult))
@@ -40,8 +46,38 @@ public sealed class CatalogController : ControllerBase
             return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid pagination query", paginationErrors));
         }
 
-        var result = await _catalogService.GetProductsAsync(tenantId!, clientId, skip, limit, search, cancellationToken);
+        var allowedStockStatuses = new[] { "ALL", "IN_STOCK", "OUT_OF_STOCK" };
+        var allowedMemberships = new[] { "ALL", "ADDED", "NOT_ADDED" };
+        var allowedSorts = new[] { "RELEVANCE", "NEWEST", "NAME", "PRICE", "STOCK" };
+        var allowedDirections = new[] { "ASC", "DESC" };
+        stockStatus = stockStatus.Trim().ToUpperInvariant();
+        membership = membership.Trim().ToUpperInvariant();
+        sort = sort.Trim().ToUpperInvariant();
+        direction = direction.Trim().ToUpperInvariant();
+        if (!allowedStockStatuses.Contains(stockStatus) ||
+            !allowedMemberships.Contains(membership) ||
+            !allowedSorts.Contains(sort) ||
+            !allowedDirections.Contains(direction))
+        {
+            return BadRequest(CreateApiError("VALIDATION_ERROR", "Invalid catalog filter"));
+        }
+
+        var result = await _catalogService.GetProductsAsync(
+            tenantId!, clientId, skip, limit, search, categoryId, brand,
+            stockStatus, membership, sort, direction, cancellationToken);
         return Ok(result);
+    }
+
+    [HttpGet("{sku}")]
+    public async Task<IActionResult> Get([FromRoute] string sku, CancellationToken cancellationToken = default)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var errorResult))
+        {
+            return errorResult!;
+        }
+
+        var result = await _catalogService.GetProductAsync(tenantId!, clientId, sku, cancellationToken);
+        return result == null ? NotFound(CreateApiError("CATALOG_PRODUCT_NOT_FOUND", "Product not found")) : Ok(result);
     }
 
     private bool TryGetClientContext(out string? tenantId, out Guid clientId, out IActionResult? errorResult)

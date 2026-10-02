@@ -30,6 +30,15 @@ updated: 2026-09-19
 
 `Public` fica disponível para qualquer cliente aprovado. `PlanRestricted` exige catálogo ligado a plano e assinatura válida. A migration cria o Catálogo Público padrão e associa produtos ativos.
 
+### Portal do seller V2 — piloto do Catálogo (02/10/2026)
+
+- `GET /api/v1/catalog/products` passou a aceitar busca por nome, SKU interno, marca e categoria, além de filtros de categoria, marca, estoque e vínculo, ordenação e paginação server-side.
+- A resposta inclui facets calculadas somente sobre o catálogo autorizado do tenant/cliente, bem como marca, categoria, quantidade de variações, data de criação e situação em **Meus Produtos**.
+- `GET /api/v1/catalog/products/{sku}` carrega sob demanda imagens, variações, estoque, dimensões, NCM/EAN e dados ANATEL disponíveis. A mesma autorização do catálogo é reaplicada no detalhe.
+- Identificadores externos de marketplace (`MLB...`) são excluídos da listagem e rejeitados no detalhe; anúncio e produto interno continuam sendo registros distintos.
+- O portal oferece cards/lista, filtros na URL, preferência visual local e drawer acessível de detalhes. A inclusão em **Meus Produtos** reutiliza o comando idempotente existente e não permite ao seller criar, renomear ou alterar custo de SKU mestre.
+- O shell do seller ganhou navegação agrupada, breadcrumbs e saldo da carteira no topo; os fluxos financeiros, de reserva e de isolamento por tenant permanecem inalterados.
+
 ## Vínculo pendente e pagamento
 
 - O editor de vínculo é oferecido dentro do item do pedido para Mercado Livre e demais providers normalizados; o cliente escolhe uma variante autorizada do catálogo sem editar o SKU mestre.

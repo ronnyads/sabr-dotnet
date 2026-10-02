@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Phub.Api.Tests.TestHost;
 using Phub.Application.Models;
+using Phub.Domain.Entities;
 using Phub.Infrastructure.Persistence;
 
 namespace Phub.Api.Tests.Integration;
@@ -29,16 +30,47 @@ public sealed class CatalogHttpTests : IClassFixture<TestWebApplicationFactory>
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await TestDataSeeder.SeedTenantAsync(db, tenantId, slug);
             await TestDataSeeder.SeedClientCatalogGraphAsync(db, tenantId, clientId, allowedSku: "SKU-777", blockedSku: "SKU-999");
+
+            var authorizedCatalogId = db.ProductCatalogs.Single(item => item.ProductSku == "SKU-777").CatalogId;
+            db.Products.Add(new Product
+            {
+                Sku = "MLB123456789",
+                Name = "Marketplace listing that is not an internal product",
+                CatalogPriceCents = 9999,
+                CostPriceCents = 9999,
+                IsActive = true
+            });
+            db.ProductCatalogs.Add(new ProductCatalog
+            {
+                CatalogId = authorizedCatalogId,
+                ProductSku = "MLB123456789"
+            });
+            db.ProductVariants.Add(new ProductVariant
+            {
+                BaseSku = "SKU-777",
+                VariantSku = "SKU-777-RED",
+                Name = "Red",
+                AvailableStock = 12,
+                PhysicalStock = 12,
+                SafetyBuffer = 0,
+                CatalogPriceCents = 1500,
+                CostPriceCents = 1000,
+                IsActive = true
+            });
+            await db.SaveChangesAsync();
         }
 
         using var client = _factory.CreateTenantClient(slug, tenantId, clientId);
 
         var listResponse = await client.GetAsync("/api/v1/catalog/products?skip=0&limit=20");
         Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
-        var list = await listResponse.Content.ReadFromJsonAsync<PagedResult<CatalogProductDto>>();
+        var list = await listResponse.Content.ReadFromJsonAsync<CatalogProductPageDto>();
         Assert.NotNull(list);
         Assert.Contains(list!.Items, item => item.Sku == "SKU-777");
         Assert.DoesNotContain(list.Items, item => item.Sku == "SKU-999");
+        Assert.DoesNotContain(list.Items, item => item.Sku.StartsWith("MLB", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, list.Total);
+        Assert.Equal(1, list.Facets.InStockCount);
 
         var searchBySku = await client.GetAsync("/api/v1/catalog/products?skip=0&limit=20&search=sku-777");
         Assert.Equal(HttpStatusCode.OK, searchBySku.StatusCode);
@@ -66,5 +98,19 @@ public sealed class CatalogHttpTests : IClassFixture<TestWebApplicationFactory>
         Assert.NotNull(apiError);
         Assert.Equal("VALIDATION_ERROR", apiError!.Code);
         Assert.False(string.IsNullOrWhiteSpace(apiError.TraceId));
+
+        var detailResponse = await client.GetAsync("/api/v1/catalog/products/SKU-777");
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        var detail = await detailResponse.Content.ReadFromJsonAsync<CatalogProductDetailDto>();
+        Assert.NotNull(detail);
+        Assert.Equal("SKU-777", detail!.Sku);
+        Assert.Equal(12, detail.AvailableStock);
+        Assert.Single(detail.Variants);
+
+        var forbiddenDetail = await client.GetAsync("/api/v1/catalog/products/SKU-999");
+        Assert.Equal(HttpStatusCode.NotFound, forbiddenDetail.StatusCode);
+
+        var rawMarketplaceDetail = await client.GetAsync("/api/v1/catalog/products/MLB123456789");
+        Assert.Equal(HttpStatusCode.NotFound, rawMarketplaceDetail.StatusCode);
     }
 }
