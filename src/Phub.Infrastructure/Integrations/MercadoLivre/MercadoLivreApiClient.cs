@@ -449,6 +449,64 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<MercadoLivreOrderEventReference>> SearchCancelledOrderEventsAsync(
+        string sellerId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            const int pageSize = 50;
+            var events = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+            for (var offset = 0; ; offset += pageSize)
+            {
+                var requestUri =
+                    $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
+                    $"&order.date_last_updated.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+                    $"&order.date_last_updated.to={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+                    "&order.status=cancelled" +
+                    $"&sort=date_asc&limit={pageSize}&offset={offset}";
+                using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                using var response = await _httpClient.SendAsync(request, ct);
+                await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
+                var json = await response.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(json);
+                var received = 0;
+                if (doc.RootElement.TryGetProperty("results", out var results)
+                    && results.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var entry in results.EnumerateArray())
+                    {
+                        received++;
+                        var id = GetOptionalString(entry, "id");
+                        var occurredAt = TryParseDateTimeOffset(
+                            GetOptionalString(entry, "last_updated")
+                            ?? GetOptionalString(entry, "date_last_updated"));
+                        if (!string.IsNullOrWhiteSpace(id) && occurredAt.HasValue
+                            && occurredAt >= from && occurredAt < to)
+                            events[id] = occurredAt.Value;
+                    }
+                }
+                var total = doc.RootElement.TryGetProperty("paging", out var paging)
+                            && paging.TryGetProperty("total", out var totalElement)
+                    ? ParseInt(totalElement)
+                    : offset + received;
+                if (received == 0 || offset + received >= total) break;
+            }
+
+            return (IReadOnlyList<MercadoLivreOrderEventReference>)events
+                .Select(item => new MercadoLivreOrderEventReference
+                {
+                    OrderId = item.Key,
+                    OccurredAt = item.Value
+                })
+                .ToList();
+        }, cancellationToken);
+    }
+
     public async Task<MercadoLivreOrderDetails?> GetOrderAsync(
         string orderId,
         string accessToken,

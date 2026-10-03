@@ -481,10 +481,20 @@ public sealed class MercadoLivreSyncService
         bool enforceOrderSeller = false)
     {
         var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
+        var cancellationEvents = await _mercadoLivreApiClient.SearchCancelledOrderEventsAsync(
+            MercadoLivreSellerIdParser.ToApiString(connection.SellerId),
+            fromUtc,
+            toUtc,
+            accessToken,
+            cancellationToken);
+        var cancellationByOrderId = cancellationEvents
+            .GroupBy(item => item.OrderId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Max(item => item.OccurredAt), StringComparer.Ordinal);
         IReadOnlyList<string> orderIds;
         if (specificOrderIds != null)
         {
-            orderIds = specificOrderIds;
+            orderIds = specificOrderIds.Concat(cancellationByOrderId.Keys)
+                .Distinct(StringComparer.Ordinal).ToList();
         }
         else
         {
@@ -507,7 +517,8 @@ public sealed class MercadoLivreSyncService
                             && (x.ChannelCreatedAt ?? x.ImportedAt) < toUtc)
                 .Select(x => x.MlOrderId)
                 .ToListAsync(cancellationToken);
-            orderIds = discoveredIds.Concat(knownIds).Distinct(StringComparer.Ordinal).ToList();
+            orderIds = discoveredIds.Concat(knownIds).Concat(cancellationByOrderId.Keys)
+                .Distinct(StringComparer.Ordinal).ToList();
         }
 
         var mappings = await _dbContext.TenantMarketplaceListingMaps
@@ -617,6 +628,9 @@ public sealed class MercadoLivreSyncService
                 result.ResolvedUnavailableOrderIds.Add(remoteOrder.orderId);
                 continue;
             }
+            if (IsCancelledStatus(details.Status)
+                && cancellationByOrderId.TryGetValue(details.MlOrderId, out var cancelledAt))
+                details.CancelledAt ??= cancelledAt;
             result.LocalImported++;
             result.ImportedOrderIds.Add(remoteOrder.orderId);
             if (enforceOrderSeller &&

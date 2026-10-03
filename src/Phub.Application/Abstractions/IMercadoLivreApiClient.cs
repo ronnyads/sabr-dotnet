@@ -39,6 +39,13 @@ public interface IMercadoLivreApiClient
         DateTimeOffset to,
         string accessToken,
         CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MercadoLivreOrderEventReference>> SearchCancelledOrderEventsAsync(
+        string sellerId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<MercadoLivreOrderEventReference>>([]);
     Task<MercadoLivreOrderDetails?> GetOrderAsync(
         string orderId,
         string accessToken,
