@@ -627,9 +627,12 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                     .Distinct(StringComparer.Ordinal).ToList(),
                 Offset = regular.Offset,
                 Limit = regular.Limit,
-                // Diagnostic only. The canonical reconciliation is the distinct
-                // ID set because provider streams may overlap.
-                RemoteReportedTotal = Math.Max(regular.RemoteReportedTotal, cancelled.RemoteReportedTotal),
+                // Mercado Livre excludes cancelled orders from a seller's regular
+                // search. The explicit cancelled stream is therefore disjoint and
+                // both paging totals form the provider control total for this window.
+                ActiveReportedTotal = regular.RemoteReportedTotal,
+                CancelledReportedTotal = cancelled.RemoteReportedTotal,
+                RemoteReportedTotal = checked(regular.RemoteReportedTotal + cancelled.RemoteReportedTotal),
                 HasMore = regular.HasMore || cancelled.HasMore
             };
         }, cancellationToken);

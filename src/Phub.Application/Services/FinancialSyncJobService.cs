@@ -668,7 +668,12 @@ public sealed class FinancialSyncJobService
                 if (!syncResult.Succeeded)
                     throw new InvalidOperationException(string.Join("; ", syncResult.Errors.Select(x => x.Message)));
 
-                var state = JsonSerializer.Deserialize<HistoryChunkResult>(job.ResultJson) ?? new();
+                // Offset zero starts a new provider snapshot. Do not carry IDs from
+                // a previous reconciliation run into the new control total.
+                var previousState = JsonSerializer.Deserialize<HistoryChunkResult>(job.ResultJson);
+                var state = pageCheckpoint.Offset == 0
+                    ? new HistoryChunkResult { IntegrityFailures = previousState?.IntegrityFailures ?? 0 }
+                    : previousState ?? new HistoryChunkResult();
                 state.RemoteReportedByWindow[segmentFrom.ToString("O", CultureInfo.InvariantCulture)] = page.RemoteReportedTotal;
                 MergeOrderStates(state, page.OrderIds, syncResult.Data);
                 job.ResultJson = JsonSerializer.Serialize(state);
@@ -681,15 +686,34 @@ public sealed class FinancialSyncJobService
                 }
                 else
                 {
-                    job.Checkpoint = JsonSerializer.Serialize(new HistoryPageCheckpoint(segmentFrom, 0));
-                    job.Status = state.Orders.Values.Any(x => x == HistoryOrderStates.Gap) ? "PARTIAL" : "COMPLETED";
-                    job.Processed = 1;
-                    job.Total = 1;
-                    job.CompletedAt = DateTimeOffset.UtcNow;
+                    var expected = page.RemoteReportedTotal;
+                    var discovered = state.Orders.Count;
+                    if (discovered != expected)
+                    {
+                        state.IntegrityFailures++;
+                        job.ResultJson = JsonSerializer.Serialize(state);
+                        job.Checkpoint = JsonSerializer.Serialize(new HistoryPageCheckpoint(segmentFrom, 0));
+                        job.Status = state.IntegrityFailures >= 8 ? "FAILED" : "RETRY";
+                        job.NextAttemptAt = job.Status == "RETRY"
+                            ? DateTimeOffset.UtcNow.AddMinutes(Math.Min(30, 1 << Math.Min(state.IntegrityFailures, 4)))
+                            : null;
+                        job.LastError = $"Provider reconciliation mismatch: expected {expected} distinct orders, discovered {discovered}.";
+                        job.CompletedAt = job.Status == "FAILED" ? DateTimeOffset.UtcNow : null;
+                    }
+                    else
+                    {
+                        state.IntegrityFailures = 0;
+                        job.ResultJson = JsonSerializer.Serialize(state);
+                        job.Checkpoint = JsonSerializer.Serialize(new HistoryPageCheckpoint(segmentFrom, 0));
+                        job.Status = state.Orders.Values.Any(x => x == HistoryOrderStates.Gap) ? "PARTIAL" : "COMPLETED";
+                        job.Processed = 1;
+                        job.Total = 1;
+                        job.CompletedAt = DateTimeOffset.UtcNow;
+                        job.NextAttemptAt = null;
+                        job.LastError = null;
+                    }
                 }
                 job.Attempts = 0;
-                job.NextAttemptAt = null;
-                job.LastError = null;
                 _logger.LogInformation("History page completed job={JobId} seller={SellerId} windowFrom={WindowFrom} offset={Offset} chunkStatus={Status}",
                     job.Id, job.SellerId, segmentFrom, page.Offset, job.Status);
             }
@@ -960,6 +984,7 @@ public sealed class FinancialSyncJobService
     {
         public Dictionary<string, long> RemoteReportedByWindow { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> Orders { get; set; } = new(StringComparer.Ordinal);
+        public int IntegrityFailures { get; set; }
     }
 
     private static class HistoryOrderStates

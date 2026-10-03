@@ -426,6 +426,8 @@ public sealed class MercadoLivreOrderSearchPage
     public List<string> OrderIds { get; set; } = [];
     public int Offset { get; set; }
     public int Limit { get; set; }
+    public long ActiveReportedTotal { get; set; }
+    public long CancelledReportedTotal { get; set; }
     public long RemoteReportedTotal { get; set; }
     public bool HasMore { get; set; }
 }

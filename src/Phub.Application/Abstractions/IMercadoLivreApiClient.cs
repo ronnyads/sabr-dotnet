@@ -100,6 +100,8 @@ public interface IMercadoLivreApiClient
             OrderIds = page,
             Offset = Math.Max(0, offset),
             Limit = Math.Clamp(limit, 1, 50),
+            ActiveReportedTotal = all.Count,
+            CancelledReportedTotal = 0,
             RemoteReportedTotal = all.Count,
             HasMore = Math.Max(0, offset) + page.Count < all.Count
         };

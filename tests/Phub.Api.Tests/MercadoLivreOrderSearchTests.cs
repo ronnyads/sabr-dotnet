@@ -142,6 +142,9 @@ public sealed class MercadoLivreOrderSearchTests
             offset: 0, limit: 50, accessToken: "token");
 
         Assert.Equal(new[] { "1", "2", "3" }, page.OrderIds);
+        Assert.Equal(2, page.ActiveReportedTotal);
+        Assert.Equal(2, page.CancelledReportedTotal);
+        Assert.Equal(4, page.RemoteReportedTotal);
     }
 
     private static MercadoLivreApiClient CreateClient(HttpMessageHandler handler)
