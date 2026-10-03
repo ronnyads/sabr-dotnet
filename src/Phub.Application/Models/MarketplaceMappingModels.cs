@@ -92,6 +92,9 @@ public sealed class MarketplaceUpsertMappingRequest
     public string ExternalItemId { get; set; } = string.Empty;
     public string? ExternalVariationId { get; set; }
     public string SelectedCatalogSku { get; set; } = string.Empty;
+    public string? ExternalChannelSku { get; set; }
+    public bool ConfirmSkuMismatch { get; set; }
+    public string? MismatchReason { get; set; }
 }
 
 public sealed class MarketplaceMappingReanalysisResult

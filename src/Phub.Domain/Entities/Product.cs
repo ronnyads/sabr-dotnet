@@ -10,7 +10,10 @@ public sealed class Product
     }
     public string Name { get; set; } = string.Empty;
     public string Brand { get; set; } = string.Empty;
+    public string? SupplierName { get; set; }
     public string? Ncm { get; set; }
+    public string? Cest { get; set; }
+    public string? FiscalOrigin { get; set; }
     public string? Ean { get; set; }
     public string? Description { get; set; }
     public string? CategoryId { get; set; }

@@ -152,9 +152,12 @@ public sealed class CatalogService
                 item.Sku,
                 item.Name,
                 item.Brand,
+                item.SupplierName,
                 item.Description,
                 item.CategoryId,
                 item.Ncm,
+                item.Cest,
+                item.FiscalOrigin,
                 item.Ean,
                 item.CatalogPriceCents,
                 item.WidthCm,
@@ -176,6 +179,7 @@ public sealed class CatalogService
             .ThenBy(item => item.VariantSku)
             .Select(item => new CatalogProductVariantDto
             {
+                VariantId = item.VariantSku,
                 Sku = item.VariantSku,
                 Name = item.Name,
                 AvailableStock = item.AvailableStock,
@@ -188,6 +192,7 @@ public sealed class CatalogService
             .ThenBy(item => item.SortOrder)
             .Select(item => new CatalogProductImageDto
             {
+                Id = item.Id.ToString(),
                 Url = item.Url,
                 Position = item.SortOrder,
                 IsPrimary = item.IsPrimary
@@ -205,13 +210,17 @@ public sealed class CatalogService
 
         return new CatalogProductDetailDto
         {
+            ProductId = product.Sku,
             Sku = product.Sku,
             Name = product.Name,
             Brand = product.Brand,
+            Supplier = product.SupplierName,
             Description = product.Description,
             CategoryId = product.CategoryId,
             CategoryName = categoryName,
             Ncm = product.Ncm,
+            Cest = product.Cest,
+            FiscalOrigin = product.FiscalOrigin,
             Ean = product.Ean,
             CatalogPriceCents = product.CatalogPriceCents,
             AvailableStock = variants.Sum(item => item.AvailableStock),
@@ -223,7 +232,41 @@ public sealed class CatalogService
             RequiresAnatel = product.RequiresAnatel,
             AnatelHomologationNumber = product.AnatelHomologationNumber,
             Images = images,
-            Variants = variants
+            Variants = variants,
+            FieldAuthority = "CATALOG",
+            QualityStatus = BuildQualityStatus(product.Ncm, product.Cest, product.Ean,
+                product.WidthCm, product.HeightCm, product.LengthCm, product.WeightKg, images.Count)
+        };
+    }
+
+    private static CatalogProductQualityDto BuildQualityStatus(
+        string? ncm,
+        string? cest,
+        string? ean,
+        decimal? widthCm,
+        decimal? heightCm,
+        decimal? lengthCm,
+        decimal? weightKg,
+        int imageCount)
+    {
+        var missing = new List<string>();
+        var fiscalComplete = !string.IsNullOrWhiteSpace(ncm);
+        var dimensionsComplete = widthCm > 0 && heightCm > 0 && lengthCm > 0 && weightKg > 0;
+        var gtinComplete = !string.IsNullOrWhiteSpace(ean);
+        var imagesComplete = imageCount > 0;
+        if (!fiscalComplete) missing.Add("ncm");
+        if (string.IsNullOrWhiteSpace(cest)) missing.Add("cest");
+        if (!dimensionsComplete) missing.Add("dimensions");
+        if (!gtinComplete) missing.Add("gtin");
+        if (!imagesComplete) missing.Add("images");
+
+        return new CatalogProductQualityDto
+        {
+            FiscalComplete = fiscalComplete,
+            DimensionsComplete = dimensionsComplete,
+            GtinComplete = gtinComplete,
+            ImagesComplete = imagesComplete,
+            MissingFields = missing
         };
     }
 

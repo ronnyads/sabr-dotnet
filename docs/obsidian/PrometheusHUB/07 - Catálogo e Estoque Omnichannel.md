@@ -110,3 +110,14 @@ Endpoints do portal:
 ## Rollback
 
 As migrations são aditivas. Em incidente, interromper workers/escrita remota antes de reverter a aplicação. Não apagar snapshots históricos nem diminuir `inventoryVersion`; manter colunas novas até a versão anterior voltar a operar com segurança.
+
+## Publicação de Catálogo V2 — produto mestre protegido
+
+- O fluxo do seller é `Produto do catálogo -> Configuração do anúncio -> Publicação por canal`. Ele não cria nem altera o produto mestre.
+- `Product` e `ProductVariant` permanecem como fonte atual de verdade para SKU, GTIN, fiscal, marca, fornecedor, estoque, dimensões, imagens e Preço Catálogo. O rascunho guarda somente referências e overrides de publicação autorizados.
+- `CostPriceCents` é informação administrativa e não integra contratos do seller. O simulador resolve no servidor o `CatalogPriceCents` vigente como custo comercial do seller.
+- `get`, `upsert`, `validate`, estimativa e `publish` revalidam tenant, cliente, seller, integração, autorização do catálogo e pertencimento da variante. Campos mestre enviados no payload são rejeitados.
+- Alterações administrativas anteriores à publicação são relidas na validação final. Snapshots são criados somente após fatos efetivos para auditoria; nunca alimentam uma nova publicação.
+- O contrato `/api/v1/client/publications/capabilities` declara recursos efetivamente suportados por Mercado Livre e TikTok Shop; a interface não simula capacidades ausentes.
+- Vínculo de anúncio com SKU divergente exige confirmação e motivo, preservados na auditoria com as duas identidades.
+- Pendências retornam `issueSource`, `remediation`, `fieldPath`, etapa, severidade e bloqueio para separar correção administrativa de edição do anúncio.

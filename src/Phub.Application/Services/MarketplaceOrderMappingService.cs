@@ -294,6 +294,59 @@ public sealed class MarketplaceOrderMappingService
         }
 
         var normalizedVariationId = NormalizeNullable(request.ExternalVariationId);
+        var matchingOrderItems = await _dbContext.MarketplaceOrderItems.AsNoTracking()
+            .Where(item => item.TenantId == tenantId
+                           && item.ClientId == clientId
+                           && item.Provider == request.Provider
+                           && item.SellerId == connection.Data.SellerId
+                           && item.MlItemId == normalizedItemId
+                           && item.MlVariationId == normalizedVariationId)
+            .OrderByDescending(item => item.CreatedAt)
+            .Take(10)
+            .ToListAsync(cancellationToken);
+        var authoritativeChannelSku = matchingOrderItems
+            .Select(item => FindChannelMetadata(item).ChannelSku)
+            .FirstOrDefault(item => !string.IsNullOrWhiteSpace(item));
+        var externalChannelSku = NormalizeNullable(authoritativeChannelSku)
+                                 ?? NormalizeNullable(request.ExternalChannelSku);
+        if (externalChannelSku?.Length > 120)
+        {
+            return ServiceResult<MarketplaceMappingListItemDto>.Failure(
+                ServiceErrorCodes.ValidationError,
+                "externalChannelSku",
+                "O SKU do anuncio deve ter no maximo 120 caracteres.");
+        }
+
+        var comparableChannelSku = NormalizeComparableChannelSku(externalChannelSku);
+        var hasSkuMismatch = !string.IsNullOrWhiteSpace(comparableChannelSku)
+                             && !string.Equals(
+                                 comparableChannelSku,
+                                 resolvedVariant.Data.VariantSku,
+                                 StringComparison.Ordinal);
+        if (hasSkuMismatch && !request.ConfirmSkuMismatch)
+        {
+            return ServiceResult<MarketplaceMappingListItemDto>.Failure(
+                ServiceErrorCodes.ValidationError,
+                "confirmSkuMismatch",
+                "O SKU do anuncio diverge do SKU interno. Confirme o vinculo manual para continuar.");
+        }
+
+        var mismatchReason = request.MismatchReason?.Trim();
+        if (hasSkuMismatch && string.IsNullOrWhiteSpace(mismatchReason))
+        {
+            return ServiceResult<MarketplaceMappingListItemDto>.Failure(
+                ServiceErrorCodes.ValidationError,
+                "mismatchReason",
+                "Informe o motivo do vinculo entre SKUs divergentes.");
+        }
+        if (mismatchReason?.Length > 500)
+        {
+            return ServiceResult<MarketplaceMappingListItemDto>.Failure(
+                ServiceErrorCodes.ValidationError,
+                "mismatchReason",
+                "O motivo deve ter no maximo 500 caracteres.");
+        }
+
         var existing = await _dbContext.TenantMarketplaceListingMaps.FirstOrDefaultAsync(
             item => item.TenantId == tenantId
                     && item.ClientId == clientId
@@ -315,7 +368,7 @@ public sealed class MarketplaceOrderMappingService
                 SellerId = connection.Data.SellerId,
                 MlItemId = normalizedItemId,
                 MlVariationId = normalizedVariationId,
-                ChannelSku = NormalizeSku(request.SelectedCatalogSku),
+                ChannelSku = externalChannelSku ?? resolvedVariant.Data.VariantSku,
                 SabrVariantSku = resolvedVariant.Data.VariantSku,
                 MappingVersion = 1
             };
@@ -330,7 +383,7 @@ public sealed class MarketplaceOrderMappingService
             existing.IntegrationId = connection.Data.Id;
             existing.SellerId = connection.Data.SellerId;
             existing.SabrVariantSku = resolvedVariant.Data.VariantSku;
-            existing.ChannelSku = NormalizeSku(request.SelectedCatalogSku);
+            existing.ChannelSku = externalChannelSku ?? resolvedVariant.Data.VariantSku;
             existing.MappingVersion++;
             existing.UpdatedAt = DateTimeOffset.UtcNow;
             action = "updated";
@@ -387,6 +440,10 @@ public sealed class MarketplaceOrderMappingService
                 existing.SabrVariantSku,
                 existing.MappingVersion,
                 action,
+                externalChannelSku,
+                selectedCatalogSku = resolvedVariant.Data.VariantSku,
+                skuMismatchConfirmed = hasSkuMismatch,
+                mismatchReason = hasSkuMismatch ? mismatchReason : null,
                 addedToMyProducts = !clientOwnsProduct
             })
         });
@@ -1486,6 +1543,16 @@ public sealed class MarketplaceOrderMappingService
 
     private static string? NormalizeSku(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : Sku.Normalize(value);
+
+    private static string? NormalizeComparableChannelSku(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return Sku.TryParse(value, out var parsed) ? parsed.Value : value.Trim();
+    }
 
     private static long? NormalizeSellerId(MarketplaceProvider provider, string? sellerId)
     {

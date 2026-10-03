@@ -44,13 +44,17 @@ public sealed class CatalogFacetOptionDto
 
 public sealed class CatalogProductDetailDto
 {
+    public string ProductId { get; set; } = string.Empty;
     public string Sku { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string Brand { get; set; } = string.Empty;
+    public string? Supplier { get; set; }
     public string? Description { get; set; }
     public string? CategoryId { get; set; }
     public string? CategoryName { get; set; }
     public string? Ncm { get; set; }
+    public string? Cest { get; set; }
+    public string? FiscalOrigin { get; set; }
     public string? Ean { get; set; }
     public long CatalogPriceCents { get; set; }
     public int AvailableStock { get; set; }
@@ -63,10 +67,22 @@ public sealed class CatalogProductDetailDto
     public string? AnatelHomologationNumber { get; set; }
     public List<CatalogProductImageDto> Images { get; set; } = new();
     public List<CatalogProductVariantDto> Variants { get; set; } = new();
+    public string FieldAuthority { get; set; } = "CATALOG";
+    public CatalogProductQualityDto QualityStatus { get; set; } = new();
+}
+
+public sealed class CatalogProductQualityDto
+{
+    public bool FiscalComplete { get; set; }
+    public bool DimensionsComplete { get; set; }
+    public bool GtinComplete { get; set; }
+    public bool ImagesComplete { get; set; }
+    public List<string> MissingFields { get; set; } = new();
 }
 
 public sealed class CatalogProductImageDto
 {
+    public string Id { get; set; } = string.Empty;
     public string Url { get; set; } = string.Empty;
     public int Position { get; set; }
     public bool IsPrimary { get; set; }
@@ -74,6 +90,7 @@ public sealed class CatalogProductImageDto
 
 public sealed class CatalogProductVariantDto
 {
+    public string VariantId { get; set; } = string.Empty;
     public string Sku { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public int AvailableStock { get; set; }

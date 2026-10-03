@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Phub.Api.Tests.TestHost;
 using Phub.Application.Models;
@@ -112,5 +113,60 @@ public sealed class CatalogHttpTests : IClassFixture<TestWebApplicationFactory>
 
         var rawMarketplaceDetail = await client.GetAsync("/api/v1/catalog/products/MLB123456789");
         Assert.Equal(HttpStatusCode.NotFound, rawMarketplaceDetail.StatusCode);
+    }
+
+    [Fact]
+    public async Task ProductCorrectionRequest_RequiresCatalogAuthorization_AndAuditsAuthorizedRequest()
+    {
+        const string tenantId = "tenant-correction";
+        const string slug = "tenantcorrection";
+        var clientId = Guid.NewGuid();
+
+        await _factory.ResetDatabaseAsync();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await TestDataSeeder.SeedTenantAsync(db, tenantId, slug);
+            await TestDataSeeder.SeedClientCatalogGraphAsync(
+                db,
+                tenantId,
+                clientId,
+                allowedSku: "SKU-CORRECTION-ALLOWED",
+                blockedSku: "SKU-CORRECTION-BLOCKED");
+        }
+
+        using var client = _factory.CreateTenantClient(slug, tenantId, clientId);
+        var blockedResponse = await client.PostAsJsonAsync(
+            "/api/v1/client/publications/product-correction-requests",
+            new ProductCorrectionRequest
+            {
+                ProductId = "SKU-CORRECTION-BLOCKED",
+                Fields = new List<string> { "NCM" },
+                Message = "Corrigir NCM."
+            });
+        Assert.Equal(HttpStatusCode.NotFound, blockedResponse.StatusCode);
+
+        var acceptedResponse = await client.PostAsJsonAsync(
+            "/api/v1/client/publications/product-correction-requests",
+            new ProductCorrectionRequest
+            {
+                ProductId = " sku-correction-allowed ",
+                Fields = new List<string> { "ncm", "NCM", "gtin" },
+                Message = " Corrigir dados fiscais. "
+            });
+        Assert.Equal(HttpStatusCode.Accepted, acceptedResponse.StatusCode);
+        var accepted = await acceptedResponse.Content.ReadFromJsonAsync<ProductCorrectionRequestResult>();
+        Assert.NotNull(accepted);
+        Assert.NotEqual(Guid.Empty, accepted!.RequestId);
+        Assert.Equal("OPEN", accepted.Status);
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var audit = await verifyDb.AuditEvents.AsNoTracking().SingleAsync(item =>
+            item.TenantId == tenantId &&
+            item.RequestId == accepted.RequestId &&
+            item.Action == "ProductCorrection.Requested");
+        Assert.Contains("SKU-CORRECTION-ALLOWED", audit.MetadataJson);
+        Assert.Contains("Corrigir dados fiscais.", audit.MetadataJson);
     }
 }

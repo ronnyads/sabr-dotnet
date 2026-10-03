@@ -2,6 +2,35 @@ using System.Text.Json.Serialization;
 
 namespace Phub.Application.Models;
 
+public sealed class ProductCorrectionRequest
+{
+    public string ProductId { get; set; } = string.Empty;
+    public List<string> Fields { get; set; } = new();
+    public string Message { get; set; } = string.Empty;
+}
+
+public sealed class ProductCorrectionRequestResult
+{
+    public Guid RequestId { get; set; }
+    public string Status { get; set; } = "OPEN";
+}
+
+public sealed class PublicationProviderCapabilityResult
+{
+    public string Provider { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public bool Connected { get; set; }
+    public bool Categories { get; set; }
+    public bool Attributes { get; set; }
+    public bool Variations { get; set; }
+    public bool CatalogImages { get; set; }
+    public bool PublicationMedia { get; set; }
+    public bool Shipping { get; set; }
+    public bool Warranty { get; set; }
+    public bool PricingSimulator { get; set; }
+    public bool LinkExisting { get; set; }
+}
+
 public sealed class ListingDraftUpsertRequest
 {
     public Guid? DraftId { get; set; }
@@ -37,7 +66,7 @@ public sealed class ListingDraftUpsertRequest
     public string? WarrantyTime { get; set; }  // "90 dias" | "6 meses" | "12 meses" | "24 meses"
 
     // ML: Frete grátis
-    public bool FreeShipping { get; set; } = false;
+    public bool? FreeShipping { get; set; }
 }
 
 public sealed class ListingDraftVariationRequest
@@ -91,6 +120,14 @@ public sealed class ListingDraftResult
     public string? Origin { get; set; }
     public List<ListingDraftImageRequest> Images { get; set; } = new();
     public List<ListingDraftAttributeRequest> Attributes { get; set; } = new();
+    public decimal? OperationalCost { get; set; }
+    public string PublishMode { get; set; } = "SingleVariant";
+    public List<string> SelectedVariantSkus { get; set; } = new();
+    public List<string> VariationAxes { get; set; } = new();
+    public List<ListingDraftVariationRequest> Variations { get; set; } = new();
+    public string? WarrantyType { get; set; }
+    public string? WarrantyTime { get; set; }
+    public bool FreeShipping { get; set; }
     public string Status { get; set; } = "Draft";
     public string RowVersion { get; set; } = string.Empty;
     public DateTimeOffset UpdatedAt { get; set; }
@@ -201,6 +238,9 @@ public sealed class ListingDraftValidationIssueResult
     public string Message { get; set; } = string.Empty;
     public string Severity { get; set; } = "error";
     public string Step { get; set; } = "review";
+    public string IssueSource { get; set; } = "PUBLICATION";
+    public string Remediation { get; set; } = "EDIT_HERE";
+    public bool Blocking { get; set; } = true;
 }
 
 public sealed class ListingPublicationsQueryRequest
@@ -251,6 +291,7 @@ public sealed class MarketplaceFeesEstimateRequest
     public Guid? IntegrationId { get; set; }
     public string? Channel { get; set; }
     public string? SellerId { get; set; }
+    public string? VariantSku { get; set; }
     public string? SiteId { get; set; }
     public string? CategoryId { get; set; }
     public string? ListingTypeId { get; set; }
@@ -272,6 +313,10 @@ public sealed class MarketplaceFeesEstimateResult
     public decimal FixedFee { get; set; }
     public decimal TotalFees { get; set; }
     public decimal ProductCost { get; set; }
+    public string CostSource { get; set; } = "CATALOG_PRICE";
+    public string CostStatus { get; set; } = "RESOLVED";
+    public decimal? ShippingCost { get; set; }
+    public string ShippingStatus { get; set; } = "NOT_CALCULATED";
     public decimal OperationalCost { get; set; }
     public decimal EstimatedProfit { get; set; }
     public decimal? MarginPercent { get; set; }

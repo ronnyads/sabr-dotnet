@@ -14,7 +14,8 @@ public interface IListingFeeService
         Guid clientId,
         MarketplaceFeesEstimateRequest request,
         CancellationToken cancellationToken = default,
-        string? traceId = null);
+        string? traceId = null,
+        bool enforceProtectedCatalog = false);
 }
 
 /// <summary>
@@ -49,13 +50,15 @@ public interface IListingPublishService
         string tenantId,
         Guid clientId,
         ListingDraftValidateRequest request,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool enforceProtectedCatalog = false);
 
     Task<ServiceResult<ListingDraftPublishResult>> PublishAsync(
         string tenantId,
         Guid clientId,
         ListingDraftPublishRequest request,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool enforceProtectedCatalog = false);
 }
 
 /// <summary>
@@ -83,12 +86,14 @@ public interface IListingDraftCrudService
         Guid clientId,
         ListingDraftUpsertRequest request,
         CancellationToken cancellationToken = default,
-        string? traceId = null);
+        string? traceId = null,
+        bool enforceProtectedCatalog = false);
 
     Task<ServiceResult<ListingDraftGetResult>> GetAsync(
         string tenantId,
         Guid clientId,
         ListingDraftGetRequest request,
         CancellationToken cancellationToken = default,
-        string? traceId = null);
+        string? traceId = null,
+        bool enforceProtectedCatalog = false);
 }

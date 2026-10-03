@@ -12,6 +12,7 @@ namespace Phub.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/v1/client/marketplaces/fees")]
+[Route("api/v1/client/publications/fees")]
 public sealed class ClientMarketplaceFeesController : ControllerBase
 {
     private readonly ITenantProvider _tenantProvider;
@@ -45,7 +46,10 @@ public sealed class ClientMarketplaceFeesController : ControllerBase
                 clientId,
                 request ?? new MarketplaceFeesEstimateRequest(),
                 cancellationToken,
-                HttpContext.TraceIdentifier);
+                HttpContext.TraceIdentifier,
+                Request.Path.StartsWithSegments(
+                    "/api/v1/client/publications/fees",
+                    StringComparison.OrdinalIgnoreCase));
             if (!result.Succeeded || result.Data == null)
             {
                 return MapValidationError(result.Errors);
@@ -112,6 +116,10 @@ public sealed class ClientMarketplaceFeesController : ControllerBase
             "SELLER_MISMATCH_FOR_INTEGRATION" => "Seller does not match integration.",
             "INVALID_SELLER_INTEGRATION" => "Seller does not match selected integration.",
             "SELLER_INVALID" => "SellerId must be numeric.",
+            "VARIANT_SKU_REQUIRED" => "variantSku is required.",
+            "CATALOG_PRODUCT_NOT_AUTHORIZED" => "Product is not available in this client's catalog.",
+            "PRODUCT_NOT_FOUND" => "Product not found.",
+            "CATALOG_COST_PENDING" => "Catalog price is not available for this product.",
             "ML_AUTH_INVALID" => "Mercado Livre authentication is invalid. Reconnect integration.",
             "ML_FEES_INPUT_INVALID" => "Categoria, tipo de anuncio ou preco invalido no Mercado Livre.",
             "ML_UNAVAILABLE" => "Marketplace fees estimate unavailable.",
@@ -129,6 +137,10 @@ public sealed class ClientMarketplaceFeesController : ControllerBase
             "SELLER_MISMATCH_FOR_INTEGRATION" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "INVALID_SELLER_INTEGRATION" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "SELLER_INVALID" => UnprocessableEntity(CreateApiError(code, message, errors)),
+            "VARIANT_SKU_REQUIRED" => UnprocessableEntity(CreateApiError(code, message, errors)),
+            "CATALOG_PRODUCT_NOT_AUTHORIZED" => UnprocessableEntity(CreateApiError(code, message, errors)),
+            "PRODUCT_NOT_FOUND" => UnprocessableEntity(CreateApiError(code, message, errors)),
+            "CATALOG_COST_PENDING" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "ML_AUTH_INVALID" => Unauthorized(CreateApiError(code, message, errors)),
             "ML_FEES_INPUT_INVALID" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "ML_UNAVAILABLE" => StatusCode(503, CreateApiError(code, message, errors)),

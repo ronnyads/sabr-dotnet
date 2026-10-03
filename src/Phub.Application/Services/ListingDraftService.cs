@@ -20,6 +20,10 @@ using Phub.Domain.ValueObjects;
 
 namespace Phub.Application.Services;
 
+/// <summary>
+/// A tela de publicação publica produtos existentes; ela nunca substitui o cadastro administrativo.
+/// Product é a fonte atual de verdade e ListingDraft guarda somente a configuração comercial do canal.
+/// </summary>
 public sealed class ListingDraftService :
     IListingDraftCrudService,
     IListingFeeService,
@@ -33,6 +37,15 @@ public sealed class ListingDraftService :
     private const string AxisValidationMetadataSeparator = "::";
     private const string MercadoLivreChannel = "mercadolivre";
     private const int MaxTitleLength = 60;
+    private static readonly HashSet<string> MasterProductAttributeIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "GTIN",
+        "NCM",
+        "CEST",
+        "ORIGIN",
+        "BRAND",
+        "SELLER_SKU"
+    };
     private static readonly Meter PublishMeter = new("Phub.ListingDraft.Publish", "1.0.0");
     private static readonly Counter<long> MlPublishInputInvalidCounter = PublishMeter.CreateCounter<long>("ml_publish_input_invalid_total");
     private static readonly Counter<long> MlPublishUnavailableCounter = PublishMeter.CreateCounter<long>("ml_publish_unavailable_total");
@@ -64,6 +77,7 @@ public sealed class ListingDraftService :
     private readonly IMemoryCache _memoryCache;
     private readonly MercadoLivreOptions _mercadoLivreOptions;
     private readonly MarketplaceCategoryResolver _marketplaceCategoryResolver;
+    private readonly CatalogAuthorizationService _catalogAuthorization;
     private readonly ILogger<ListingDraftService> _logger;
     private readonly bool _isNpgsqlProvider;
 
@@ -76,6 +90,7 @@ public sealed class ListingDraftService :
         IMemoryCache memoryCache,
         IOptions<MercadoLivreOptions> mercadoLivreOptions,
         MarketplaceCategoryResolver marketplaceCategoryResolver,
+        CatalogAuthorizationService catalogAuthorization,
         ILogger<ListingDraftService> logger)
     {
         _dbContext = dbContext;
@@ -86,6 +101,7 @@ public sealed class ListingDraftService :
         _memoryCache = memoryCache;
         _mercadoLivreOptions = mercadoLivreOptions.Value;
         _marketplaceCategoryResolver = marketplaceCategoryResolver;
+        _catalogAuthorization = catalogAuthorization;
         _logger = logger;
         _isNpgsqlProvider = string.Equals(
             (_dbContext as DbContext)?.Database.ProviderName,
@@ -98,7 +114,8 @@ public sealed class ListingDraftService :
         Guid clientId,
         ListingDraftUpsertRequest request,
         CancellationToken cancellationToken = default,
-        string? traceId = null)
+        string? traceId = null,
+        bool enforceProtectedCatalog = false)
     {
         if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
         {
@@ -108,6 +125,11 @@ public sealed class ListingDraftService :
         if (!IsMercadoLivreChannel(request.Channel))
         {
             return Failure<ListingDraftResult>("channel", "CHANNEL_INVALID");
+        }
+
+        if (enforceProtectedCatalog && HasLockedMasterOverrides(request))
+        {
+            return Failure<ListingDraftResult>("product", "PRODUCT_MASTER_FIELDS_LOCKED");
         }
 
         var clearSet = new HashSet<string>(
@@ -193,6 +215,12 @@ public sealed class ListingDraftService :
                     return Failure<ListingDraftResult>("sabrVariantSku", "SKU_NOT_FOUND");
                 }
 
+                if (!variant.IsActive || (enforceProtectedCatalog && !await _catalogAuthorization.IsSkuAllowedAsync(
+                        tenantId, clientId, variant.BaseSku, cancellationToken)))
+                {
+                    return Failure<ListingDraftResult>("sabrVariantSku", "CATALOG_PRODUCT_NOT_AUTHORIZED");
+                }
+
                 draft = new ListingDraft
                 {
                     DraftId = request.DraftId.GetValueOrDefault(Guid.NewGuid()),
@@ -236,6 +264,13 @@ public sealed class ListingDraftService :
         if (request.IntegrationId.HasValue && request.IntegrationId != Guid.Empty && request.IntegrationId != draft!.IntegrationId)
         {
             return Failure<ListingDraftResult>("integrationId", "INVALID_SELLER_INTEGRATION");
+        }
+
+
+        if (enforceProtectedCatalog && !await _catalogAuthorization.IsSkuAllowedAsync(
+                tenantId, clientId, draft!.BaseProductSku, cancellationToken))
+        {
+            return Failure<ListingDraftResult>("sabrVariantSku", "CATALOG_PRODUCT_NOT_AUTHORIZED");
         }
 
         var providerDraft = ReadProviderDraftData(draft!.ProviderDraftJson);
@@ -422,7 +457,8 @@ public sealed class ListingDraftService :
         Guid clientId,
         ListingDraftGetRequest request,
         CancellationToken cancellationToken = default,
-        string? traceId = null)
+        string? traceId = null,
+        bool enforceProtectedCatalog = false)
     {
         if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
         {
@@ -448,6 +484,13 @@ public sealed class ListingDraftService :
         if (context == null)
         {
             return Failure<ListingDraftGetResult>("variantSku", "SKU_NOT_FOUND");
+        }
+
+
+        if (enforceProtectedCatalog && !await _catalogAuthorization.IsSkuAllowedAsync(
+                tenantId, clientId, context.BaseSku, cancellationToken))
+        {
+            return Failure<ListingDraftGetResult>("variantSku", "CATALOG_PRODUCT_NOT_AUTHORIZED");
         }
 
         var resolved = VariantStockResolver.Resolve(normalizedSku, context.Variants);
@@ -675,7 +718,8 @@ public sealed class ListingDraftService :
         Guid clientId,
         MarketplaceFeesEstimateRequest request,
         CancellationToken cancellationToken = default,
-        string? traceId = null)
+        string? traceId = null,
+        bool enforceProtectedCatalog = false)
     {
         if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
         {
@@ -764,9 +808,46 @@ public sealed class ListingDraftService :
         }
 
         var normalizedPrice = ListingDraftHelpers.ToDecimal(ListingDraftHelpers.ToCents(request.Price.Value));
-        var productCost = request.ProductCost.HasValue
-            ? ListingDraftHelpers.ToDecimal(ListingDraftHelpers.ToCents(request.ProductCost.Value))
-            : 0m;
+        decimal productCost;
+        if (enforceProtectedCatalog)
+        {
+            if (string.IsNullOrWhiteSpace(request.VariantSku))
+            {
+                return Failure<MarketplaceFeesEstimateResult>("variantSku", "VARIANT_SKU_REQUIRED");
+            }
+
+            var normalizedVariantSku = Sku.Normalize(request.VariantSku);
+            var feeVariant = await _dbContext.ProductVariants.AsNoTracking()
+                .FirstOrDefaultAsync(item => item.VariantSku == normalizedVariantSku && item.IsActive, cancellationToken);
+            if (feeVariant == null || !await _catalogAuthorization.IsSkuAllowedAsync(
+                    tenantId, clientId, feeVariant.BaseSku, cancellationToken))
+            {
+                return Failure<MarketplaceFeesEstimateResult>("variantSku", "CATALOG_PRODUCT_NOT_AUTHORIZED");
+            }
+
+            var feeProduct = await _dbContext.Products.AsNoTracking()
+                .FirstOrDefaultAsync(item => item.Sku == feeVariant.BaseSku && item.IsActive, cancellationToken);
+            if (feeProduct == null)
+            {
+                return Failure<MarketplaceFeesEstimateResult>("variantSku", "PRODUCT_NOT_FOUND");
+            }
+
+            var catalogCostCents = feeVariant.CatalogPriceCents > 0
+                ? feeVariant.CatalogPriceCents
+                : feeProduct.CatalogPriceCents;
+            if (catalogCostCents <= 0)
+            {
+                return Failure<MarketplaceFeesEstimateResult>("variantSku", "CATALOG_COST_PENDING");
+            }
+
+            productCost = ListingDraftHelpers.ToDecimal(catalogCostCents);
+        }
+        else
+        {
+            productCost = request.ProductCost.HasValue
+                ? ListingDraftHelpers.ToDecimal(ListingDraftHelpers.ToCents(request.ProductCost.Value))
+                : 0m;
+        }
         var operationalCost = request.OperationalCost.HasValue
             ? ListingDraftHelpers.ToDecimal(ListingDraftHelpers.ToCents(request.OperationalCost.Value))
             : 0m;
@@ -1486,7 +1567,8 @@ public sealed class ListingDraftService :
         string tenantId,
         Guid clientId,
         ListingDraftValidateRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool enforceProtectedCatalog = false)
     {
         if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
         {
@@ -1509,7 +1591,8 @@ public sealed class ListingDraftService :
             return Failure<ListingDraftValidateResult>("draftId", "DRAFT_NOT_FOUND");
         }
 
-        var validation = await ValidateDraftForPublishAsync(tenantId, clientId, draft, cancellationToken);
+        var validation = await ValidateDraftForPublishAsync(
+            tenantId, clientId, draft, cancellationToken, enforceProtectedCatalog);
         if (!validation.Succeeded && ShouldReturnAsHttpFailure(validation.Errors))
         {
             return ServiceResult<ListingDraftValidateResult>.Failure(validation.Errors);
@@ -1544,7 +1627,8 @@ public sealed class ListingDraftService :
         string tenantId,
         Guid clientId,
         ListingDraftPublishRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool enforceProtectedCatalog = false)
     {
         if (string.IsNullOrWhiteSpace(tenantId) || clientId == Guid.Empty)
         {
@@ -1606,7 +1690,8 @@ public sealed class ListingDraftService :
             return Failure<ListingDraftPublishResult>("status", "DRAFT_NOT_VALIDATED");
         }
 
-        var validation = await ValidateDraftForPublishAsync(tenantId, clientId, draft, cancellationToken);
+        var validation = await ValidateDraftForPublishAsync(
+            tenantId, clientId, draft, cancellationToken, enforceProtectedCatalog);
         if (!validation.Succeeded)
         {
             return ServiceResult<ListingDraftPublishResult>.Failure(validation.Errors);
@@ -1661,7 +1746,14 @@ public sealed class ListingDraftService :
                         PictureUrls = publishContext.PictureUrls.ToList(),
                         Attributes = publishContext.ItemAttributes.ToList(),
                         SellerCustomField = variant.VariantSku,
-                        SabrVariantSku = variant.VariantSku
+                        SabrVariantSku = variant.VariantSku,
+                        WarrantyType = publishContext.ProviderDraft.WarrantyType,
+                        WarrantyTime = publishContext.ProviderDraft.WarrantyTime,
+                        FreeShipping = publishContext.ProviderDraft.FreeShipping,
+                        WidthCm = publishContext.Product.WidthCm,
+                        HeightCm = publishContext.Product.HeightCm,
+                        LengthCm = publishContext.Product.LengthCm,
+                        WeightKg = publishContext.Product.WeightKg
                     },
                     accessToken,
                     cancellationToken);
@@ -1716,7 +1808,14 @@ public sealed class ListingDraftService :
                         Attributes = publishContext.ItemAttributes.ToList(),
                         SellerCustomField = draft.SabrVariantSku,
                         SabrVariantSku = draft.SabrVariantSku,
-                        Variations = variationPayload
+                        Variations = variationPayload,
+                        WarrantyType = publishContext.ProviderDraft.WarrantyType,
+                        WarrantyTime = publishContext.ProviderDraft.WarrantyTime,
+                        FreeShipping = publishContext.ProviderDraft.FreeShipping,
+                        WidthCm = publishContext.Product.WidthCm,
+                        HeightCm = publishContext.Product.HeightCm,
+                        LengthCm = publishContext.Product.LengthCm,
+                        WeightKg = publishContext.Product.WeightKg
                     },
                     accessToken,
                     cancellationToken);
@@ -2495,7 +2594,8 @@ public sealed class ListingDraftService :
         string tenantId,
         Guid clientId,
         ListingDraft draft,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool enforceProtectedCatalog = false)
     {
         var connection = await _dbContext.TenantMarketplaceConnections.FirstOrDefaultAsync(
             item => item.Id == draft.IntegrationId
@@ -2544,7 +2644,53 @@ public sealed class ListingDraftService :
             return Failure<PublishValidationContext>("title", "TITLE_TOO_LONG");
         }
 
-        var gtin = providerDraft.Gtin?.Trim();
+        var normalizedMode = NormalizePublishMode(providerDraft.PublishMode);
+        var selectedSkus = normalizedMode == PublishModeMultiVariation
+            ? providerDraft.SelectedVariantSkus
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(Sku.Normalize)
+                .Distinct(StringComparer.Ordinal)
+                .ToList()
+            : new List<string> { draft.SabrVariantSku };
+        if (selectedSkus.Count == 0)
+        {
+            return Failure<PublishValidationContext>("selectedVariantSkus", "SELECTED_VARIANTS_REQUIRED");
+        }
+
+        var variants = await _dbContext.ProductVariants.AsNoTracking()
+            .Where(item => selectedSkus.Contains(item.VariantSku) && item.IsActive)
+            .ToListAsync(cancellationToken);
+        if (variants.Count != selectedSkus.Count)
+        {
+            return Failure<PublishValidationContext>("sabrVariantSku", "SKU_NOT_FOUND");
+        }
+
+        var baseSku = variants[0].BaseSku;
+        if (variants.Any(item => !string.Equals(item.BaseSku, baseSku, StringComparison.Ordinal)))
+        {
+            return Failure<PublishValidationContext>("selectedVariantSkus", "MIXED_BASE_SKU_NOT_SUPPORTED");
+        }
+
+        if (!string.Equals(draft.BaseProductSku, baseSku, StringComparison.Ordinal))
+        {
+            return Failure<PublishValidationContext>("baseProductSku", "PRODUCT_DRAFT_MISMATCH");
+        }
+
+        var product = await _dbContext.Products.AsNoTracking().FirstOrDefaultAsync(
+            item => item.Sku == baseSku && item.IsActive,
+            cancellationToken);
+        if (product == null)
+        {
+            return Failure<PublishValidationContext>("baseProductSku", "PRODUCT_NOT_FOUND");
+        }
+
+        if (enforceProtectedCatalog &&
+            !await _catalogAuthorization.IsSkuAllowedAsync(tenantId, clientId, baseSku, cancellationToken))
+        {
+            return Failure<PublishValidationContext>("baseProductSku", "CATALOG_PRODUCT_NOT_AUTHORIZED");
+        }
+
+        var gtin = (enforceProtectedCatalog ? product.Ean : providerDraft.Gtin)?.Trim();
         if (!string.IsNullOrWhiteSpace(gtin)
             && (gtin.Length < 8 || gtin.Length > 14 || !gtin.All(char.IsDigit)))
         {
@@ -2552,7 +2698,9 @@ public sealed class ListingDraftService :
         }
 
         var emptyGtinReason = providerDraft.EmptyGtinReason?.Trim();
-        if (!string.IsNullOrWhiteSpace(gtin) && !string.IsNullOrWhiteSpace(emptyGtinReason))
+        if (!enforceProtectedCatalog &&
+            !string.IsNullOrWhiteSpace(gtin) &&
+            !string.IsNullOrWhiteSpace(emptyGtinReason))
         {
             return Failure<PublishValidationContext>("gtin", "GTIN_REASON_CONFLICT");
         }
@@ -2562,9 +2710,10 @@ public sealed class ListingDraftService :
             return Failure<PublishValidationContext>("gtin", "GTIN_OR_REASON_REQUIRED");
         }
 
-        if (!string.IsNullOrWhiteSpace(providerDraft.Ncm))
+        var ncmValue = enforceProtectedCatalog ? product.Ncm : providerDraft.Ncm;
+        if (!string.IsNullOrWhiteSpace(ncmValue))
         {
-            var ncm = providerDraft.Ncm.Trim();
+            var ncm = ncmValue.Trim();
             if (ncm.Length != 8 || !ncm.All(char.IsDigit))
             {
                 return Failure<PublishValidationContext>("ncm", "NCM_INVALID");
@@ -2674,19 +2823,6 @@ public sealed class ListingDraftService :
             return Failure<PublishValidationContext>("categoryId", "ML_UNAVAILABLE");
         }
 
-        var normalizedMode = NormalizePublishMode(providerDraft.PublishMode);
-        var selectedSkus = normalizedMode == PublishModeMultiVariation
-            ? providerDraft.SelectedVariantSkus
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .Select(Sku.Normalize)
-                .Distinct(StringComparer.Ordinal)
-                .ToList()
-            : new List<string> { draft.SabrVariantSku };
-        if (selectedSkus.Count == 0)
-        {
-            return Failure<PublishValidationContext>("selectedVariantSkus", "SELECTED_VARIANTS_REQUIRED");
-        }
-
         if (normalizedMode == PublishModeMultiVariation)
         {
             if (!capabilities.AllowsVariations || capabilities.MaxVariationsAllowed <= 1)
@@ -2742,29 +2878,11 @@ public sealed class ListingDraftService :
             }
         }
 
-        var variants = await _dbContext.ProductVariants.AsNoTracking()
-            .Where(item => selectedSkus.Contains(item.VariantSku))
-            .ToListAsync(cancellationToken);
-        if (variants.Count != selectedSkus.Count)
-        {
-            return Failure<PublishValidationContext>("sabrVariantSku", "SKU_NOT_FOUND");
-        }
-
-        var baseSku = variants[0].BaseSku;
-        if (variants.Any(item => !string.Equals(item.BaseSku, baseSku, StringComparison.Ordinal)))
-        {
-            return Failure<PublishValidationContext>("selectedVariantSkus", "MIXED_BASE_SKU_NOT_SUPPORTED");
-        }
-
-        var product = await _dbContext.Products.AsNoTracking().FirstOrDefaultAsync(
-            item => item.Sku == baseSku,
-            cancellationToken);
-        if (product == null)
-        {
-            return Failure<PublishValidationContext>("baseProductSku", "PRODUCT_NOT_FOUND");
-        }
-
-        var itemAttributes = BuildPublishItemAttributes(providerDraft, product, draft.SabrVariantSku);
+        var itemAttributes = BuildPublishItemAttributes(
+            providerDraft,
+            product,
+            draft.SabrVariantSku,
+            enforceProtectedCatalog);
         var requiredAttributeIds = categoryAttributes
             .Where(item => item.Required)
             .Select(item => item.Id)
@@ -2841,10 +2959,6 @@ public sealed class ListingDraftService :
 
         draft.ListingTypeId = ListingDraftHelpers.NormalizeListingTypeId(draft.ListingTypeId);
         draft.CurrencyId = "BRL";
-        if (!string.Equals(draft.BaseProductSku, baseSku, StringComparison.Ordinal))
-        {
-            draft.BaseProductSku = baseSku;
-        }
         providerDraft.PublishMode = normalizedMode;
         if (normalizedMode == PublishModeSingleVariant)
         {
@@ -2892,12 +3006,18 @@ public sealed class ListingDraftService :
     private static List<MercadoLivreCreateItemAttributeRequest> BuildPublishItemAttributes(
         ProviderDraftData providerDraft,
         Product product,
-        string sellerSku)
+        string sellerSku,
+        bool enforceProtectedCatalog)
     {
         var attributesById = new Dictionary<string, MercadoLivreCreateItemAttributeRequest>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var attribute in providerDraft.Attributes)
         {
+            if (enforceProtectedCatalog && MasterProductAttributeIds.Contains(attribute.Id?.Trim() ?? string.Empty))
+            {
+                continue;
+            }
+
             AddOrUpdateAttribute(
                 attributesById,
                 attribute.Id,
@@ -2906,22 +3026,41 @@ public sealed class ListingDraftService :
                 overwrite: true);
         }
 
-        var gtin = providerDraft.Gtin?.Trim();
+        var gtin = (enforceProtectedCatalog ? product.Ean : providerDraft.Gtin)?.Trim();
         var emptyGtinReason = providerDraft.EmptyGtinReason?.Trim();
         if (!string.IsNullOrWhiteSpace(gtin))
         {
             attributesById.Remove("EMPTY_GTIN_REASON");
-            AddOrUpdateAttribute(attributesById, "GTIN", null, gtin, overwrite: false);
+            AddOrUpdateAttribute(attributesById, "GTIN", null, gtin, overwrite: enforceProtectedCatalog);
         }
         else if (!string.IsNullOrWhiteSpace(emptyGtinReason))
         {
             attributesById.Remove("GTIN");
-            AddOrUpdateAttribute(attributesById, "EMPTY_GTIN_REASON", null, emptyGtinReason, overwrite: false);
+            AddOrUpdateAttribute(
+                attributesById,
+                "EMPTY_GTIN_REASON",
+                null,
+                emptyGtinReason,
+                overwrite: enforceProtectedCatalog);
         }
 
-        AddOrUpdateAttribute(attributesById, "NCM", null, providerDraft.Ncm, overwrite: false);
-        AddOrUpdateAttribute(attributesById, "ORIGIN", null, providerDraft.Origin, overwrite: false);
-        AddOrUpdateAttribute(attributesById, "BRAND", null, product.Brand, overwrite: false);
+        AddOrUpdateAttribute(
+            attributesById,
+            "NCM",
+            null,
+            enforceProtectedCatalog ? product.Ncm : providerDraft.Ncm,
+            overwrite: enforceProtectedCatalog);
+        if (enforceProtectedCatalog)
+        {
+            AddOrUpdateAttribute(attributesById, "CEST", null, product.Cest, overwrite: true);
+        }
+        AddOrUpdateAttribute(
+            attributesById,
+            "ORIGIN",
+            null,
+            enforceProtectedCatalog ? product.FiscalOrigin : providerDraft.Origin,
+            overwrite: enforceProtectedCatalog);
+        AddOrUpdateAttribute(attributesById, "BRAND", null, product.Brand, overwrite: enforceProtectedCatalog);
         AddOrUpdateAttribute(attributesById, "SELLER_SKU", null, sellerSku, overwrite: true);
 
         return attributesById.Values
@@ -3129,6 +3268,9 @@ public sealed class ListingDraftService :
             selectedVariantSkus = providerData.SelectedVariantSkus,
             variationAxes = providerData.VariationAxes,
             variations = providerData.Variations,
+            warrantyType = providerData.WarrantyType,
+            warrantyTime = providerData.WarrantyTime,
+            freeShipping = providerData.FreeShipping,
             lastPublishAttemptAtUtc = providerData.LastPublishAttemptAtUtc,
             lastPublishResults = providerData.LastPublishResults,
             updatedAt = draft.UpdatedAt
@@ -3171,6 +3313,28 @@ public sealed class ListingDraftService :
                 ValueId = item.ValueId,
                 ValueName = item.ValueName
             }).ToList(),
+            OperationalCost = providerDraft.OperationalCostCents.HasValue
+                ? ListingDraftHelpers.ToDecimal(providerDraft.OperationalCostCents.Value)
+                : null,
+            PublishMode = providerDraft.PublishMode,
+            SelectedVariantSkus = providerDraft.SelectedVariantSkus.ToList(),
+            VariationAxes = providerDraft.VariationAxes.ToList(),
+            Variations = providerDraft.Variations.Select(item => new ListingDraftVariationRequest
+            {
+                SabrVariantSku = item.SabrVariantSku,
+                Price = item.Price,
+                InitialQuantity = item.InitialQuantity,
+                Attributes = item.Attributes.Select(attribute => new ListingDraftVariationAttributeRequest
+                {
+                    Id = attribute.Id,
+                    ValueId = attribute.ValueId,
+                    ValueName = attribute.ValueName
+                }).ToList(),
+                PictureIds = item.PictureIds.ToList()
+            }).ToList(),
+            WarrantyType = providerDraft.WarrantyType,
+            WarrantyTime = providerDraft.WarrantyTime,
+            FreeShipping = providerDraft.FreeShipping,
             Status = draft.Status.ToString(),
             RowVersion = rowVersion,
             UpdatedAt = draft.UpdatedAt,
@@ -3492,6 +3656,37 @@ public sealed class ListingDraftService :
         {
             providerData.OperationalCostCents = null;
         }
+
+        if (clearSet.Contains("warrantyType"))
+        {
+            providerData.WarrantyType = null;
+        }
+        else if (request.WarrantyType != null)
+        {
+            providerData.WarrantyType = string.IsNullOrWhiteSpace(request.WarrantyType)
+                ? null
+                : request.WarrantyType.Trim();
+        }
+
+        if (clearSet.Contains("warrantyTime"))
+        {
+            providerData.WarrantyTime = null;
+        }
+        else if (request.WarrantyTime != null)
+        {
+            providerData.WarrantyTime = string.IsNullOrWhiteSpace(request.WarrantyTime)
+                ? null
+                : request.WarrantyTime.Trim();
+        }
+
+        if (clearSet.Contains("freeShipping"))
+        {
+            providerData.FreeShipping = false;
+        }
+        else if (request.FreeShipping.HasValue)
+        {
+            providerData.FreeShipping = request.FreeShipping.Value;
+        }
     }
 
     private async Task<int> ClampAvailableQuantityAsync(
@@ -3563,14 +3758,42 @@ public sealed class ListingDraftService :
             _ => error.Message
         };
 
+        var isProductBaseIssue = IsProductBaseValidationIssue(error.Field, error.Message);
         return new ListingDraftValidationIssueResult
         {
             FieldPath = fieldPath,
             Code = error.Message,
             Message = message,
             Severity = "error",
-            Step = step
+            Step = step,
+            IssueSource = isProductBaseIssue ? "PRODUCT_BASE" : "PUBLICATION",
+            Remediation = isProductBaseIssue ? "ADMIN_CORRECTION" : "EDIT_HERE",
+            Blocking = true
         };
+    }
+
+    private static bool IsProductBaseValidationIssue(string? fieldPath, string? code)
+    {
+        var field = (fieldPath ?? string.Empty).Trim().ToLowerInvariant();
+        return field.Contains("gtin") || field.Contains("ncm") || field.Contains("origin") ||
+               field.Contains("baseproduct") || field.Contains("sabrvariantsku") ||
+               string.Equals(code, "CATALOG_PRODUCT_NOT_AUTHORIZED", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(code, "PRODUCT_NOT_FOUND", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasLockedMasterOverrides(ListingDraftUpsertRequest request)
+    {
+        return request.Gtin != null || request.Ncm != null || request.Origin != null ||
+               request.ProductCost.HasValue ||
+               (request.Attributes?.Any(item =>
+                   MasterProductAttributeIds.Contains(item.Id?.Trim() ?? string.Empty)) ?? false) ||
+               (request.Variations?.Any(variation => variation.Attributes.Any(item =>
+                   MasterProductAttributeIds.Contains(item.Id?.Trim() ?? string.Empty))) ?? false) ||
+               (request.ClearFields?.Any(item =>
+                   string.Equals(item, "gtin", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(item, "ncm", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(item, "origin", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(item, "productCost", StringComparison.OrdinalIgnoreCase)) ?? false);
     }
 
     private static string ResolveValidationStep(string fieldPath, string code)
@@ -4429,6 +4652,9 @@ public sealed class ListingDraftService :
         public List<ProviderDraftVariation> Variations { get; set; } = new();
         public long? ProductCostCents { get; set; }
         public long? OperationalCostCents { get; set; }
+        public string? WarrantyType { get; set; }
+        public string? WarrantyTime { get; set; }
+        public bool FreeShipping { get; set; }
         public DateTimeOffset? LastPublishAttemptAtUtc { get; set; }
         public List<ProviderDraftPublishResult> LastPublishResults { get; set; } = new();
     }

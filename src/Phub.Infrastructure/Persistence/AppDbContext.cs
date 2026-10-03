@@ -939,7 +939,10 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.Sku).HasColumnName("sku").HasMaxLength(Sku.MaxLength).IsRequired();
             entity.Property(e => e.Name).HasColumnName("name").HasMaxLength(250).IsRequired();
             entity.Property(e => e.Brand).HasColumnName("brand").HasMaxLength(120).IsRequired();
+            entity.Property(e => e.SupplierName).HasColumnName("supplier_name").HasMaxLength(200);
             entity.Property(e => e.Ncm).HasColumnName("ncm").HasMaxLength(8);
+            entity.Property(e => e.Cest).HasColumnName("cest").HasMaxLength(7);
+            entity.Property(e => e.FiscalOrigin).HasColumnName("fiscal_origin").HasMaxLength(40);
             entity.Property(e => e.Ean).HasColumnName("ean").HasMaxLength(14);
             entity.Property(e => e.Description).HasColumnName("description").HasMaxLength(4000);
             entity.Property(e => e.CategoryId).HasColumnName("category_id").HasMaxLength(120);
@@ -966,6 +969,7 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.HasCheckConstraint("ck_products_height_non_negative", "\"height_cm\" IS NULL OR \"height_cm\" >= 0");
             entity.HasCheckConstraint("ck_products_length_non_negative", "\"length_cm\" IS NULL OR \"length_cm\" >= 0");
             entity.HasCheckConstraint("ck_products_weight_non_negative", "\"weight_kg\" IS NULL OR \"weight_kg\" >= 0");
+            entity.HasCheckConstraint("ck_products_cest_format", "\"cest\" IS NULL OR \"cest\" ~ '^[0-9]{7}$'");
             entity.HasIndex(e => e.Name).HasDatabaseName("ix_products_name");
         });
 

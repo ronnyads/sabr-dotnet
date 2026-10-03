@@ -301,7 +301,10 @@ public sealed class ProductAdminService
             Sku = parsedSku.Value,
             Name = request.Name,
             Brand = request.Brand,
+            SupplierName = request.SupplierName,
             Ncm = request.Ncm,
+            Cest = request.Cest,
+            FiscalOrigin = request.FiscalOrigin,
             Ean = request.Ean,
             Description = request.Description,
             CategoryId = request.CategoryId,
@@ -1107,14 +1110,17 @@ public sealed class ProductAdminService
         return $"{normalizedProduct} - {normalizedVariant}";
     }
 
-    private static (string Name, string Brand, string? Ncm, string? Ean, string? Description, string? CategoryId, string? ThumbnailUrl, decimal? WidthCm, decimal? HeightCm, decimal? LengthCm, decimal? WeightKg, bool RequiresAnatel, string? AnatelHomologationNumber, Guid? AnatelDocumentId, long CostPriceCents, long CatalogPriceCents, bool IsActive) BuildCandidate(
+    private static (string Name, string Brand, string? SupplierName, string? Ncm, string? Cest, string? FiscalOrigin, string? Ean, string? Description, string? CategoryId, string? ThumbnailUrl, decimal? WidthCm, decimal? HeightCm, decimal? LengthCm, decimal? WeightKg, bool RequiresAnatel, string? AnatelHomologationNumber, Guid? AnatelDocumentId, long CostPriceCents, long CatalogPriceCents, bool IsActive) BuildCandidate(
         Product product,
         AdminProductUpdateRequest request)
     {
         return (
             Name: request.Name?.Trim() ?? product.Name,
             Brand: request.Brand?.Trim() ?? product.Brand,
+            SupplierName: request.SupplierName != null ? NormalizeOptionalText(request.SupplierName) : product.SupplierName,
             Ncm: request.Ncm != null ? NormalizeOptionalText(request.Ncm) : product.Ncm,
+            Cest: request.Cest != null ? NormalizeOptionalText(request.Cest) : product.Cest,
+            FiscalOrigin: request.FiscalOrigin != null ? NormalizeOptionalText(request.FiscalOrigin) : product.FiscalOrigin,
             Ean: request.Ean != null ? NormalizeOptionalText(request.Ean) : product.Ean,
             Description: request.Description != null ? NormalizeOptionalText(request.Description) : product.Description,
             CategoryId: request.CategoryIdProvided ? NormalizeOptionalText(request.CategoryId) : product.CategoryId,
@@ -1136,11 +1142,14 @@ public sealed class ProductAdminService
 
     private static void ApplyCandidate(
         Product product,
-        (string Name, string Brand, string? Ncm, string? Ean, string? Description, string? CategoryId, string? ThumbnailUrl, decimal? WidthCm, decimal? HeightCm, decimal? LengthCm, decimal? WeightKg, bool RequiresAnatel, string? AnatelHomologationNumber, Guid? AnatelDocumentId, long CostPriceCents, long CatalogPriceCents, bool IsActive) candidate)
+        (string Name, string Brand, string? SupplierName, string? Ncm, string? Cest, string? FiscalOrigin, string? Ean, string? Description, string? CategoryId, string? ThumbnailUrl, decimal? WidthCm, decimal? HeightCm, decimal? LengthCm, decimal? WeightKg, bool RequiresAnatel, string? AnatelHomologationNumber, Guid? AnatelDocumentId, long CostPriceCents, long CatalogPriceCents, bool IsActive) candidate)
     {
         product.Name = candidate.Name;
         product.Brand = candidate.Brand;
+        product.SupplierName = candidate.SupplierName;
         product.Ncm = candidate.Ncm;
+        product.Cest = candidate.Cest;
+        product.FiscalOrigin = candidate.FiscalOrigin;
         product.Ean = candidate.Ean;
         product.Description = candidate.Description;
         product.CategoryId = candidate.CategoryId;
@@ -1161,7 +1170,10 @@ public sealed class ProductAdminService
     {
         product.Name = request.Name.Trim();
         product.Brand = request.Brand.Trim();
+        product.SupplierName = NormalizeOptionalText(request.SupplierName);
         product.Ncm = NormalizeOptionalText(request.Ncm);
+        product.Cest = NormalizeOptionalText(request.Cest);
+        product.FiscalOrigin = NormalizeOptionalText(request.FiscalOrigin);
         product.Ean = NormalizeOptionalText(request.Ean);
         product.Description = NormalizeOptionalText(request.Description);
         product.CategoryId = resolvedCategorySlug;
@@ -1193,7 +1205,10 @@ public sealed class ProductAdminService
         errors.AddRange(ValidateProductFields((
             Name: request.Name?.Trim() ?? string.Empty,
             Brand: request.Brand?.Trim() ?? string.Empty,
+            SupplierName: NormalizeOptionalText(request.SupplierName),
             Ncm: NormalizeOptionalText(request.Ncm),
+            Cest: NormalizeOptionalText(request.Cest),
+            FiscalOrigin: NormalizeOptionalText(request.FiscalOrigin),
             Ean: NormalizeOptionalText(request.Ean),
             Description: NormalizeOptionalText(request.Description),
             CategoryId: NormalizeOptionalText(request.CategoryId),
@@ -1214,7 +1229,7 @@ public sealed class ProductAdminService
     }
 
     private static List<ValidationError> ValidateProductFields(
-        (string Name, string Brand, string? Ncm, string? Ean, string? Description, string? CategoryId, string? ThumbnailUrl, decimal? WidthCm, decimal? HeightCm, decimal? LengthCm, decimal? WeightKg, bool RequiresAnatel, string? AnatelHomologationNumber, Guid? AnatelDocumentId, long CostPriceCents, long CatalogPriceCents, bool IsActive) values)
+        (string Name, string Brand, string? SupplierName, string? Ncm, string? Cest, string? FiscalOrigin, string? Ean, string? Description, string? CategoryId, string? ThumbnailUrl, decimal? WidthCm, decimal? HeightCm, decimal? LengthCm, decimal? WeightKg, bool RequiresAnatel, string? AnatelHomologationNumber, Guid? AnatelDocumentId, long CostPriceCents, long CatalogPriceCents, bool IsActive) values)
     {
         var errors = new List<ValidationError>();
 
@@ -1239,6 +1254,11 @@ public sealed class ProductAdminService
         if (!string.IsNullOrWhiteSpace(values.Ncm) && !NcmRegex.IsMatch(values.Ncm))
         {
             errors.Add(new ValidationError("ncm", "NCM must contain exactly 8 digits"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(values.Cest) && !Regex.IsMatch(values.Cest, "^[0-9]{7}$"))
+        {
+            errors.Add(new ValidationError("cest", "CEST must contain exactly 7 digits"));
         }
 
         if (!string.IsNullOrWhiteSpace(values.Ean) && !EanRegex.IsMatch(values.Ean))
@@ -1474,7 +1494,10 @@ public sealed class ProductAdminService
             Sku = product.Sku,
             Name = product.Name,
             Brand = product.Brand,
+            SupplierName = product.SupplierName,
             Ncm = product.Ncm,
+            Cest = product.Cest,
+            FiscalOrigin = product.FiscalOrigin,
             Ean = product.Ean,
             Description = product.Description,
             CategoryId = product.CategoryId,
@@ -1504,7 +1527,10 @@ public sealed class ProductAdminService
             Sku = product.Sku,
             Name = product.Name,
             Brand = product.Brand,
+            SupplierName = product.SupplierName,
             Ncm = product.Ncm,
+            Cest = product.Cest,
+            FiscalOrigin = product.FiscalOrigin,
             Ean = product.Ean,
             Description = product.Description,
             CategoryId = product.CategoryId,

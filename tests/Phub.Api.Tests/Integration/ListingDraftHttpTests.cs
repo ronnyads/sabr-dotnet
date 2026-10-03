@@ -105,6 +105,52 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
         Assert.Null(clearPayload!.CategoryId);
     }
 
+    [Theory]
+    [InlineData("gtin")]
+    [InlineData("ncm")]
+    [InlineData("origin")]
+    [InlineData("productCost")]
+    [InlineData("clear:gtin")]
+    [InlineData("clear:ncm")]
+    [InlineData("clear:origin")]
+    [InlineData("clear:productCost")]
+    public async Task Upsert_RejectsProductMasterFieldOverrides(string field)
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-draft-master-lock";
+        const string tenantSlug = "tenantdraftmasterlock";
+        var clientId = Guid.NewGuid();
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+
+        var request = new ListingDraftUpsertRequest();
+        switch (field)
+        {
+            case "gtin":
+                request.Gtin = "7891234567890";
+                break;
+            case "ncm":
+                request.Ncm = "12345678";
+                break;
+            case "origin":
+                request.Origin = "0";
+                break;
+            case "productCost":
+                request.ProductCost = 0.01m;
+                break;
+            default:
+                request.ClearFields = new List<string> { field["clear:".Length..] };
+                break;
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsJsonAsync("/api/v1/client/publications/drafts/upsert", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ApiError>();
+        Assert.NotNull(error);
+        Assert.Equal("PRODUCT_MASTER_FIELDS_LOCKED", error!.Code);
+    }
+
     [Fact]
     public async Task Upsert_WhenManualCategoryIsProvided_PersistsCategoryLock()
     {
@@ -1692,7 +1738,7 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
         using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
 
         var response = await client.PostAsJsonAsync(
-            "/api/v1/client/marketplaces/fees/estimate",
+            "/api/v1/client/publications/fees/estimate",
             new MarketplaceFeesEstimateRequest
             {
                 IntegrationId = integrationId,
@@ -1911,14 +1957,18 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
     }
 
     [Fact]
-    public async Task Estimate_WithCosts_UsesRoundedCentsAndProfit()
+    public async Task Estimate_UsesServerSideCatalogCost_AndIgnoresClientProductCost()
     {
         await _factory.ResetDatabaseAsync();
         const string tenantId = "tenant-draft-14";
         const string tenantSlug = "tenantdraft14";
         var clientId = Guid.NewGuid();
         const long sellerId = 1010014;
+        const string baseSku = "SKU-BASE-COST-14";
+        const string variantSku = "SKU-VAR-COST-14";
         await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedProductVariantAsync(baseSku, variantSku, includeImage: false);
+        await AuthorizeProductViaPublicCatalogAsync(baseSku);
         var integrationId = await SeedConnectionAsync(tenantId, clientId, sellerId);
 
         _factory.FakeMercadoLivreApiClient.FeeEstimateResponse = new MercadoLivreFeeEstimateResponse
@@ -1931,7 +1981,7 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
 
         using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
         var response = await client.PostAsJsonAsync(
-            "/api/v1/client/marketplaces/fees/estimate",
+            "/api/v1/client/publications/fees/estimate",
             new MarketplaceFeesEstimateRequest
             {
                 IntegrationId = integrationId,
@@ -1940,7 +1990,8 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
                 ListingTypeId = "gold_special",
                 Price = 100.015m, // round away from zero => 100.02
                 CurrencyId = "BRL",
-                ProductCost = 10.004m, // => 10.00
+                VariantSku = variantSku,
+                ProductCost = 0.01m, // legacy/untrusted input must not affect the estimate
                 OperationalCost = 5.006m // => 5.01
             });
 
@@ -1949,9 +2000,44 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
         Assert.NotNull(payload);
         Assert.Equal(100.02m, payload!.Price);
         Assert.Equal(2.00m, payload.TotalFees);
-        Assert.Equal(10.00m, payload.ProductCost);
+        Assert.Equal(15.00m, payload.ProductCost);
+        Assert.Equal("CATALOG_PRICE", payload.CostSource);
+        Assert.Equal("RESOLVED", payload.CostStatus);
         Assert.Equal(5.01m, payload.OperationalCost);
-        Assert.Equal(83.01m, payload.EstimatedProfit);
+        Assert.Equal(78.01m, payload.EstimatedProfit);
+    }
+
+    [Fact]
+    public async Task Estimate_RejectsVariantOutsideAuthorizedCatalog()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-draft-cost-auth";
+        const string tenantSlug = "tenantdraftcostauth";
+        var clientId = Guid.NewGuid();
+        const long sellerId = 1010016;
+        const string variantSku = "SKU-VAR-COST-BLOCKED";
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedProductVariantAsync("SKU-BASE-COST-BLOCKED", variantSku, includeImage: false);
+        var integrationId = await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsJsonAsync(
+            "/api/v1/client/publications/fees/estimate",
+            new MarketplaceFeesEstimateRequest
+            {
+                IntegrationId = integrationId,
+                SellerId = sellerId.ToString(),
+                CategoryId = "MLB1055",
+                ListingTypeId = "gold_special",
+                Price = 100m,
+                CurrencyId = "BRL",
+                VariantSku = variantSku
+            });
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ApiError>();
+        Assert.NotNull(error);
+        Assert.Equal("CATALOG_PRODUCT_NOT_AUTHORIZED", error!.Code);
     }
 
     [Fact]
@@ -2156,6 +2242,26 @@ public sealed class ListingDraftHttpTests : IClassFixture<MercadoLivreTestWebApp
             });
         }
 
+        await db.SaveChangesAsync();
+    }
+
+    private async Task AuthorizeProductViaPublicCatalogAsync(string baseSku)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var catalog = new Catalog
+        {
+            Id = Guid.NewGuid(),
+            Name = $"Publicação {baseSku}",
+            AccessMode = CatalogAccessMode.Public,
+            IsActive = true
+        };
+        db.Catalogs.Add(catalog);
+        db.ProductCatalogs.Add(new ProductCatalog
+        {
+            CatalogId = catalog.Id,
+            ProductSku = baseSku
+        });
         await db.SaveChangesAsync();
     }
 

@@ -1,31 +1,156 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Application.Services;
 using Phub.Application.Validation;
 using Phub.Domain.Enums;
+using Phub.Domain.Entities;
+using System.Security.Claims;
+using System.Text.Json;
 
 namespace Phub.Api.Controllers;
 
 [ApiController]
 [Authorize]
 [Route("api/v1/client/listings")]
+[Route("api/v1/client/publications")]
 public sealed class ClientListingDraftsController : ControllerBase
 {
     private readonly ITenantProvider _tenantProvider;
     private readonly ListingDraftService _listingDraftService;
     private readonly ILogger<ClientListingDraftsController> _logger;
+    private readonly IAppDbContext _dbContext;
+    private readonly CatalogAuthorizationService _catalogAuthorization;
 
     public ClientListingDraftsController(
         ITenantProvider tenantProvider,
         ListingDraftService listingDraftService,
+        IAppDbContext dbContext,
+        CatalogAuthorizationService catalogAuthorization,
         ILogger<ClientListingDraftsController> logger)
     {
         _tenantProvider = tenantProvider;
         _listingDraftService = listingDraftService;
+        _dbContext = dbContext;
+        _catalogAuthorization = catalogAuthorization;
         _logger = logger;
+    }
+
+    [HttpPost("product-correction-requests")]
+    public async Task<IActionResult> RequestProductCorrection(
+        [FromBody] ProductCorrectionRequest? request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+        {
+            return error!;
+        }
+
+        if (request == null || string.IsNullOrWhiteSpace(request.ProductId))
+        {
+            return BadRequest(CreateApiError("PRODUCT_REQUIRED", "Selecione um produto do catálogo."));
+        }
+
+        var productId = request.ProductId.Trim().ToUpperInvariant();
+        var productExists = await _dbContext.Products.AsNoTracking()
+            .AnyAsync(item => item.Sku == productId && item.IsActive, cancellationToken);
+        if (!productExists || !await _catalogAuthorization.IsSkuAllowedAsync(tenantId!, clientId, productId, cancellationToken))
+        {
+            return NotFound(CreateApiError("CATALOG_PRODUCT_NOT_AUTHORIZED", "Produto indisponível no catálogo deste cliente."));
+        }
+
+        var fields = (request.Fields ?? new List<string>())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Where(value => value.Length <= 80)
+            .Select(value => value.ToUpperInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .Take(20)
+            .ToList();
+        var message = request.Message?.Trim();
+        if (fields.Count == 0 || string.IsNullOrWhiteSpace(message))
+        {
+            return BadRequest(CreateApiError("CORRECTION_DETAILS_REQUIRED", "Informe os campos e descreva a correção necessária."));
+        }
+        if (message.Length > 2000)
+        {
+            return UnprocessableEntity(CreateApiError("CORRECTION_MESSAGE_TOO_LONG", "A descrição deve ter no máximo 2000 caracteres."));
+        }
+
+        Guid.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value, out var actorId);
+        var requestId = Guid.NewGuid();
+        _dbContext.AuditEvents.Add(new AuditEvent
+        {
+            TenantId = tenantId,
+            ActorType = "ClientUser",
+            ActorId = actorId == Guid.Empty ? null : actorId,
+            Action = "ProductCorrection.Requested",
+            Entity = "Product",
+            RequestId = requestId,
+            MetadataJson = JsonSerializer.Serialize(new
+            {
+                clientId,
+                productId,
+                fields,
+                message,
+                status = "OPEN"
+            })
+        });
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return Accepted(new ProductCorrectionRequestResult { RequestId = requestId });
+    }
+
+    [HttpGet("capabilities")]
+    public async Task<IActionResult> GetCapabilities(CancellationToken cancellationToken)
+    {
+        if (!TryGetClientContext(out var tenantId, out var clientId, out var error))
+        {
+            return error!;
+        }
+
+        var connectedProviders = await _dbContext.TenantMarketplaceConnections.AsNoTracking()
+            .Where(item => item.TenantId == tenantId && item.ClientId == clientId)
+            .Select(item => item.Provider)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return Ok(new[]
+        {
+            new PublicationProviderCapabilityResult
+            {
+                Provider = "mercadolivre",
+                DisplayName = "Mercado Livre",
+                Connected = connectedProviders.Contains(MarketplaceProvider.MercadoLivre),
+                Categories = true,
+                Attributes = true,
+                Variations = true,
+                CatalogImages = true,
+                PublicationMedia = false,
+                Shipping = true,
+                Warranty = true,
+                PricingSimulator = true,
+                LinkExisting = true
+            },
+            new PublicationProviderCapabilityResult
+            {
+                Provider = "tiktokshop",
+                DisplayName = "TikTok Shop",
+                Connected = connectedProviders.Contains(MarketplaceProvider.TikTokShop),
+                Categories = true,
+                Attributes = false,
+                Variations = false,
+                CatalogImages = true,
+                PublicationMedia = false,
+                Shipping = false,
+                Warranty = false,
+                PricingSimulator = false,
+                LinkExisting = false
+            }
+        });
     }
 
     [HttpPost("drafts/upsert")]
@@ -45,7 +170,8 @@ public sealed class ClientListingDraftsController : ControllerBase
                 clientId,
                 request ?? new ListingDraftUpsertRequest(),
                 cancellationToken,
-                HttpContext.TraceIdentifier);
+                HttpContext.TraceIdentifier,
+                IsProtectedPublicationRequest());
             if (!result.Succeeded || result.Data == null)
             {
                 return MapValidationError(result.Errors);
@@ -82,7 +208,8 @@ public sealed class ClientListingDraftsController : ControllerBase
                 clientId,
                 request ?? new ListingDraftGetRequest(),
                 cancellationToken,
-                HttpContext.TraceIdentifier);
+                HttpContext.TraceIdentifier,
+                IsProtectedPublicationRequest());
             if (!result.Succeeded || result.Data == null)
             {
                 return MapValidationError(result.Errors);
@@ -118,7 +245,8 @@ public sealed class ClientListingDraftsController : ControllerBase
                 tenantId!,
                 clientId,
                 request ?? new ListingDraftPublishRequest(),
-                cancellationToken);
+                cancellationToken,
+                IsProtectedPublicationRequest());
             if (!result.Succeeded || result.Data == null)
             {
                 return MapValidationError(result.Errors);
@@ -154,7 +282,8 @@ public sealed class ClientListingDraftsController : ControllerBase
                 tenantId!,
                 clientId,
                 request ?? new ListingDraftValidateRequest(),
-                cancellationToken);
+                cancellationToken,
+                IsProtectedPublicationRequest());
             if (!result.Succeeded || result.Data == null)
             {
                 return MapValidationError(result.Errors);
@@ -173,6 +302,9 @@ public sealed class ClientListingDraftsController : ControllerBase
             return StatusCode(503, CreateApiError("ML_UNAVAILABLE", "Listing validate unavailable."));
         }
     }
+
+    private bool IsProtectedPublicationRequest()
+        => Request.Path.StartsWithSegments("/api/v1/client/publications", StringComparison.OrdinalIgnoreCase);
 
     [HttpPost("publications/query")]
     public async Task<IActionResult> QueryPublications(
@@ -374,6 +506,10 @@ public sealed class ClientListingDraftsController : ControllerBase
             "MAX_VARIATIONS_EXCEEDED" => "Selected variants exceed category limit.",
             "VARIATION_AXIS_NOT_ALLOWED" => "One or more variation axes are not allowed for selected category.",
             "GTIN_REASON_CONFLICT" => "When GTIN is provided, EMPTY_GTIN_REASON must be empty.",
+            "PRODUCT_MASTER_FIELDS_LOCKED" => "Master product fields cannot be changed from a publication draft.",
+            "PRODUCT_DRAFT_MISMATCH" => "Draft product does not match the selected master product.",
+            "CATALOG_PRODUCT_NOT_AUTHORIZED" => "Product is not available in this client's catalog.",
+            "CATALOG_COST_PENDING" => "Catalog price is not available for this product.",
             "VARIANT_SKU_REQUIRED" => "variantSku is required.",
             "STATUS_INVALID" => "Invalid publication status filter.",
             "ML_PUBLISH_FAILED" => "Mercado Livre publish failed.",
@@ -399,6 +535,10 @@ public sealed class ClientListingDraftsController : ControllerBase
             "GTIN_INVALID" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "NCM_INVALID" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "GTIN_REASON_CONFLICT" => UnprocessableEntity(CreateApiError(code, message, errors)),
+            "PRODUCT_MASTER_FIELDS_LOCKED" => BadRequest(CreateApiError(code, message, errors)),
+            "PRODUCT_DRAFT_MISMATCH" => Conflict(CreateApiError(code, message, errors)),
+            "CATALOG_PRODUCT_NOT_AUTHORIZED" => NotFound(CreateApiError(code, message, errors)),
+            "CATALOG_COST_PENDING" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "SELLER_MISMATCH_FOR_INTEGRATION" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "PRICE_PER_VARIATION_NOT_SUPPORTED" => UnprocessableEntity(CreateApiError(code, message, errors)),
             "ATTRIBUTE_REQUIRED" => UnprocessableEntity(CreateApiError(code, message, errors)),
