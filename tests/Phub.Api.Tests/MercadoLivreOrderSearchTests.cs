@@ -144,35 +144,6 @@ public sealed class MercadoLivreOrderSearchTests
         Assert.Equal(new[] { "1", "2", "3" }, page.OrderIds);
     }
 
-    [Fact]
-    public async Task Search_cancelled_order_events_uses_update_period_and_returns_event_timestamp()
-    {
-        var handler = new CallbackHandler(request =>
-        {
-            Assert.Contains("order.date_last_updated.from=", request.RequestUri!.Query, StringComparison.Ordinal);
-            Assert.Contains("order.status=cancelled", request.RequestUri.Query, StringComparison.Ordinal);
-            const string json = """
-            {"paging":{"total":1},"results":[
-              {"id":"ORDER-9","status":"cancelled","last_updated":"2026-09-18T09:15:00-03:00"}
-            ]}
-            """;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            });
-        });
-
-        var result = await CreateClient(handler).SearchCancelledOrderEventsAsync(
-            "123",
-            new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 10, 1, 3, 0, 0, TimeSpan.Zero),
-            "token");
-
-        var item = Assert.Single(result);
-        Assert.Equal("ORDER-9", item.OrderId);
-        Assert.Equal(new DateTimeOffset(2026, 9, 18, 12, 15, 0, TimeSpan.Zero), item.OccurredAt.ToUniversalTime());
-    }
-
     private static MercadoLivreApiClient CreateClient(HttpMessageHandler handler)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.mercadolibre.com") };

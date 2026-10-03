@@ -430,12 +430,6 @@ public sealed class MercadoLivreOrderSearchPage
     public bool HasMore { get; set; }
 }
 
-public sealed class MercadoLivreOrderEventReference
-{
-    public string OrderId { get; set; } = string.Empty;
-    public DateTimeOffset OccurredAt { get; set; }
-}
-
 public sealed class MercadoLivreHistoryBoundaryDiscovery
 {
     public DateTimeOffset RangeFrom { get; set; }
