@@ -478,7 +478,11 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             // timestamp. Using it as PaidAt moves cancellations/refunds into the
             // economic timeline and corrupts period totals.
             var paidAt = TryParseDateTimeOffset(GetOptionalString(root, "date_closed"));
-            var providerUpdatedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_last_updated"));
+            // Order detail responses use `last_updated`; some search/export
+            // payloads expose the same fact as `date_last_updated`.
+            var providerUpdatedAt = TryParseDateTimeOffset(
+                GetOptionalString(root, "last_updated")
+                ?? GetOptionalString(root, "date_last_updated"));
 
             var shippingMode = root.TryGetProperty("shipping", out var shippingRoot)
                 ? GetOptionalString(shippingRoot, "mode")

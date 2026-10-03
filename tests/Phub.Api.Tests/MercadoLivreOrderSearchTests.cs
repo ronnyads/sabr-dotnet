@@ -105,7 +105,7 @@ public sealed class MercadoLivreOrderSearchTests
           "status": "cancelled",
           "date_created": "2026-09-10T10:00:00-03:00",
           "date_closed": null,
-          "date_last_updated": "2026-10-02T11:30:00-03:00",
+          "last_updated": "2026-10-02T11:30:00-03:00",
           "order_items": []
         }
         """;
