@@ -95,4 +95,5 @@ public sealed class CatalogProductVariantDto
     public string Name { get; set; } = string.Empty;
     public int AvailableStock { get; set; }
     public long CatalogPriceCents { get; set; }
+    public string PricingMode { get; set; } = string.Empty;
 }

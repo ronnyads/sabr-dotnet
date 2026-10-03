@@ -78,11 +78,17 @@ public sealed class CatalogSnapshotService
             .ToListAsync(cancellationToken);
 
         var title = BuildTitle(baseProduct.Name, snapshotVariant?.Name, normalizedVariantSku);
-        var effectiveCostPriceCents = snapshotVariant != null && snapshotVariant.CostPriceCents > 0
-            ? snapshotVariant.CostPriceCents
-            : baseProduct.CostPriceCents;
-        var effectiveCatalogPriceCents = snapshotVariant != null && snapshotVariant.CatalogPriceCents > 0
-            ? snapshotVariant.CatalogPriceCents
+        var inheritsMasterPrice = snapshotVariant != null &&
+                                  string.Equals(snapshotVariant.PricingMode, ProductPricingModes.Inherited, StringComparison.Ordinal);
+        var effectiveCostPriceCents = inheritsMasterPrice
+            ? baseProduct.CostPriceCents
+            : snapshotVariant != null && snapshotVariant.CostPriceCents > 0
+                ? snapshotVariant.CostPriceCents
+                : baseProduct.CostPriceCents;
+        var effectiveCatalogPriceCents = inheritsMasterPrice
+            ? baseProduct.CatalogPriceCents > 0 ? baseProduct.CatalogPriceCents : (long?)null
+            : snapshotVariant != null && snapshotVariant.CatalogPriceCents > 0
+                ? snapshotVariant.CatalogPriceCents
             : baseProduct.CatalogPriceCents > 0
                 ? baseProduct.CatalogPriceCents
                 : (long?)null;

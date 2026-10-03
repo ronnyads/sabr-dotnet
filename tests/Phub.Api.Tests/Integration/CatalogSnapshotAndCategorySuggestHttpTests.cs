@@ -271,6 +271,55 @@ public sealed class CatalogSnapshotHttpTests : IClassFixture<MercadoLivreTestWeb
     }
 
     [Fact]
+    public async Task CatalogSnapshot_WhenInheritedVariantContainsStalePrice_UsesCurrentMasterPrice()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-snapshot-07";
+        const string tenantSlug = "tenantsnapshot07";
+        var clientId = Guid.NewGuid();
+        const string sku = "SKU-SNAPSHOT-INHERITED-07";
+
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Products.Add(new Product
+            {
+                Sku = sku,
+                Name = $"Produto {sku}",
+                Brand = "Marca Snapshot",
+                CostPriceCents = 900,
+                CatalogPriceCents = 1450,
+                IsActive = true
+            });
+            db.ProductVariants.Add(new ProductVariant
+            {
+                VariantSku = sku,
+                BaseSku = sku,
+                Name = $"Variante {sku}",
+                PricingMode = ProductPricingModes.Inherited,
+                CostPriceCents = 1000,
+                CatalogPriceCents = 1500,
+                PhysicalStock = 10,
+                AvailableStock = 10,
+                IsActive = true
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateTenantClient(tenantSlug, tenantId, clientId);
+        var response = await client.PostAsJsonAsync(
+            "/api/v1/client/catalog/variants/snapshot",
+            new CatalogVariantSnapshotRequest { VariantSku = sku });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<CatalogVariantSnapshotResult>();
+        Assert.NotNull(payload);
+        Assert.Equal(14.50m, payload!.CatalogPrice);
+        Assert.Equal(9m, payload.CostPrice);
+    }
+
+    [Fact]
     public async Task CatalogSnapshot_WhenCatalogPriceUnavailable_ReturnsNullCatalogPrice()
     {
         await _factory.ResetDatabaseAsync();

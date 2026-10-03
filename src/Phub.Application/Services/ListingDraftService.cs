@@ -832,9 +832,14 @@ public sealed class ListingDraftService :
                 return Failure<MarketplaceFeesEstimateResult>("variantSku", "PRODUCT_NOT_FOUND");
             }
 
-            var catalogCostCents = feeVariant.CatalogPriceCents > 0
-                ? feeVariant.CatalogPriceCents
-                : feeProduct.CatalogPriceCents;
+            var catalogCostCents = string.Equals(
+                    feeVariant.PricingMode,
+                    ProductPricingModes.Inherited,
+                    StringComparison.Ordinal)
+                ? feeProduct.CatalogPriceCents
+                : feeVariant.CatalogPriceCents > 0
+                    ? feeVariant.CatalogPriceCents
+                    : feeProduct.CatalogPriceCents;
             if (catalogCostCents <= 0)
             {
                 return Failure<MarketplaceFeesEstimateResult>("variantSku", "CATALOG_COST_PENDING");

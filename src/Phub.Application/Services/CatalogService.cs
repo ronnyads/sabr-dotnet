@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
+using Phub.Domain.Entities;
 using Phub.Domain.Enums;
 using Phub.Domain.ValueObjects;
 
@@ -183,7 +184,10 @@ public sealed class CatalogService
                 Sku = item.VariantSku,
                 Name = item.Name,
                 AvailableStock = item.AvailableStock,
-                CatalogPriceCents = item.CatalogPriceCents > 0 ? item.CatalogPriceCents : product.CatalogPriceCents
+                CatalogPriceCents = item.PricingMode == ProductPricingModes.Inherited
+                    ? product.CatalogPriceCents
+                    : item.CatalogPriceCents > 0 ? item.CatalogPriceCents : product.CatalogPriceCents,
+                PricingMode = item.PricingMode
             })
             .ToListAsync(cancellationToken);
         var images = await _dbContext.ProductImages.AsNoTracking()
