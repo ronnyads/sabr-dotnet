@@ -77,6 +77,10 @@ public sealed class ClientSalesDashboardService
             .Where(order => EffectiveDate(order) >= previousFrom && EffectiveDate(order) < rangeFrom)
             .ToList();
 
+        var cancellationEvents = await baseQuery
+            .Where(order => order.CancelledAt >= rangeFrom && order.CancelledAt < rangeTo)
+            .ToListAsync(cancellationToken);
+
         var supplierFilters = BuildSupplierFilters(unfilteredCurrent.Where(IsRevenueOrder));
         var current = unfilteredCurrent.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
         var previous = unfilteredPrevious.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
@@ -88,14 +92,23 @@ public sealed class ClientSalesDashboardService
         var grossRevenue = includedPaid.SelectMany(order => order.Items)
             .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
         var totalSalesAmount = current.SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
-        var cancelledSalesAmount = current.Where(order => IsCancelled(order.Status))
+        var cancelledInPeriod = cancellationEvents
+            .Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope)))
+            .ToList();
+        var cancelledSalesAmount = cancelledInPeriod
             .SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
         var previousRevenue = previousIncludedPaid.SelectMany(order => order.Items)
             .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
         var fees = includedPaid.SelectMany(order => order.Items)
             .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(item => item.SaleFee ?? 0m);
-        var totalUnits = includedPaid.SelectMany(order => order.Items)
+        var totalUnits = current.SelectMany(order => order.Items)
+            .Where(item => MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
+        var paidUnits = includedPaid.SelectMany(order => order.Items)
             .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
+        var cancelledUnits = current.Where(order => IsCancelled(order.Status)).SelectMany(order => order.Items)
+            .Where(item => MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
+        var refundedUnits = current.Where(order => NormalizeStatus(order.Status) is "refunded" or "partially_refunded")
+            .SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
 
         var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, ResolveSaoPauloTimeZone()).Date);
         var products = currentPaid
@@ -222,11 +235,16 @@ public sealed class ClientSalesDashboardService
             TotalSalesAmount = Math.Round(totalSalesAmount, 2),
             CancelledSalesAmount = Math.Round(cancelledSalesAmount, 2),
             TotalUnits = totalUnits,
+            PaidUnits = paidUnits,
+            CancelledUnits = cancelledUnits,
+            RefundedUnits = refundedUnits,
             GrossRevenue = Math.Round(grossRevenue, 2),
             MarketplaceFees = Math.Round(fees, 2),
             NetRevenue = Math.Round(grossRevenue - fees, 2),
             AverageTicket = includedPaid.Count == 0 ? 0 : Math.Round(grossRevenue / includedPaid.Count, 2),
-            CancelledOrders = current.Count(order => NormalizeStatus(order.Status).Contains("cancel", StringComparison.Ordinal)),
+            CancelledOrders = cancelledInPeriod.Count,
+            CurrentStatusCancelledOrders = current.Count(order => IsCancelled(order.Status)),
+            CancellationTimestampPendingOrders = current.Count(order => IsCancelled(order.Status) && !order.CancelledAt.HasValue),
             RefundedOrders = current.Count(order => NormalizeStatus(order.Status) is "refunded" or "partially_refunded"),
             UnmappedUnits = currentPaid.SelectMany(order => order.Items)
                 .Where(item => MatchesSupplierScope(item, supplierScope)

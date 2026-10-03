@@ -215,6 +215,8 @@ public sealed class MercadoLivreOrderDetails
     public string Status { get; set; } = string.Empty;
     public DateTimeOffset? ChannelCreatedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
+    public DateTimeOffset? ProviderUpdatedAt { get; set; }
+    public DateTimeOffset? CancelledAt { get; set; }
     public string? CurrencyId { get; set; }
     public decimal? TotalAmount { get; set; }
     public decimal? PaidAmount { get; set; }
@@ -456,11 +458,16 @@ public sealed class ClientSalesDashboardResult
     public decimal TotalSalesAmount { get; set; }
     public decimal CancelledSalesAmount { get; set; }
     public int TotalUnits { get; set; }
+    public int PaidUnits { get; set; }
+    public int CancelledUnits { get; set; }
+    public int RefundedUnits { get; set; }
     public decimal GrossRevenue { get; set; }
     public decimal MarketplaceFees { get; set; }
     public decimal NetRevenue { get; set; }
     public decimal AverageTicket { get; set; }
     public int CancelledOrders { get; set; }
+    public int CurrentStatusCancelledOrders { get; set; }
+    public int CancellationTimestampPendingOrders { get; set; }
     public int RefundedOrders { get; set; }
     public int UnmappedUnits { get; set; }
     public decimal OrdersChangePercent { get; set; }

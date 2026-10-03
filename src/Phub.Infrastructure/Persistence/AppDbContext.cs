@@ -1331,6 +1331,8 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
             entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(80).IsRequired();
             entity.Property(e => e.ChannelCreatedAt).HasColumnName("channel_created_at");
             entity.Property(e => e.PaidAt).HasColumnName("paid_at");
+            entity.Property(e => e.ProviderUpdatedAt).HasColumnName("provider_updated_at");
+            entity.Property(e => e.CancelledAt).HasColumnName("cancelled_at");
             entity.Property(e => e.CurrencyId).HasColumnName("currency_id").HasMaxLength(3);
             entity.Property(e => e.TotalAmount).HasColumnName("total_amount").HasPrecision(18, 2);
             entity.Property(e => e.PaidAmount).HasColumnName("paid_amount").HasPrecision(18, 2);
@@ -1364,6 +1366,9 @@ public sealed class AppDbContext : DbContext, IAppDbContext, IDataProtectionKeyC
                 .HasDatabaseName("ix_marketplace_orders_scope_status_imported");
             entity.HasIndex(e => new { e.TenantId, e.ClientId, e.ChannelCreatedAt })
                 .HasDatabaseName("ix_marketplace_orders_scope_channel_created");
+            entity.HasIndex(e => new { e.TenantId, e.ClientId, e.Provider, e.CancelledAt })
+                .HasFilter("cancelled_at IS NOT NULL")
+                .HasDatabaseName("ix_marketplace_orders_scope_cancelled_at");
             entity.HasIndex(e => e.InternalOrderNumber)
                 .IsUnique()
                 .HasDatabaseName("ux_marketplace_orders_internal_order_number");

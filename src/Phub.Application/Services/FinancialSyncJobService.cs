@@ -676,7 +676,7 @@ public sealed class FinancialSyncJobService
                 if (page.HasMore)
                 {
                     job.Checkpoint = JsonSerializer.Serialize(new HistoryPageCheckpoint(segmentFrom,
-                        page.Offset + page.OrderIds.Count));
+                        page.Offset + page.Limit));
                     job.Status = "PENDING";
                 }
                 else

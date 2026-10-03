@@ -429,17 +429,20 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             const int pageSize = 50;
             var orderIds = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            for (var offset = 0; ; offset += pageSize)
+            foreach (var orderStatus in new string?[] { null, "cancelled" })
             {
-                var page = await SearchOrdersPageCoreAsync(sellerId, from, to, offset, pageSize, accessToken, ct);
-                var received = page.OrderIds.Count;
-                var before = orderIds.Count;
-                foreach (var id in page.OrderIds)
-                    if (seen.Add(id)) orderIds.Add(id);
-                // Never impose a local result cap. Mercado Livre is the source of
-                // truth for pagination; the empty/repeated-page guards prevent an
-                // inconsistent paging response from producing an infinite loop.
-                if (received == 0 || orderIds.Count == before || !page.HasMore) break;
+                for (var offset = 0; ; offset += pageSize)
+                {
+                    var page = await SearchOrdersPageCoreAsync(
+                        sellerId, from, to, offset, pageSize, accessToken, ct, orderStatus);
+                    var received = page.OrderIds.Count;
+                    var streamAdded = 0;
+                    foreach (var id in page.OrderIds)
+                        if (seen.Add(id)) { orderIds.Add(id); streamAdded++; }
+                    // Never impose a local result cap. A repeated page only ends
+                    // this stream; the explicit cancelled stream still runs.
+                    if (received == 0 || (streamAdded == 0 && offset > 0) || !page.HasMore) break;
+                }
             }
 
             return (IReadOnlyList<string>)orderIds;
@@ -471,9 +474,11 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 ? GetOptionalString(shippingElement, "id")
                 : null;
 
-            var paidAt = TryParseDateTimeOffset(
-                GetOptionalString(root, "date_closed") ??
-                GetOptionalString(root, "date_last_updated"));
+            // date_last_updated is an order mutation timestamp, not a payment
+            // timestamp. Using it as PaidAt moves cancellations/refunds into the
+            // economic timeline and corrupts period totals.
+            var paidAt = TryParseDateTimeOffset(GetOptionalString(root, "date_closed"));
+            var providerUpdatedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_last_updated"));
 
             var shippingMode = root.TryGetProperty("shipping", out var shippingRoot)
                 ? GetOptionalString(shippingRoot, "mode")
@@ -536,6 +541,7 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
                 Status = GetOptionalString(root, "status") ?? string.Empty,
                 ChannelCreatedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_created")),
                 PaidAt = paidAt,
+                ProviderUpdatedAt = providerUpdatedAt,
                 CurrencyId = GetOptionalString(root, "currency_id"),
                 TotalAmount = GetOptionalDecimal(root, "total_amount"),
                 PaidAmount = GetOptionalDecimal(root, "paid_amount"),
@@ -605,13 +611,28 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
     public Task<MercadoLivreOrderSearchPage> SearchOrdersPageAsync(
         string sellerId, DateTimeOffset from, DateTimeOffset to, int offset, int limit,
         string accessToken, CancellationToken cancellationToken = default)
-        => ExecuteWithResilienceAsync(
-            ct => SearchOrdersPageCoreAsync(sellerId, from, to, offset, limit, accessToken, ct),
-            cancellationToken);
+        => ExecuteWithResilienceAsync(async ct =>
+        {
+            var regular = await SearchOrdersPageCoreAsync(
+                sellerId, from, to, offset, limit, accessToken, ct, null);
+            var cancelled = await SearchOrdersPageCoreAsync(
+                sellerId, from, to, offset, limit, accessToken, ct, "cancelled");
+            return new MercadoLivreOrderSearchPage
+            {
+                OrderIds = regular.OrderIds.Concat(cancelled.OrderIds)
+                    .Distinct(StringComparer.Ordinal).ToList(),
+                Offset = regular.Offset,
+                Limit = regular.Limit,
+                // Diagnostic only. The canonical reconciliation is the distinct
+                // ID set because provider streams may overlap.
+                RemoteReportedTotal = Math.Max(regular.RemoteReportedTotal, cancelled.RemoteReportedTotal),
+                HasMore = regular.HasMore || cancelled.HasMore
+            };
+        }, cancellationToken);
 
     private async Task<MercadoLivreOrderSearchPage> SearchOrdersPageCoreAsync(
         string sellerId, DateTimeOffset from, DateTimeOffset to, int offset, int limit,
-        string accessToken, CancellationToken cancellationToken)
+        string accessToken, CancellationToken cancellationToken, string? orderStatus = null)
     {
         offset = Math.Max(0, offset);
         // The production Brazilian endpoint currently rejects values above 51,
@@ -621,6 +642,9 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             $"/orders/search?seller={Uri.EscapeDataString(sellerId)}" +
             $"&order.date_created.from={Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
             $"&order.date_created.to={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+            (string.IsNullOrWhiteSpace(orderStatus)
+                ? string.Empty
+                : $"&order.status={Uri.EscapeDataString(orderStatus)}") +
             $"&sort=date_asc&limit={limit}&offset={offset}";
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);

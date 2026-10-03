@@ -14,6 +14,8 @@ public sealed class MarketplaceOrder
     public string Status { get; set; } = string.Empty;
     public DateTimeOffset? ChannelCreatedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
+    public DateTimeOffset? ProviderUpdatedAt { get; set; }
+    public DateTimeOffset? CancelledAt { get; set; }
     public string? CurrencyId { get; set; }
     public decimal? TotalAmount { get; set; }
     public decimal? PaidAmount { get; set; }

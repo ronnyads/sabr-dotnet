@@ -51,7 +51,7 @@ public sealed class MercadoLivreOrderSearchTests
             "123", DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow, "token");
 
         Assert.Equal(50, result.Count);
-        Assert.Equal(2, calls);
+        Assert.Equal(4, calls);
     }
 
     [Fact]
@@ -93,6 +93,55 @@ public sealed class MercadoLivreOrderSearchTests
 
         Assert.Equal(HttpStatusCode.TooManyRequests, exception.StatusCode);
         Assert.Equal(TimeSpan.FromSeconds(17), exception.RetryAfter);
+    }
+
+    [Fact]
+    public async Task Get_order_keeps_payment_and_provider_update_timestamps_distinct()
+    {
+        const string json = """
+        {
+          "id": "ORDER-1",
+          "seller": { "id": 123 },
+          "status": "cancelled",
+          "date_created": "2026-09-10T10:00:00-03:00",
+          "date_closed": null,
+          "date_last_updated": "2026-10-02T11:30:00-03:00",
+          "order_items": []
+        }
+        """;
+        var handler = new CallbackHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        }));
+
+        var result = await CreateClient(handler).GetOrderAsync("ORDER-1", "token");
+
+        Assert.NotNull(result);
+        Assert.Null(result!.PaidAt);
+        Assert.Equal(new DateTimeOffset(2026, 10, 2, 14, 30, 0, TimeSpan.Zero),
+            result.ProviderUpdatedAt?.ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task Search_order_page_also_queries_cancelled_stream_and_deduplicates_ids()
+    {
+        var handler = new CallbackHandler(request =>
+        {
+            var cancelled = request.RequestUri!.Query.Contains("order.status=cancelled", StringComparison.Ordinal);
+            var json = cancelled
+                ? "{\"paging\":{\"total\":2},\"results\":[{\"id\":\"2\"},{\"id\":\"3\"}]}"
+                : "{\"paging\":{\"total\":2},\"results\":[{\"id\":\"1\"},{\"id\":\"2\"}]}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        });
+
+        var page = await CreateClient(handler).SearchOrdersPageAsync(
+            "123", DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow,
+            offset: 0, limit: 50, accessToken: "token");
+
+        Assert.Equal(new[] { "1", "2", "3" }, page.OrderIds);
     }
 
     private static MercadoLivreApiClient CreateClient(HttpMessageHandler handler)

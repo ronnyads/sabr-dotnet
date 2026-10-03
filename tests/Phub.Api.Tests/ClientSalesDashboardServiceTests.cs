@@ -36,6 +36,7 @@ public sealed class ClientSalesDashboardServiceTests
         });
 
         var cancelled = CreateOrder(tenantId, clientId, "ORDER-CANCELLED", "cancelled", now, 50m);
+        cancelled.CancelledAt = now;
         cancelled.Items.Add(new MarketplaceOrderItem
         {
             TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
@@ -59,11 +60,15 @@ public sealed class ClientSalesDashboardServiceTests
         Assert.Equal(1, result.PaidOrders);
         Assert.Equal(249.80m, result.TotalSalesAmount);
         Assert.Equal(50m, result.CancelledSalesAmount);
-        Assert.Equal(2, result.TotalUnits);
+        Assert.Equal(3, result.TotalUnits);
+        Assert.Equal(2, result.PaidUnits);
+        Assert.Equal(1, result.CancelledUnits);
         Assert.Equal(199.80m, result.GrossRevenue);
         Assert.Equal(20m, result.MarketplaceFees);
         Assert.Equal(179.80m, result.NetRevenue);
         Assert.Equal(1, result.CancelledOrders);
+        Assert.Equal(1, result.CurrentStatusCancelledOrders);
+        Assert.Equal(0, result.CancellationTimestampPendingOrders);
         Assert.Equal("SKU-01", Assert.Single(result.TopSkus).Sku);
         Assert.Equal("SKU-01", Assert.Single(result.Products).Sku);
         Assert.Equal(1, result.TotalProducts);
@@ -180,6 +185,35 @@ public sealed class ClientSalesDashboardServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_CountsCancellationByEventTimeWithoutChangingReceivedOrderCohort()
+    {
+        await using var db = CreateDb();
+        const string tenantId = "tenant-cancellation-events";
+        var clientId = Guid.NewGuid();
+        var from = new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 10, 1, 3, 0, 0, TimeSpan.Zero);
+        var order = CreateOrder(tenantId, clientId, "ORDER-AUGUST-CANCELLED-IN-SEPTEMBER",
+            "cancelled", from.AddDays(-2), 45m);
+        order.CancelledAt = from.AddDays(5);
+        order.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = order.SellerId, MlItemId = "MLB-CANCEL-EVENT", Quantity = 2,
+            UnitPrice = 22.50m, RawJson = "{}"
+        });
+        db.MarketplaceOrders.Add(order);
+        await db.SaveChangesAsync();
+
+        var result = await new ClientSalesDashboardService(db).GetAsync(
+            tenantId, clientId, from, to, MarketplaceProvider.MercadoLivre);
+
+        Assert.Equal(0, result.TotalOrders);
+        Assert.Equal(0, result.TotalUnits);
+        Assert.Equal(1, result.CancelledOrders);
+        Assert.Equal(45m, result.CancelledSalesAmount);
+    }
+
+    [Fact]
     public async Task GetAsync_ListsOnlyPendingShipmentsDueTodayBySku()
     {
         await using var db = CreateDb();
@@ -287,7 +321,8 @@ public sealed class ClientSalesDashboardServiceTests
         Assert.Equal(1, result.ExternalSupplier.ProductsWithCost);
         Assert.Equal(1, result.ExternalSupplier.ProductsPendingCost);
         Assert.Equal(40m, result.GrossRevenue);
-        Assert.Equal(2, result.TotalUnits);
+        Assert.Equal(3, result.TotalUnits);
+        Assert.Equal(2, result.PaidUnits);
         Assert.All(result.Products, product => Assert.True(product.IsExternalSupplier));
         Assert.Contains(result.Products, product => product.MappingPriority == "EXTERNAL_COST_PENDING");
 

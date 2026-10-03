@@ -481,12 +481,34 @@ public sealed class MercadoLivreSyncService
         bool enforceOrderSeller = false)
     {
         var accessToken = await _oauthService.GetValidAccessTokenAsync(connection, cancellationToken);
-        var orderIds = specificOrderIds ?? await _mercadoLivreApiClient.SearchOrdersAsync(
-            MercadoLivreSellerIdParser.ToApiString(connection.SellerId),
-            fromUtc,
-            toUtc,
-            accessToken,
-            cancellationToken);
+        IReadOnlyList<string> orderIds;
+        if (specificOrderIds != null)
+        {
+            orderIds = specificOrderIds;
+        }
+        else
+        {
+            var discoveredIds = await _mercadoLivreApiClient.SearchOrdersAsync(
+                MercadoLivreSellerIdParser.ToApiString(connection.SellerId),
+                fromUtc,
+                toUtc,
+                accessToken,
+                cancellationToken);
+
+            // Seller search may omit orders that are already cancelled. Refresh
+            // every locally known order in the requested creation interval as well,
+            // so retries and manual resync repair statuses without creating rows.
+            var knownIds = await _dbContext.MarketplaceOrders.AsNoTracking()
+                .Where(x => x.TenantId == connection.TenantId
+                            && x.ClientId == connection.ClientId
+                            && x.Provider == MarketplaceProvider.MercadoLivre
+                            && x.SellerId == connection.SellerId
+                            && (x.ChannelCreatedAt ?? x.ImportedAt) >= fromUtc
+                            && (x.ChannelCreatedAt ?? x.ImportedAt) < toUtc)
+                .Select(x => x.MlOrderId)
+                .ToListAsync(cancellationToken);
+            orderIds = discoveredIds.Concat(knownIds).Distinct(StringComparer.Ordinal).ToList();
+        }
 
         var mappings = await _dbContext.TenantMarketplaceListingMaps
             .Where(item => item.TenantId == connection.TenantId
@@ -612,6 +634,7 @@ public sealed class MercadoLivreSyncService
                     details.ShippingMode = shipment.ShippingMode ?? details.ShippingMode;
                     details.LogisticType = shipment.LogisticType ?? details.LogisticType;
                     details.ShipByDeadlineAt ??= shipment.ShipByDeadlineAt;
+                    details.CancelledAt ??= shipment.CancelledAt;
                 }
 
                 await UpsertShipmentAsync(connection, details, shipmentDetails, cancellationToken);
@@ -699,6 +722,17 @@ public sealed class MercadoLivreSyncService
         order.Status = details.Status;
         order.ChannelCreatedAt = details.ChannelCreatedAt;
         order.PaidAt = details.PaidAt;
+        if (!order.ProviderUpdatedAt.HasValue
+            || details.ProviderUpdatedAt >= order.ProviderUpdatedAt)
+        {
+            order.ProviderUpdatedAt = details.ProviderUpdatedAt;
+        }
+        if (IsCancelledStatus(details.Status) && !order.CancelledAt.HasValue)
+        {
+            // Shipment history is the strongest source. For orders without a
+            // shipment, date_last_updated is the provider's only event timestamp.
+            order.CancelledAt = details.CancelledAt ?? details.ProviderUpdatedAt;
+        }
         order.CurrencyId = details.CurrencyId;
         order.TotalAmount = details.TotalAmount;
         order.PaidAmount = details.PaidAmount;
@@ -825,7 +859,7 @@ public sealed class MercadoLivreSyncService
                 {
                     orderId = details.MlOrderId,
                     status = details.Status,
-                    updatedAt = nowUtc
+                    updatedAt = order.CancelledAt ?? nowUtc
                 },
                 "v1",
                 cancellationToken);
