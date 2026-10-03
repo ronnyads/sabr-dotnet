@@ -37,6 +37,7 @@ public sealed class ClientSalesDashboardServiceTests
 
         var cancelled = CreateOrder(tenantId, clientId, "ORDER-CANCELLED", "cancelled", now, 50m);
         cancelled.CancelledAt = now;
+        cancelled.RawJson = "{\"pack_id\":\"PACK-CANCELLED\",\"cancel_detail\":{\"group\":\"buyer\"}}";
         cancelled.Items.Add(new MarketplaceOrderItem
         {
             TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
@@ -185,32 +186,57 @@ public sealed class ClientSalesDashboardServiceTests
     }
 
     [Fact]
-    public async Task GetAsync_CountsCancellationByEventTimeWithoutChangingReceivedOrderCohort()
+    public async Task GetAsync_CountsCommercialCancellationsBySaleAndExcludesPostSaleGroups()
     {
         await using var db = CreateDb();
         const string tenantId = "tenant-cancellation-events";
         var clientId = Guid.NewGuid();
         var from = new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero);
         var to = new DateTimeOffset(2026, 10, 1, 3, 0, 0, TimeSpan.Zero);
-        var order = CreateOrder(tenantId, clientId, "ORDER-AUGUST-CANCELLED-IN-SEPTEMBER",
-            "cancelled", from.AddDays(-2), 45m);
-        order.CancelledAt = from.AddDays(5);
-        order.Items.Add(new MarketplaceOrderItem
+        var buyerOne = CreateOrder(tenantId, clientId, "ORDER-BUYER-1", "cancelled", from.AddDays(2), 20m);
+        buyerOne.RawJson = "{\"pack_id\":\"PACK-BUYER\",\"cancel_detail\":{\"group\":\"buyer\"}}";
+        buyerOne.Items.Add(new MarketplaceOrderItem
         {
             TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
-            SellerId = order.SellerId, MlItemId = "MLB-CANCEL-EVENT", Quantity = 2,
-            UnitPrice = 22.50m, RawJson = "{}"
+            SellerId = buyerOne.SellerId, MlItemId = "MLB-BUYER-1", Quantity = 1,
+            UnitPrice = 20m, RawJson = "{}"
         });
-        db.MarketplaceOrders.Add(order);
+        var buyerTwo = CreateOrder(tenantId, clientId, "ORDER-BUYER-2", "cancelled", from.AddDays(2), 25m);
+        buyerTwo.RawJson = "{\"pack_id\":\"PACK-BUYER\",\"cancel_detail\":{\"group\":\"buyer\"}}";
+        buyerTwo.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = buyerTwo.SellerId, MlItemId = "MLB-BUYER-2", Quantity = 1,
+            UnitPrice = 25m, RawJson = "{}"
+        });
+        var fraud = CreateOrder(tenantId, clientId, "ORDER-FRAUD", "cancelled", from.AddDays(3), 30m);
+        fraud.RawJson = "{\"cancel_detail\":{\"group\":\"fraud\"}}";
+        fraud.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = fraud.SellerId, MlItemId = "MLB-FRAUD", Quantity = 1,
+            UnitPrice = 30m, RawJson = "{}"
+        });
+        var mediation = CreateOrder(tenantId, clientId, "ORDER-MEDIATION", "cancelled", from.AddDays(4), 40m);
+        mediation.RawJson = "{\"cancel_detail\":{\"group\":\"mediations\"}}";
+        mediation.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = mediation.SellerId, MlItemId = "MLB-MEDIATION", Quantity = 1,
+            UnitPrice = 40m, RawJson = "{}"
+        });
+        db.MarketplaceOrders.AddRange(buyerOne, buyerTwo, fraud, mediation);
         await db.SaveChangesAsync();
 
         var result = await new ClientSalesDashboardService(db).GetAsync(
             tenantId, clientId, from, to, MarketplaceProvider.MercadoLivre);
 
-        Assert.Equal(0, result.TotalOrders);
-        Assert.Equal(0, result.TotalUnits);
-        Assert.Equal(1, result.CancelledOrders);
-        Assert.Equal(45m, result.CancelledSalesAmount);
+        Assert.Equal(4, result.TotalOrders);
+        Assert.Equal(4, result.TotalUnits);
+        Assert.Equal(2, result.CancelledOrders);
+        Assert.Equal(75m, result.CancelledSalesAmount);
+        Assert.Equal(4, result.CurrentStatusCancelledOrders);
+        Assert.Equal(0, result.CancellationTimestampPendingOrders);
     }
 
     [Fact]

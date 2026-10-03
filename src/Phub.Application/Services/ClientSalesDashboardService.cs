@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -77,10 +78,6 @@ public sealed class ClientSalesDashboardService
             .Where(order => EffectiveDate(order) >= previousFrom && EffectiveDate(order) < rangeFrom)
             .ToList();
 
-        var cancellationEvents = await baseQuery
-            .Where(order => order.CancelledAt >= rangeFrom && order.CancelledAt < rangeTo)
-            .ToListAsync(cancellationToken);
-
         var supplierFilters = BuildSupplierFilters(unfilteredCurrent.Where(IsRevenueOrder));
         var current = unfilteredCurrent.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
         var previous = unfilteredPrevious.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
@@ -92,7 +89,8 @@ public sealed class ClientSalesDashboardService
         var grossRevenue = includedPaid.SelectMany(order => order.Items)
             .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
         var totalSalesAmount = current.SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
-        var cancelledInPeriod = cancellationEvents
+        var cancelledInPeriod = current
+            .Where(IsCommercialCancellation)
             .Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope)))
             .ToList();
         var cancelledSalesAmount = cancelledInPeriod
@@ -242,9 +240,11 @@ public sealed class ClientSalesDashboardService
             MarketplaceFees = Math.Round(fees, 2),
             NetRevenue = Math.Round(grossRevenue - fees, 2),
             AverageTicket = includedPaid.Count == 0 ? 0 : Math.Round(grossRevenue / includedPaid.Count, 2),
-            CancelledOrders = cancelledInPeriod.Count,
+            CancelledOrders = cancelledInPeriod.Select(ResolveMarketplaceSaleKey)
+                .Distinct(StringComparer.Ordinal).Count(),
             CurrentStatusCancelledOrders = current.Count(order => IsCancelled(order.Status)),
-            CancellationTimestampPendingOrders = current.Count(order => IsCancelled(order.Status) && !order.CancelledAt.HasValue),
+            CancellationTimestampPendingOrders = current.Count(order => IsCancelled(order.Status)
+                && string.IsNullOrWhiteSpace(ResolveCancellationGroup(order))),
             RefundedOrders = current.Count(order => NormalizeStatus(order.Status) is "refunded" or "partially_refunded"),
             UnmappedUnits = currentPaid.SelectMany(order => order.Items)
                 .Where(item => MatchesSupplierScope(item, supplierScope)
@@ -412,6 +412,54 @@ public sealed class ClientSalesDashboardService
 
     private static bool IsCancelled(string? status)
         => NormalizeStatus(status).Contains("cancel", StringComparison.Ordinal);
+
+    private static bool IsCommercialCancellation(MarketplaceOrder order)
+    {
+        if (!IsCancelled(order.Status)) return false;
+        return ResolveCancellationGroup(order) is "buyer" or "fraud" or "internal";
+    }
+
+    private static string ResolveMarketplaceSaleKey(MarketplaceOrder order)
+        => ReadRawString(order.RawJson, "pack_id") ?? order.MlOrderId;
+
+    private static string? ResolveCancellationGroup(MarketplaceOrder order)
+    {
+        if (string.IsNullOrWhiteSpace(order.RawJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(order.RawJson);
+            if (!document.RootElement.TryGetProperty("cancel_detail", out var detail)
+                || detail.ValueKind != JsonValueKind.Object)
+                return null;
+            return detail.TryGetProperty("group", out var group) && group.ValueKind == JsonValueKind.String
+                ? group.GetString()?.Trim().ToLowerInvariant()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadRawString(string? rawJson, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(rawJson);
+            if (!document.RootElement.TryGetProperty(propertyName, out var value)) return null;
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number => value.GetRawText(),
+                _ => null
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private static bool IsExternalSupplier(MarketplaceOrderItem item)
         => MarketplaceMappingStates.IsExternal(item.MappingState);
