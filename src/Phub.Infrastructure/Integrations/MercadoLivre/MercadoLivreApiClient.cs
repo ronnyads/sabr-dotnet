@@ -580,35 +580,61 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            return new MercadoLivreShipmentDetails
+            return ParseShipmentDetails(root, shipmentId, json);
+        }, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MercadoLivreShipmentDetails>> GetOrderShipmentsAsync(
+        string orderId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithResilienceAsync(async ct =>
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/orders/{Uri.EscapeDataString(orderId)}/shipments?list_all=true");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Headers.TryAddWithoutValidation("X-New-Domain", "true");
+
+            using var response = await _httpClient.SendAsync(request, ct);
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)
+                return (IReadOnlyList<MercadoLivreShipmentDetails>)[];
+
+            await EnsureSuccessOrThrowApiExceptionAsync(response, ct);
+            var json = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var shipments = new List<MercadoLivreShipmentDetails>();
+
+            if (root.ValueKind == JsonValueKind.Array)
             {
-                ShipmentId = GetOptionalString(root, "id") ?? shipmentId,
-                SellerId = ResolveShipmentSellerId(root),
-                Status = GetOptionalString(root, "status"),
-                Substatus = GetOptionalString(root, "substatus"),
-                ShippingMode = GetOptionalString(root, "mode"),
-                LogisticType = GetOptionalString(root, "logistic_type"),
-                TrackingNumber = root.TryGetProperty("tracking_number", out var trackingNumberElement)
-                    ? GetOptionalString(root, "tracking_number")
-                    : (root.TryGetProperty("tracking", out var trackingElement) ? GetOptionalString(trackingElement, "id") : null),
-                TrackingMethod = root.TryGetProperty("tracking_method", out var trackingMethodElement)
-                    ? GetOptionalString(root, "tracking_method")
-                    : (root.TryGetProperty("tracking", out var trackingElement2) ? GetOptionalString(trackingElement2, "method") : null),
-                TrackingUrl = root.TryGetProperty("tracking", out var trackingRoot)
-                    ? GetOptionalString(trackingRoot, "url")
-                    : null,
-                ShippedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_shipped")),
-                HandlingAt = TryParseDateTimeOffset(GetOptionalString(root, "date_handling")),
-                ReadyToShipAt = TryParseDateTimeOffset(GetOptionalString(root, "date_ready_to_ship")),
-                FirstPrintedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_first_printed")),
-                DeliveredAt = TryParseDateTimeOffset(GetOptionalString(root, "date_delivered")),
-                NotDeliveredAt = TryParseDateTimeOffset(GetOptionalString(root, "date_not_delivered")),
-                ReturnedAt = TryParseDateTimeOffset(GetOptionalString(root, "date_returned")),
-                CancelledAt = TryParseDateTimeOffset(GetOptionalString(root, "date_cancelled")),
-                ProviderUpdatedAt = TryParseDateTimeOffset(GetOptionalString(root, "last_updated")),
-                ShipByDeadlineAt = null,
-                RawJson = json
-            };
+                foreach (var node in root.EnumerateArray())
+                {
+                    if (node.ValueKind != JsonValueKind.Object) continue;
+                    shipments.Add(ParseShipmentDetails(node, string.Empty, node.GetRawText()));
+                }
+            }
+            else if (root.ValueKind == JsonValueKind.Object
+                     && root.TryGetProperty("results", out var results)
+                     && results.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var node in results.EnumerateArray())
+                {
+                    if (node.ValueKind != JsonValueKind.Object) continue;
+                    shipments.Add(ParseShipmentDetails(node, string.Empty, node.GetRawText()));
+                }
+            }
+            else if (root.ValueKind == JsonValueKind.Object)
+            {
+                shipments.Add(ParseShipmentDetails(root, string.Empty, json));
+            }
+
+            return (IReadOnlyList<MercadoLivreShipmentDetails>)shipments
+                .Where(x => !string.IsNullOrWhiteSpace(x.ShipmentId))
+                .GroupBy(x => x.ShipmentId!, StringComparer.Ordinal)
+                .Select(x => x.First())
+                .ToList();
         }, cancellationToken);
     }
 
@@ -1892,6 +1918,53 @@ public sealed class MercadoLivreApiClient : IMercadoLivreApiClient
         }
 
         return null;
+    }
+
+    private static MercadoLivreShipmentDetails ParseShipmentDetails(
+        JsonElement root,
+        string fallbackShipmentId,
+        string rawJson)
+    {
+        return new MercadoLivreShipmentDetails
+        {
+            ShipmentId = GetOptionalString(root, "id") ?? fallbackShipmentId,
+            SellerId = ResolveShipmentSellerId(root),
+            Status = GetOptionalString(root, "status"),
+            Substatus = GetOptionalString(root, "substatus"),
+            ShippingMode = GetOptionalString(root, "mode"),
+            LogisticType = GetOptionalString(root, "logistic_type"),
+            TrackingNumber = root.TryGetProperty("tracking_number", out _)
+                ? GetOptionalString(root, "tracking_number")
+                : (root.TryGetProperty("tracking", out var trackingElement)
+                    ? GetOptionalString(trackingElement, "id") : null),
+            TrackingMethod = root.TryGetProperty("tracking_method", out _)
+                ? GetOptionalString(root, "tracking_method")
+                : (root.TryGetProperty("tracking", out var trackingElement2)
+                    ? GetOptionalString(trackingElement2, "method") : null),
+            TrackingUrl = root.TryGetProperty("tracking", out var trackingRoot)
+                ? GetOptionalString(trackingRoot, "url") : null,
+            ShippedAt = ReadShipmentDate(root, "date_shipped"),
+            HandlingAt = ReadShipmentDate(root, "date_handling"),
+            ReadyToShipAt = ReadShipmentDate(root, "date_ready_to_ship"),
+            FirstPrintedAt = ReadShipmentDate(root, "date_first_printed"),
+            DeliveredAt = ReadShipmentDate(root, "date_delivered"),
+            NotDeliveredAt = ReadShipmentDate(root, "date_not_delivered"),
+            ReturnedAt = ReadShipmentDate(root, "date_returned"),
+            CancelledAt = ReadShipmentDate(root, "date_cancelled"),
+            ProviderUpdatedAt = TryParseDateTimeOffset(GetOptionalString(root, "last_updated")),
+            ShipByDeadlineAt = null,
+            RawJson = rawJson
+        };
+    }
+
+    private static DateTimeOffset? ReadShipmentDate(JsonElement root, string propertyName)
+    {
+        var direct = TryParseDateTimeOffset(GetOptionalString(root, propertyName));
+        if (direct.HasValue) return direct;
+        return root.TryGetProperty("status_history", out var history)
+               && history.ValueKind == JsonValueKind.Object
+            ? TryParseDateTimeOffset(GetOptionalString(history, propertyName))
+            : null;
     }
 
     private static string? ExtractVariationSku(JsonElement variation)

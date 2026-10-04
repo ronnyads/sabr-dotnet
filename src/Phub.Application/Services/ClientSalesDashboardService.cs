@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Domain.Entities;
@@ -67,6 +66,7 @@ public sealed class ClientSalesDashboardService
         }
 
         var orders = await baseQuery
+            .AsSplitQuery()
             .Where(order => (order.ChannelCreatedAt ?? order.ImportedAt) >= previousFrom
                             && (order.ChannelCreatedAt ?? order.ImportedAt) < rangeTo)
             .ToListAsync(cancellationToken);
@@ -82,15 +82,30 @@ public sealed class ClientSalesDashboardService
         var current = unfilteredCurrent.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
         var previous = unfilteredPrevious.Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope))).ToList();
 
-        var currentPaid = current.Where(IsRevenueOrder).ToList();
-        var previousPaid = previous.Where(IsRevenueOrder).ToList();
+        // Order status alone is not the provider's complete commercial outcome.
+        // Returns and shipments finalized as not_delivered must also be excluded
+        // from valid/paid revenue, even when the order endpoint still says paid.
+        var scopedOrders = current.Concat(previous).ToList();
+        var scopedOrderIds = scopedOrders.Select(order => order.MlOrderId).ToList();
+        var scopedShipmentIds = scopedOrders.Select(order => order.ShipmentId)
+            .Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToList();
+        var providerCancellationFacts = await LoadProviderCancellationFactsAsync(
+            tenantId, clientId, provider, scopedOrderIds, scopedShipmentIds, cancellationToken);
+        bool IsEffectiveRevenueOrder(MarketplaceOrder order) => IsRevenueOrder(order)
+            && !providerCancellationFacts.OrderIds.Contains(order.MlOrderId)
+            && !providerCancellationFacts.ShipmentIds.Contains(order.ShipmentId ?? string.Empty);
+
+        var currentPaid = current.Where(IsEffectiveRevenueOrder).ToList();
+        var previousPaid = previous.Where(IsEffectiveRevenueOrder).ToList();
         var includedPaid = currentPaid.Where(order => order.Items.Any(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope))).ToList();
         var previousIncludedPaid = previousPaid.Where(order => order.Items.Any(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope))).ToList();
         var grossRevenue = includedPaid.SelectMany(order => order.Items)
             .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
         var totalSalesAmount = current.SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(ItemRevenue);
         var cancelledInPeriod = current
-            .Where(IsCommercialCancellation)
+            .Where(order => IsCancelled(order.Status)
+                            || providerCancellationFacts.OrderIds.Contains(order.MlOrderId)
+                            || providerCancellationFacts.ShipmentIds.Contains(order.ShipmentId ?? string.Empty))
             .Where(order => order.Items.Any(item => MatchesSupplierScope(item, supplierScope)))
             .ToList();
         var cancelledSalesAmount = cancelledInPeriod
@@ -103,7 +118,7 @@ public sealed class ClientSalesDashboardService
             .Where(item => MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
         var paidUnits = includedPaid.SelectMany(order => order.Items)
             .Where(item => IsIncludedInSalesResult(item) && MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
-        var cancelledUnits = current.Where(order => IsCancelled(order.Status)).SelectMany(order => order.Items)
+        var cancelledUnits = cancelledInPeriod.SelectMany(order => order.Items)
             .Where(item => MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
         var refundedUnits = current.Where(order => NormalizeStatus(order.Status) is "refunded" or "partially_refunded")
             .SelectMany(order => order.Items).Where(item => MatchesSupplierScope(item, supplierScope)).Sum(item => item.Quantity);
@@ -240,11 +255,12 @@ public sealed class ClientSalesDashboardService
             MarketplaceFees = Math.Round(fees, 2),
             NetRevenue = Math.Round(grossRevenue - fees, 2),
             AverageTicket = includedPaid.Count == 0 ? 0 : Math.Round(grossRevenue / includedPaid.Count, 2),
-            CancelledOrders = cancelledInPeriod.Select(ResolveMarketplaceSaleKey)
-                .Distinct(StringComparer.Ordinal).Count(),
+            CancelledOrders = cancelledInPeriod.Count,
             CurrentStatusCancelledOrders = current.Count(order => IsCancelled(order.Status)),
-            CancellationTimestampPendingOrders = current.Count(order => IsCancelled(order.Status)
-                && string.IsNullOrWhiteSpace(ResolveCancellationGroup(order))),
+            CancellationTimestampPendingOrders = cancelledInPeriod.Count(order =>
+                !order.CancelledAt.HasValue
+                && !providerCancellationFacts.TimestampedOrderIds.Contains(order.MlOrderId)
+                && !providerCancellationFacts.TimestampedShipmentIds.Contains(order.ShipmentId ?? string.Empty)),
             RefundedOrders = current.Count(order => NormalizeStatus(order.Status) is "refunded" or "partially_refunded"),
             UnmappedUnits = currentPaid.SelectMany(order => order.Items)
                 .Where(item => MatchesSupplierScope(item, supplierScope)
@@ -413,52 +429,69 @@ public sealed class ClientSalesDashboardService
     private static bool IsCancelled(string? status)
         => NormalizeStatus(status).Contains("cancel", StringComparison.Ordinal);
 
-    private static bool IsCommercialCancellation(MarketplaceOrder order)
+    private async Task<ProviderCancellationFacts> LoadProviderCancellationFactsAsync(
+        string tenantId,
+        Guid clientId,
+        MarketplaceProvider? provider,
+        IReadOnlyCollection<string> orderIds,
+        IReadOnlyCollection<string> shipmentIds,
+        CancellationToken cancellationToken)
     {
-        if (!IsCancelled(order.Status)) return false;
-        return ResolveCancellationGroup(order) is "buyer" or "fraud" or "internal";
-    }
+        if (orderIds.Count == 0 && shipmentIds.Count == 0) return new();
 
-    private static string ResolveMarketplaceSaleKey(MarketplaceOrder order)
-        => ReadRawString(order.RawJson, "pack_id") ?? order.MlOrderId;
-
-    private static string? ResolveCancellationGroup(MarketplaceOrder order)
-    {
-        if (string.IsNullOrWhiteSpace(order.RawJson)) return null;
-        try
+        var externalQuery = _dbContext.MarketplaceShipmentExternalStates.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
+            .Where(x => orderIds.Contains(x.MlOrderId ?? string.Empty)
+                        || shipmentIds.Contains(x.ShipmentId));
+        var shipmentQuery = _dbContext.MarketplaceShipments.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.ClientId == clientId)
+            .Where(x => orderIds.Contains(x.MlOrderId ?? string.Empty)
+                        || shipmentIds.Contains(x.ShipmentId));
+        if (provider.HasValue)
         {
-            using var document = JsonDocument.Parse(order.RawJson);
-            if (!document.RootElement.TryGetProperty("cancel_detail", out var detail)
-                || detail.ValueKind != JsonValueKind.Object)
-                return null;
-            return detail.TryGetProperty("group", out var group) && group.ValueKind == JsonValueKind.String
-                ? group.GetString()?.Trim().ToLowerInvariant()
-                : null;
+            externalQuery = externalQuery.Where(x => x.Provider == provider.Value);
+            shipmentQuery = shipmentQuery.Where(x => x.Provider == provider.Value);
         }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
 
-    private static string? ReadRawString(string? rawJson, string propertyName)
-    {
-        if (string.IsNullOrWhiteSpace(rawJson)) return null;
-        try
+        var external = await externalQuery.Select(x => new
         {
-            using var document = JsonDocument.Parse(rawJson);
-            if (!document.RootElement.TryGetProperty(propertyName, out var value)) return null;
-            return value.ValueKind switch
+            x.MlOrderId, x.ShipmentId, x.Status, x.CancelledAt, x.NotDeliveredAt
+        }).ToListAsync(cancellationToken);
+        var legacy = await shipmentQuery.Select(x => new
+        {
+            x.MlOrderId, x.ShipmentId, x.Status
+        }).ToListAsync(cancellationToken);
+
+        var result = new ProviderCancellationFacts();
+        foreach (var fact in external.Where(x => IsProviderCancellationStatus(x.Status)
+                                                  || x.CancelledAt.HasValue
+                                                  || x.NotDeliveredAt.HasValue))
+        {
+            if (!string.IsNullOrWhiteSpace(fact.MlOrderId)) result.OrderIds.Add(fact.MlOrderId);
+            result.ShipmentIds.Add(fact.ShipmentId);
+            if (fact.CancelledAt.HasValue || fact.NotDeliveredAt.HasValue)
             {
-                JsonValueKind.String => value.GetString(),
-                JsonValueKind.Number => value.GetRawText(),
-                _ => null
-            };
+                if (!string.IsNullOrWhiteSpace(fact.MlOrderId)) result.TimestampedOrderIds.Add(fact.MlOrderId);
+                result.TimestampedShipmentIds.Add(fact.ShipmentId);
+            }
         }
-        catch (JsonException)
+        foreach (var fact in legacy.Where(x => IsProviderCancellationStatus(x.Status)))
         {
-            return null;
+            if (!string.IsNullOrWhiteSpace(fact.MlOrderId)) result.OrderIds.Add(fact.MlOrderId);
+            result.ShipmentIds.Add(fact.ShipmentId);
         }
+        return result;
+    }
+
+    private static bool IsProviderCancellationStatus(string? status)
+        => NormalizeStatus(status) is "cancelled" or "canceled" or "not_delivered";
+
+    private sealed class ProviderCancellationFacts
+    {
+        public HashSet<string> OrderIds { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> ShipmentIds { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> TimestampedOrderIds { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> TimestampedShipmentIds { get; } = new(StringComparer.Ordinal);
     }
 
     private static bool IsExternalSupplier(MarketplaceOrderItem item)

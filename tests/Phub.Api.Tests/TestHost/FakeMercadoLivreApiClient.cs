@@ -47,6 +47,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
     public List<MercadoLivreSellerItemDetails> SellerItems { get; } = new();
     public Dictionary<string, MercadoLivreOrderDetails> OrdersById { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, MercadoLivreShipmentDetails> ShipmentsById { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, List<MercadoLivreShipmentDetails>> OrderShipmentsByOrderId { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, MercadoLivreShipmentLabelResult> ShipmentLabelsById { get; } = new(StringComparer.Ordinal);
     public List<MercadoLivrePublishCall> PublishCalls { get; } = new();
     public Dictionary<string, MercadoLivreCreateItemResult> PublishResultBySku { get; } = new(StringComparer.Ordinal);
@@ -182,6 +183,26 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         }
 
         return Task.FromResult<MercadoLivreShipmentDetails?>(null);
+    }
+
+    public Task<IReadOnlyList<MercadoLivreShipmentDetails>> GetOrderShipmentsAsync(
+        string orderId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (OrderShipmentsByOrderId.TryGetValue(orderId, out var orderShipments))
+        {
+            return Task.FromResult<IReadOnlyList<MercadoLivreShipmentDetails>>(orderShipments);
+        }
+
+        if (OrdersById.TryGetValue(orderId, out var order)
+            && !string.IsNullOrWhiteSpace(order.ShipmentId)
+            && ShipmentsById.TryGetValue(order.ShipmentId, out var primaryShipment))
+        {
+            return Task.FromResult<IReadOnlyList<MercadoLivreShipmentDetails>>([primaryShipment]);
+        }
+
+        return Task.FromResult<IReadOnlyList<MercadoLivreShipmentDetails>>([]);
     }
 
     public Task<MercadoLivreShipmentLabelResult?> GetShipmentLabelAsync(

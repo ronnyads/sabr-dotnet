@@ -147,6 +147,50 @@ public sealed class MercadoLivreOrderSearchTests
         Assert.Equal(4, page.RemoteReportedTotal);
     }
 
+    [Fact]
+    public async Task Get_order_shipments_returns_forward_and_return_facts()
+    {
+        const string json = """
+        [
+          {
+            "id": "SHIP-FORWARD",
+            "sender_id": 123,
+            "status": "delivered",
+            "last_updated": "2026-09-20T10:00:00Z",
+            "date_delivered": "2026-09-20T09:00:00Z"
+          },
+          {
+            "id": "SHIP-RETURN",
+            "sender_id": 123,
+            "status": "not_delivered",
+            "substatus": "returned",
+            "last_updated": "2026-09-25T10:00:00Z",
+            "status_history": {
+              "date_not_delivered": "2026-09-25T09:00:00Z"
+            }
+          }
+        ]
+        """;
+        var handler = new CallbackHandler(request =>
+        {
+            Assert.Equal("/orders/ORDER-1/shipments", request.RequestUri!.AbsolutePath);
+            Assert.Equal("true", GetQuery(request.RequestUri, "list_all"));
+            Assert.True(request.Headers.TryGetValues("X-New-Domain", out var values));
+            Assert.Contains("true", values!);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        });
+
+        var result = await CreateClient(handler).GetOrderShipmentsAsync("ORDER-1", "token");
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("delivered", result[0].Status);
+        Assert.Equal("not_delivered", result[1].Status);
+        Assert.NotNull(result[1].NotDeliveredAt);
+    }
+
     private static MercadoLivreApiClient CreateClient(HttpMessageHandler handler)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.mercadolibre.com") };

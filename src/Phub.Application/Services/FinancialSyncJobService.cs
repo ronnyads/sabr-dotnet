@@ -19,7 +19,9 @@ public sealed class FinancialSyncJobService
     // Brazilian /orders/search endpoint currently rejects values above 51. Keep 50
     // for compatibility and use the bounded fetch gate to accelerate enrichment.
     private const int OperationalHistoryPageSize = 50;
-    private const string OperationalHistoryAlgorithm = "ml-history-hourly-v1";
+    // Versioned on purpose: shipment/return facts are now part of reconciliation.
+    // Existing sellers must receive one idempotent repair without duplicating orders.
+    private const string OperationalHistoryAlgorithm = "ml-history-hourly-v2-shipment-facts";
     private const string SkippedBeforeFirstOrder = "SKIPPED_BEFORE_FIRST_ORDER";
     private const string SkippedOutsideRollingWindow = "SKIPPED_OUTSIDE_ROLLING_WINDOW";
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> EnqueueGates = new(StringComparer.Ordinal);

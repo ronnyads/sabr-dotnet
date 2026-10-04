@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Security.Cryptography;
+using System.Text;
 using Phub.Application.Abstractions;
 using Phub.Application.Models;
 using Phub.Application.Options;
@@ -551,15 +553,18 @@ public sealed class MercadoLivreSyncService
                     orderTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(_options.SyncOrderTimeoutSeconds, 10, 300)));
                     var orderCancellationToken = orderTimeout.Token;
                     var details = await _mercadoLivreApiClient.GetOrderAsync(orderId, accessToken, orderCancellationToken);
-                    MercadoLivreShipmentDetails? shipment = null;
+                    IReadOnlyList<MercadoLivreShipmentDetails> shipments = [];
                     MercadoLivreShipmentCostDetails? shipmentCosts = null;
                     IReadOnlyList<MercadoLivreOrderDiscountDetails> discounts = [];
                     if (details != null && !string.IsNullOrWhiteSpace(details.ShipmentId))
                     {
-                        shipment = await _mercadoLivreApiClient.GetShipmentAsync(
-                            details.ShipmentId,
-                            accessToken,
-                            orderCancellationToken);
+                        shipments = await _mercadoLivreApiClient.GetOrderShipmentsAsync(
+                            details.MlOrderId, accessToken, orderCancellationToken);
+                        if (shipments.Count == 0)
+                        {
+                            throw new InvalidOperationException(
+                                $"ML_ORDER_SHIPMENTS_INCOMPLETE: order {details.MlOrderId} has shipment {details.ShipmentId}, but the provider returned no shipment facts.");
+                        }
                         try
                         {
                             shipmentCosts = await _mercadoLivreApiClient.GetShipmentCostsAsync(
@@ -579,7 +584,7 @@ public sealed class MercadoLivreSyncService
                         }
                     }
 
-                    return (orderId, details, shipment, shipmentCosts, discounts, error: (Exception?)null);
+                    return (orderId, details, shipments, shipmentCosts, discounts, error: (Exception?)null);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                     {
@@ -587,7 +592,7 @@ public sealed class MercadoLivreSyncService
                         // order must not roll back the other orders in this hour.
                         _logger.LogWarning(ex, "Order fetch isolated seller={SellerId} order={OrderId}", connection.SellerId, orderId);
                         return (orderId, details: (MercadoLivreOrderDetails?)null,
-                            shipment: (MercadoLivreShipmentDetails?)null,
+                            shipments: (IReadOnlyList<MercadoLivreShipmentDetails>)[],
                             shipmentCosts: (MercadoLivreShipmentCostDetails?)null,
                             discounts: (IReadOnlyList<MercadoLivreOrderDiscountDetails>)[], error: ex);
                     }
@@ -627,17 +632,19 @@ public sealed class MercadoLivreSyncService
             if (!string.IsNullOrWhiteSpace(details.ShipmentId))
             {
                 MercadoLivreShipmentDetails? shipmentDetails = null;
-                var shipment = remoteOrder.shipment;
-                if (shipment != null)
+                var shipments = remoteOrder.shipments;
+                shipmentDetails = shipments.FirstOrDefault(x =>
+                                      string.Equals(x.ShipmentId, details.ShipmentId, StringComparison.Ordinal))
+                                  ?? shipments.FirstOrDefault();
+                if (shipmentDetails != null)
                 {
-                    shipmentDetails = shipment;
-                    details.ShippingMode = shipment.ShippingMode ?? details.ShippingMode;
-                    details.LogisticType = shipment.LogisticType ?? details.LogisticType;
-                    details.ShipByDeadlineAt ??= shipment.ShipByDeadlineAt;
-                    details.CancelledAt ??= shipment.CancelledAt;
+                    details.ShippingMode = shipmentDetails.ShippingMode ?? details.ShippingMode;
+                    details.LogisticType = shipmentDetails.LogisticType ?? details.LogisticType;
+                    details.ShipByDeadlineAt ??= shipmentDetails.ShipByDeadlineAt;
                 }
 
-                await UpsertShipmentAsync(connection, details, shipmentDetails, cancellationToken);
+                foreach (var shipment in shipments)
+                    await UpsertShipmentAsync(connection, details, shipment, cancellationToken);
             }
 
             var upsertResult = await UpsertOrderAsync(
@@ -913,6 +920,9 @@ public sealed class MercadoLivreSyncService
         shipment.ShipByDeadlineAt = details.ShipByDeadlineAt;
         shipment.UpdatedAt = DateTimeOffset.UtcNow;
 
+        if (shipmentDetails != null)
+            await UpsertShipmentExternalStateAsync(connection, details, shipmentDetails, cancellationToken);
+
         var order = await _dbContext.MarketplaceOrders.FirstOrDefaultAsync(
             item => item.TenantId == connection.TenantId
                     && item.ClientId == connection.ClientId
@@ -924,6 +934,71 @@ public sealed class MercadoLivreSyncService
             order.Status = "shipped";
             order.UpdatedAt = DateTimeOffset.UtcNow;
         }
+    }
+
+    private async Task UpsertShipmentExternalStateAsync(
+        TenantMarketplaceConnection connection,
+        MercadoLivreOrderDetails details,
+        MercadoLivreShipmentDetails shipmentDetails,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(shipmentDetails.ShipmentId)) return;
+
+        var now = DateTimeOffset.UtcNow;
+        var payloadHash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(shipmentDetails.RawJson))).ToLowerInvariant();
+        var external = await _dbContext.MarketplaceShipmentExternalStates.FirstOrDefaultAsync(
+            x => x.TenantId == connection.TenantId && x.ClientId == connection.ClientId
+                 && x.Provider == MarketplaceProvider.MercadoLivre
+                 && x.ShipmentId == shipmentDetails.ShipmentId,
+            cancellationToken);
+        if (external == null)
+        {
+            external = new MarketplaceShipmentExternalState
+            {
+                TenantId = connection.TenantId,
+                ClientId = connection.ClientId,
+                Provider = MarketplaceProvider.MercadoLivre,
+                SellerId = connection.SellerId,
+                ShipmentId = shipmentDetails.ShipmentId
+            };
+            _dbContext.MarketplaceShipmentExternalStates.Add(external);
+        }
+
+        var acceptsProviderProjection = !external.ProviderUpdatedAt.HasValue
+            || (shipmentDetails.ProviderUpdatedAt.HasValue
+                && shipmentDetails.ProviderUpdatedAt >= external.ProviderUpdatedAt);
+        if (acceptsProviderProjection)
+        {
+            external.MlOrderId = details.MlOrderId;
+            external.Status = shipmentDetails.Status;
+            external.Substatus = shipmentDetails.Substatus;
+            external.ShippingMode = shipmentDetails.ShippingMode;
+            external.LogisticType = shipmentDetails.LogisticType;
+            external.HandlingAt = shipmentDetails.HandlingAt;
+            external.ReadyToShipAt = shipmentDetails.ReadyToShipAt;
+            external.FirstPrintedAt = shipmentDetails.FirstPrintedAt;
+            external.ShippedAt = shipmentDetails.ShippedAt;
+            external.DeliveredAt = shipmentDetails.DeliveredAt;
+            external.NotDeliveredAt = shipmentDetails.NotDeliveredAt;
+            external.ReturnedAt = shipmentDetails.ReturnedAt;
+            external.CancelledAt = shipmentDetails.CancelledAt;
+            external.TrackingNumber = shipmentDetails.TrackingNumber;
+            external.TrackingMethod = shipmentDetails.TrackingMethod;
+            external.TrackingUrl = shipmentDetails.TrackingUrl;
+            external.ProviderUpdatedAt = shipmentDetails.ProviderUpdatedAt;
+            if (external.PayloadHash != payloadHash) external.Version += 1;
+            external.PayloadHash = payloadHash;
+        }
+
+        external.LastMarketplaceSyncAt = now;
+        external.FreshnessState = "FRESH";
+        external.ReconciliationAttempts = 0;
+        external.LastSyncError = null;
+        external.NextReconciliationAt = now.AddMinutes(external.ShippedAt.HasValue ? 15 : 5);
+        external.LockedBy = null;
+        external.LeaseUntil = null;
+        external.UpdatedAt = now;
     }
 
     private static bool IsShippedStatus(string? status)

@@ -295,8 +295,8 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                 job.ParentJobId == null && job.DedupeKey.StartsWith("OP:HISTORY:"));
             var recentJob = await jobsDb.FinancialSyncJobs.SingleAsync(job =>
                 job.ParentJobId == null && job.DedupeKey.StartsWith("OP:RECENT:"));
-            Assert.Equal($"OP:HISTORY:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}", historyJob.DedupeKey);
-            Assert.Equal($"OP:RECENT:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}", recentJob.DedupeKey);
+            Assert.Equal($"OP:HISTORY:ml-history-hourly-v2-shipment-facts:{tenantId}:{clientId:N}:{sellerId}", historyJob.DedupeKey);
+            Assert.Equal($"OP:RECENT:ml-history-hourly-v2-shipment-facts:{tenantId}:{clientId:N}:{sellerId}", recentJob.DedupeKey);
         }
 
         await DrainFinancialSyncJobsAsync();
@@ -1586,7 +1586,7 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
                     SellerId = ParseSellerId(sellerId),
                     JobType = FinancialSyncJobTypes.OperationalSyncBatch,
                     Status = "BACKFILLING", RangeFrom = now.AddDays(-30), RangeTo = now,
-                    DedupeKey = $"OP:HISTORY:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}"
+                    DedupeKey = $"OP:HISTORY:ml-history-hourly-v2-shipment-facts:{tenantId}:{clientId:N}:{sellerId}"
                 },
                 new FinancialSyncJob
                 {

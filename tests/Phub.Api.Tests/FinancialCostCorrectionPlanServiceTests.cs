@@ -237,7 +237,7 @@ public sealed class FinancialCostCorrectionPlanServiceTests
             Provider = MarketplaceProvider.MercadoLivre, JobType = FinancialSyncJobTypes.OperationalSyncBatch,
             Status = "COMPLETED", RangeFrom = to.AddMonths(-12), RangeTo = to,
             Total = 1, Processed = 1,
-            DedupeKey = $"OP:HISTORY:ml-history-hourly-v1:{tenantId}:{clientId:N}:{sellerId}:{to.AddMonths(-12):yyyyMMddHH}:{to:yyyyMMddHH}"
+            DedupeKey = $"OP:HISTORY:ml-history-hourly-v2-shipment-facts:{tenantId}:{clientId:N}:{sellerId}:{to.AddMonths(-12):yyyyMMddHH}:{to:yyyyMMddHH}"
         };
         db.FinancialSyncJobs.AddRange(parent, new FinancialSyncJob
         {

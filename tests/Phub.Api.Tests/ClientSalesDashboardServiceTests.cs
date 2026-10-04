@@ -186,7 +186,7 @@ public sealed class ClientSalesDashboardServiceTests
     }
 
     [Fact]
-    public async Task GetAsync_CountsCommercialCancellationsBySaleAndExcludesPostSaleGroups()
+    public async Task GetAsync_CountsEveryProviderCancelledOrderWithoutCollapsingPacks()
     {
         await using var db = CreateDb();
         const string tenantId = "tenant-cancellation-events";
@@ -194,6 +194,7 @@ public sealed class ClientSalesDashboardServiceTests
         var from = new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero);
         var to = new DateTimeOffset(2026, 10, 1, 3, 0, 0, TimeSpan.Zero);
         var buyerOne = CreateOrder(tenantId, clientId, "ORDER-BUYER-1", "cancelled", from.AddDays(2), 20m);
+        buyerOne.CancelledAt = from.AddDays(2);
         buyerOne.RawJson = "{\"pack_id\":\"PACK-BUYER\",\"cancel_detail\":{\"group\":\"buyer\"}}";
         buyerOne.Items.Add(new MarketplaceOrderItem
         {
@@ -202,6 +203,7 @@ public sealed class ClientSalesDashboardServiceTests
             UnitPrice = 20m, RawJson = "{}"
         });
         var buyerTwo = CreateOrder(tenantId, clientId, "ORDER-BUYER-2", "cancelled", from.AddDays(2), 25m);
+        buyerTwo.CancelledAt = from.AddDays(2);
         buyerTwo.RawJson = "{\"pack_id\":\"PACK-BUYER\",\"cancel_detail\":{\"group\":\"buyer\"}}";
         buyerTwo.Items.Add(new MarketplaceOrderItem
         {
@@ -210,6 +212,7 @@ public sealed class ClientSalesDashboardServiceTests
             UnitPrice = 25m, RawJson = "{}"
         });
         var fraud = CreateOrder(tenantId, clientId, "ORDER-FRAUD", "cancelled", from.AddDays(3), 30m);
+        fraud.CancelledAt = from.AddDays(3);
         fraud.RawJson = "{\"cancel_detail\":{\"group\":\"fraud\"}}";
         fraud.Items.Add(new MarketplaceOrderItem
         {
@@ -218,6 +221,7 @@ public sealed class ClientSalesDashboardServiceTests
             UnitPrice = 30m, RawJson = "{}"
         });
         var mediation = CreateOrder(tenantId, clientId, "ORDER-MEDIATION", "cancelled", from.AddDays(4), 40m);
+        mediation.CancelledAt = from.AddDays(4);
         mediation.RawJson = "{\"cancel_detail\":{\"group\":\"mediations\"}}";
         mediation.Items.Add(new MarketplaceOrderItem
         {
@@ -233,9 +237,54 @@ public sealed class ClientSalesDashboardServiceTests
 
         Assert.Equal(4, result.TotalOrders);
         Assert.Equal(4, result.TotalUnits);
-        Assert.Equal(2, result.CancelledOrders);
-        Assert.Equal(75m, result.CancelledSalesAmount);
+        Assert.Equal(4, result.CancelledOrders);
+        Assert.Equal(115m, result.CancelledSalesAmount);
         Assert.Equal(4, result.CurrentStatusCancelledOrders);
+        Assert.Equal(0, result.CancellationTimestampPendingOrders);
+    }
+
+    [Fact]
+    public async Task GetAsync_CountsNotDeliveredShipmentAsMarketplaceCancellation()
+    {
+        await using var db = CreateDb();
+        const string tenantId = "tenant-not-delivered";
+        var clientId = Guid.NewGuid();
+        var from = new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 10, 1, 3, 0, 0, TimeSpan.Zero);
+        var order = CreateOrder(tenantId, clientId, "ORDER-NOT-DELIVERED", "paid", from.AddDays(2), 35m);
+        order.ShipmentId = "SHIP-FORWARD";
+        order.Items.Add(new MarketplaceOrderItem
+        {
+            TenantId = tenantId, ClientId = clientId, Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = order.SellerId, MlItemId = "MLB-NOT-DELIVERED", Quantity = 2,
+            UnitPrice = 35m, RawJson = "{}"
+        });
+        db.MarketplaceOrders.Add(order);
+        db.MarketplaceShipmentExternalStates.Add(new MarketplaceShipmentExternalState
+        {
+            TenantId = tenantId,
+            ClientId = clientId,
+            Provider = MarketplaceProvider.MercadoLivre,
+            SellerId = order.SellerId,
+            ShipmentId = "SHIP-RETURN",
+            MlOrderId = order.MlOrderId,
+            Status = "not_delivered",
+            NotDeliveredAt = from.AddDays(8),
+            LastMarketplaceSyncAt = from.AddDays(8),
+            PayloadHash = "hash"
+        });
+        await db.SaveChangesAsync();
+
+        var result = await new ClientSalesDashboardService(db).GetAsync(
+            tenantId, clientId, from, to, MarketplaceProvider.MercadoLivre);
+
+        Assert.Equal(1, result.CancelledOrders);
+        Assert.Equal(2, result.CancelledUnits);
+        Assert.Equal(70m, result.CancelledSalesAmount);
+        Assert.Equal(70m, result.TotalSalesAmount);
+        Assert.Equal(0, result.PaidOrders);
+        Assert.Equal(0m, result.GrossRevenue);
+        Assert.Equal(0, result.CurrentStatusCancelledOrders);
         Assert.Equal(0, result.CancellationTimestampPendingOrders);
     }
 

@@ -47,6 +47,11 @@ public interface IMercadoLivreApiClient
         string shipmentId,
         string accessToken,
         CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MercadoLivreShipmentDetails>> GetOrderShipmentsAsync(
+        string orderId,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<MercadoLivreShipmentDetails>>([]);
     Task<MercadoLivreShipmentLabelResult?> GetShipmentLabelAsync(
         string shipmentId,
         string accessToken,
