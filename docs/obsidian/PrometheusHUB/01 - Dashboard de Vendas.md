@@ -19,6 +19,7 @@ O Mercado Livre fornece pedido, item/variação, `seller_sku`, quantidade, preç
 - sincronização histórica: uma busca ascendente no intervalo de retenção descobre o primeiro pedido disponível e cria janelas diárias somente dessa data em diante; o intervalo completo consultado continua registrado como cobertura, sem executar centenas de dias vazios;
 - o carregamento inicial prioriza uma faixa recente canônica de 30 dias. Webhooks e o incremental automático continuam trazendo pedidos novos, sem depender do botão;
 - a busca agora percorre todas as páginas de até 50 resultados, limitada defensivamente a 10.000 pedidos por conexão/ciclo;
+- a busca normal e a busca explícita de cancelados podem se sobrepor conforme a conta do Mercado Livre. Seus `paging.total` nunca são somados: o maior total é apenas diagnóstico mínimo e a reconciliação canônica usa a união deduplicada dos IDs. Uma união maior que o diagnóstico é válida; somente menos IDs do que esse mínimo indica perda de paginação;
 - o Mercado Livre permite consultar pedidos mantidos por até 12 meses; o histórico maior depende do armazenamento local contínuo.
 
 ## Modelo estruturado

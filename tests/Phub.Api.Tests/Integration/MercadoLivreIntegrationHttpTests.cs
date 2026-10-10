@@ -1786,6 +1786,71 @@ public sealed class MercadoLivreIntegrationHttpTests : IClassFixture<MercadoLivr
     }
 
     [Fact]
+    public async Task FinancialSync_AcceptsDeduplicatedUnionLargerThanProviderDiagnostic()
+    {
+        await _factory.ResetDatabaseAsync();
+        const string tenantId = "tenant-ml-overlap-total";
+        const string tenantSlug = "mloverlaptotal";
+        var clientId = Guid.NewGuid();
+        const string sellerId = "1001028";
+        var orderIds = new[] { "ORDER-ACTIVE", "ORDER-OVERLAP", "ORDER-CANCELLED" };
+        await SeedTenantClientAsync(tenantId, tenantSlug, clientId);
+        await SeedConnectionAsync(tenantId, clientId, sellerId);
+
+        _factory.FakeMercadoLivreApiClient.SearchOrdersPageFactory = (_, _, _, offset, limit) => new()
+        {
+            OrderIds = offset == 0 ? orderIds.ToList() : [],
+            Offset = offset,
+            Limit = limit,
+            ActiveReportedTotal = 2,
+            CancelledReportedTotal = 2,
+            RemoteReportedTotal = 2,
+            HasMore = false
+        };
+        foreach (var orderId in orderIds)
+        {
+            _factory.FakeMercadoLivreApiClient.OrdersById[orderId] = new MercadoLivreOrderDetails
+            {
+                MlOrderId = orderId,
+                SellerId = sellerId,
+                Status = orderId == "ORDER-CANCELLED" ? "cancelled" : "paid",
+                ChannelCreatedAt = DateTimeOffset.UtcNow.AddHours(-2),
+                Items = [],
+                RawJson = "{}"
+            };
+        }
+
+        var jobId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.FinancialSyncJobs.Add(new FinancialSyncJob
+            {
+                Id = jobId,
+                TenantId = tenantId,
+                ClientId = clientId,
+                SellerId = ParseSellerId(sellerId),
+                JobType = FinancialSyncJobTypes.OperationalSyncChunk,
+                RangeFrom = DateTimeOffset.UtcNow.AddDays(-1),
+                RangeTo = DateTimeOffset.UtcNow,
+                DedupeKey = $"test-overlap-total-{jobId:N}"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<FinancialSyncJobService>();
+            Assert.True(await service.ProcessNextAsync("overlap-total-worker", CancellationToken.None));
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var job = await db.FinancialSyncJobs.AsNoTracking().SingleAsync(x => x.Id == jobId);
+            Assert.Equal("COMPLETED", job.Status);
+            Assert.Null(job.LastError);
+            Assert.Contains("ORDER-CANCELLED", job.ResultJson, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task HistoricalCoverage_ReusesScopedLocalOrder_AndFetchesOnlyMissingIds()
     {
         await _factory.ResetDatabaseAsync();

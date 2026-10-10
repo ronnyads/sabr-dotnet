@@ -15,6 +15,8 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
     public Exception? CreateItemException { get; set; }
     public Exception? RefreshTokenException { get; set; }
     public Exception? SearchOrdersException { get; set; }
+    public Func<string, DateTimeOffset, DateTimeOffset, int, int, MercadoLivreOrderSearchPage>?
+        SearchOrdersPageFactory { get; set; }
 
     public MercadoLivreTokenResponse ExchangeCodeResponse { get; set; } = new()
     {
@@ -157,6 +159,32 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         }
 
         return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    }
+
+    public async Task<MercadoLivreOrderSearchPage> SearchOrdersPageAsync(
+        string sellerId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int offset,
+        int limit,
+        string accessToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (SearchOrdersException is not null) throw SearchOrdersException;
+        if (SearchOrdersPageFactory is not null)
+            return SearchOrdersPageFactory(sellerId, from, to, offset, limit);
+
+        var all = await SearchOrdersAsync(sellerId, from, to, accessToken, cancellationToken);
+        var page = all.Skip(Math.Max(0, offset)).Take(Math.Clamp(limit, 1, 50)).ToList();
+        return new MercadoLivreOrderSearchPage
+        {
+            OrderIds = page,
+            Offset = Math.Max(0, offset),
+            Limit = Math.Clamp(limit, 1, 50),
+            ActiveReportedTotal = all.Count,
+            RemoteReportedTotal = all.Count,
+            HasMore = Math.Max(0, offset) + page.Count < all.Count
+        };
     }
 
     public Task<MercadoLivreOrderDetails?> GetOrderAsync(
@@ -383,6 +411,7 @@ public sealed class FakeMercadoLivreApiClient : IMercadoLivreApiClient
         CreateItemException = null;
         RefreshTokenException = null;
         SearchOrdersException = null;
+        SearchOrdersPageFactory = null;
         ExchangeCodeResponse = new MercadoLivreTokenResponse
         {
             AccessToken = "ml-access-token",

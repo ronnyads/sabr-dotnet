@@ -690,7 +690,12 @@ public sealed class FinancialSyncJobService
                 {
                     var expected = page.RemoteReportedTotal;
                     var discovered = state.Orders.Count;
-                    if (discovered != expected)
+                    // remoteReportedTotal is deliberately only a lower-bound
+                    // diagnostic. The regular and explicit-cancelled searches can
+                    // overlap, so their paging totals cannot define the canonical
+                    // union. A discovered union larger than the diagnostic is valid;
+                    // only a smaller union proves that pagination lost IDs.
+                    if (discovered < expected)
                     {
                         state.IntegrityFailures++;
                         job.ResultJson = JsonSerializer.Serialize(state);

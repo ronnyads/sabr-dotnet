@@ -123,7 +123,7 @@ public sealed class MercadoLivreOrderSearchTests
     }
 
     [Fact]
-    public async Task Search_order_page_also_queries_cancelled_stream_and_deduplicates_ids()
+    public async Task Search_order_page_deduplicates_cancelled_stream_without_summing_overlapping_totals()
     {
         var handler = new CallbackHandler(request =>
         {
@@ -144,7 +144,7 @@ public sealed class MercadoLivreOrderSearchTests
         Assert.Equal(new[] { "1", "2", "3" }, page.OrderIds);
         Assert.Equal(2, page.ActiveReportedTotal);
         Assert.Equal(2, page.CancelledReportedTotal);
-        Assert.Equal(4, page.RemoteReportedTotal);
+        Assert.Equal(2, page.RemoteReportedTotal);
     }
 
     [Fact]
